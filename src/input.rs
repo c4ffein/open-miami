@@ -2,8 +2,6 @@ use crate::math::Vec2;
 use std::cell::RefCell;
 use std::collections::HashSet;
 #[cfg(target_arch = "wasm32")]
-use std::rc::Rc;
-#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
@@ -55,14 +53,14 @@ pub fn setup_input_handlers() -> Result<(), JsValue> {
     }) as Box<dyn FnMut(_)>);
 
     let mousedown_closure = Closure::wrap(Box::new(|event: MouseEvent| {
-        let button = event.button();
+        let button = event.button() as u16;
         MOUSE_BUTTONS.with(|buttons| {
             buttons.borrow_mut().insert(button);
         });
     }) as Box<dyn FnMut(_)>);
 
     let mouseup_closure = Closure::wrap(Box::new(|event: MouseEvent| {
-        let button = event.button();
+        let button = event.button() as u16;
         MOUSE_BUTTONS.with(|buttons| {
             buttons.borrow_mut().remove(&button);
         });
