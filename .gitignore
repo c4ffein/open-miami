@@ -7,7 +7,7 @@
 
 # WASM build artifacts
 *.wasm
-open_miami.js
+# Note: open_miami.js is the Macroquad JS loader and is committed
 
 # IDE
 .idea/

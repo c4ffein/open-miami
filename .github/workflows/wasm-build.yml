@@ -50,6 +50,7 @@ jobs:
           name: open-miami-wasm
           path: |
             open_miami.wasm
+            open_miami.js
             index.html
           retention-days: 30
 

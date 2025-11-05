@@ -13,41 +13,16 @@ echo "Building WASM binary..."
 cargo build --release --target wasm32-unknown-unknown
 
 # Copy the WASM file to the root directory for easier serving
-echo "Copying WASM files..."
+echo "Copying WASM file..."
 cp target/wasm32-unknown-unknown/release/open_miami.wasm .
 
-# Create a simple JS loader if it doesn't exist
+# Verify that the Macroquad JS loader exists
 if [ ! -f "open_miami.js" ]; then
-    echo "Creating JS loader..."
-    cat > open_miami.js << 'EOF'
-async function wasm_run() {
-    const wasmSupported = (() => {
-        try {
-            if (typeof WebAssembly === "object"
-                && typeof WebAssembly.instantiate === "function") {
-                const module = new WebAssembly.Module(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00));
-                if (module instanceof WebAssembly.Module)
-                    return new WebAssembly.Instance(module) instanceof WebAssembly.Instance;
-            }
-        } catch (e) {
-        }
-        return false;
-    })();
-
-    if (!wasmSupported) {
-        console.error("WebAssembly is not supported in this browser");
-        return;
-    }
-
-    // Load and instantiate the WASM module
-    const response = await fetch('open_miami.wasm');
-    const bytes = await response.arrayBuffer();
-    const module = await WebAssembly.instantiate(bytes, {});
-
-    console.log("WASM module loaded successfully!");
-}
-EOF
+    echo "ERROR: open_miami.js (Macroquad JS loader) not found!"
+    echo "This file should be committed in the repository."
+    exit 1
 fi
+echo "✓ open_miami.js found"
 
 echo ""
 echo "✅ Build complete!"
@@ -57,7 +32,7 @@ echo "  1. Start a local server:"
 echo "     python3 -m http.server 8000"
 echo "  2. Open http://localhost:8000 in your browser"
 echo ""
-echo "Files generated:"
-echo "  - open_miami.wasm"
-echo "  - open_miami.js"
-echo "  - index.html (already exists)"
+echo "Files ready:"
+echo "  - open_miami.wasm (generated)"
+echo "  - open_miami.js (Macroquad JS loader)"
+echo "  - index.html"

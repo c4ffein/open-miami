@@ -46,9 +46,9 @@
     </div>
     <script src="./open_miami.js"></script>
     <script>
-        window.addEventListener('load', async () => {
+        window.addEventListener('load', () => {
             document.getElementById('loading').style.display = 'none';
-            await wasm_run();
+            load("open_miami.wasm");
         });
     </script>
 </body>
