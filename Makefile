@@ -47,8 +47,8 @@ check-fmt:
 
 # Build - release build
 check-build:
-	@echo "$(YELLOW)Building release binary...$(NC)"
-	cargo build --release --verbose
+	@echo "$(YELLOW)Building release library...$(NC)"
+	cargo build --release --lib --verbose
 	@echo "$(GREEN)✓ Build passed$(NC)"
 
 # E2E Tests - end-to-end tests with Playwright
