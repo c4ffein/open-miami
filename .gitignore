@@ -1,0 +1,24 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+# Note: Cargo.lock is committed for applications to ensure reproducible builds
+# It should only be ignored for libraries
+
+# WASM build artifacts
+*.wasm
+# Note: open_miami.js is the Macroquad JS loader and is committed
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
