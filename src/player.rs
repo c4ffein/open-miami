@@ -1,6 +1,6 @@
 use crate::enemy::Enemy;
 use crate::input::{is_key_down, keys};
-use crate::math::{Color, Vec2};
+use crate::math::Vec2;
 use crate::weapon::{Weapon, WeaponType};
 
 pub struct Player {
