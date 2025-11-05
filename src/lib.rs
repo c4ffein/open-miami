@@ -10,7 +10,12 @@ pub mod camera;
 pub mod level;
 
 // Old modules (deprecated but kept for reference)
-pub mod collision;
-pub mod enemy;
-pub mod player;
-pub mod weapon;
+// These are not exported to avoid dead code warnings
+#[allow(dead_code)]
+mod collision;
+#[allow(dead_code)]
+mod enemy;
+#[allow(dead_code)]
+mod player;
+#[allow(dead_code)]
+mod weapon;
