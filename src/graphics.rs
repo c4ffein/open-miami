@@ -19,8 +19,8 @@ impl Graphics {
         let window = web_sys::window().ok_or("No window found")?;
         let document = window.document().ok_or("No document found")?;
         let canvas = document
-            .get_element_by_id("canvas")
-            .ok_or("No canvas element found")?
+            .get_element_by_id("glcanvas")
+            .ok_or("No canvas")?
             .dyn_into::<HtmlCanvasElement>()
             .map_err(|_| "Element is not a canvas")?;
 
