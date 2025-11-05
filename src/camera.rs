@@ -40,9 +40,6 @@ impl Camera {
         let offset_x = screen_width() / 2.0 - self.target.x;
         let offset_y = screen_height() / 2.0 - self.target.y;
 
-        Vec2::new(
-            screen_pos.x - offset_x,
-            screen_pos.y - offset_y,
-        )
+        Vec2::new(screen_pos.x - offset_x, screen_pos.y - offset_y)
     }
 }
