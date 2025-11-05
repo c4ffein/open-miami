@@ -1,0 +1,51 @@
+# Rust formatting configuration
+# See https://rust-lang.github.io/rustfmt/ for all options
+
+# Edition must match Cargo.toml
+edition = "2021"
+
+# Maximum line width
+max_width = 100
+
+# Ideal width for comments and strings
+comment_width = 100
+wrap_comments = true
+
+# Use field initialization shorthand if possible
+use_field_init_shorthand = true
+
+# Use try shorthand
+use_try_shorthand = true
+
+# Format code in doc comments
+format_code_in_doc_comments = true
+
+# Reorder imports alphabetically
+reorder_imports = true
+
+# Merge imports from the same crate
+imports_granularity = "Crate"
+
+# Group imports by source
+group_imports = "StdExternalCrate"
+
+# Remove nested parentheses in pattern matching
+condense_wildcard_suffixes = true
+
+# Format string literals when they exceed max_width
+format_strings = true
+
+# Normalize comments to start with exactly one space
+normalize_comments = true
+
+# Apply rustfmt to attribute macros
+format_macro_matchers = true
+
+# Match indenting of function arguments
+indent_style = "Block"
+
+# Always use braces for control flow
+control_brace_style = "AlwaysSameLine"
+
+# Put fn arguments on the same line if they fit
+fn_params_layout = "Tall"
