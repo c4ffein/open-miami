@@ -1,4 +1,4 @@
-use crate::components::{AIState, Enemy, Health, Player, Position, Speed, Velocity, AI};
+use crate::components::{AIState, Enemy, Health, Player, Position, Rotation, Speed, Velocity, AI};
 use crate::ecs::{Entity, System, World};
 use crate::pathfinding::NavigationGrid;
 
@@ -87,6 +87,17 @@ impl System for AISystem {
 
             // Get updated AI state
             let ai = world.get_component::<AI>(entity).copied().unwrap();
+
+            // Update rotation to face player (for Chase and Attack states)
+            if matches!(ai.state, AIState::Chase | AIState::Attack) {
+                let dx = player_pos.x - enemy_pos.x;
+                let dy = player_pos.y - enemy_pos.y;
+                let angle = dy.atan2(dx);
+
+                if let Some(rotation) = world.get_component_mut::<Rotation>(entity) {
+                    rotation.angle = angle;
+                }
+            }
 
             // Update velocity based on state
             if let Some(velocity) = world.get_component_mut::<Velocity>(entity) {
@@ -202,7 +213,7 @@ mod tests {
         // Create player
         let player = world.spawn();
         world.add_component(player, Player);
-        world.add_component(player, Position::new(500.0, 0.0)); // Far away
+        world.add_component(player, Position::new(1000.0, 0.0)); // Far away (beyond 900 detection range)
 
         // Create enemy
         let enemy = world.spawn();

@@ -61,10 +61,13 @@ mod wasm_entry {
         weapon_system: WeaponUpdateSystem,
         ai_system: AISystem,
         combat_system: CombatSystem,
+        bullet_system: BulletSystem,
         projectile_system: ProjectileTrailSystem,
         level: Level,
         camera: Camera,
         last_time: f64,
+        death_time: f32,
+        level_complete_time: f32,
     }
 
     impl GameState {
@@ -78,10 +81,13 @@ mod wasm_entry {
                 weapon_system: WeaponUpdateSystem,
                 ai_system: AISystem,
                 combat_system: CombatSystem,
+                bullet_system: BulletSystem,
                 projectile_system: ProjectileTrailSystem,
                 level: Level::new(),
                 camera: Camera::new(),
                 last_time: 0.0,
+                death_time: 0.0,
+                level_complete_time: 0.0,
             }
         }
 
@@ -122,10 +128,11 @@ mod wasm_entry {
             self.ai_system.run(&mut self.world, dt);
             self.movement_system.run(&mut self.world, dt);
             self.combat_system.run(&mut self.world, dt);
+            self.bullet_system.run(&mut self.world, dt);
             self.projectile_system.run(&mut self.world, dt);
 
             // Apply camera transform for world rendering
-            self.camera.apply();
+            self.camera.apply(graphics);
 
             // Render level
             self.level.render(graphics);
@@ -134,18 +141,45 @@ mod wasm_entry {
             render_entities(&self.world, graphics);
 
             // Reset camera for UI rendering
-            self.camera.reset();
+            self.camera.reset(graphics);
 
-            // Render UI
+            // Get game state for UI
             let health = get_player_health(&self.world);
             let ammo = get_player_ammo(&self.world);
             let enemies_alive = count_alive_enemies(&self.world);
-            render_ui(graphics, health, ammo, enemies_alive, player_alive);
+
+            // Track death time and level complete time
+            if !player_alive {
+                self.death_time += dt;
+            } else {
+                self.death_time = 0.0;
+            }
+
+            let level_complete = player_alive && enemies_alive == 0;
+            if level_complete {
+                self.level_complete_time += dt;
+            } else {
+                self.level_complete_time = 0.0;
+            }
+
+            // Render UI
+            render_ui(
+                graphics,
+                health,
+                ammo,
+                enemies_alive,
+                player_alive,
+                self.death_time,
+                level_complete,
+                self.level_complete_time,
+            );
 
             // Handle restart
             if !player_alive && input::is_key_down("r") {
                 self.world.clear();
                 initialize_game(&mut self.world);
+                self.death_time = 0.0;
+                self.level_complete_time = 0.0;
             }
         }
     }

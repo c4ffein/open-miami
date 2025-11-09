@@ -1,5 +1,6 @@
-use crate::components::ProjectileTrail;
-use crate::ecs::{System, World};
+use crate::collision;
+use crate::components::{Bullet, Enemy, Health, Position, ProjectileTrail, Radius, Velocity};
+use crate::ecs::{Entity, System, World};
 
 /// System that updates and removes projectile trails
 pub struct ProjectileTrailSystem;
@@ -24,6 +25,116 @@ impl System for ProjectileTrailSystem {
         // Remove dead trails
         for entity in dead_entities {
             world.despawn(entity);
+        }
+    }
+}
+
+/// System that updates bullets - movement, wall collision, enemy damage
+pub struct BulletSystem;
+
+impl System for BulletSystem {
+    fn run(&mut self, world: &mut World, dt: f32) {
+        let bullets: Vec<Entity> = world.query::<Bullet>();
+        let mut bullets_to_remove = Vec::new();
+
+        for bullet_entity in bullets {
+            let (bullet, bullet_pos, bullet_vel) = match (
+                world.get_component::<Bullet>(bullet_entity),
+                world.get_component::<Position>(bullet_entity),
+                world.get_component::<Velocity>(bullet_entity),
+            ) {
+                (Some(b), Some(p), Some(v)) => (*b, *p, *v),
+                _ => continue,
+            };
+
+            // Check if bullet has expired
+            if !bullet.is_alive() {
+                bullets_to_remove.push(bullet_entity);
+                continue;
+            }
+
+            // Calculate new position
+            let new_x = bullet_pos.x + bullet_vel.x * dt;
+            let new_y = bullet_pos.y + bullet_vel.y * dt;
+
+            // Check wall collision (bullets are small, use 2.0 radius)
+            let bullet_radius = 2.0;
+            let walls = world.walls();
+            let mut hit_wall = false;
+
+            for wall in walls {
+                if collision::circle_rect_collision(
+                    crate::math::Vec2::new(new_x, new_y),
+                    bullet_radius,
+                    wall.x,
+                    wall.y,
+                    wall.width,
+                    wall.height,
+                ) {
+                    hit_wall = true;
+                    break;
+                }
+            }
+
+            if hit_wall {
+                bullets_to_remove.push(bullet_entity);
+                continue;
+            }
+
+            // Check enemy collision
+            let enemies: Vec<Entity> = world.query::<Enemy>();
+            let mut hit_enemy = false;
+
+            for enemy_entity in enemies {
+                let (enemy_pos, enemy_radius, enemy_health) = match (
+                    world.get_component::<Position>(enemy_entity),
+                    world.get_component::<Radius>(enemy_entity),
+                    world.get_component::<Health>(enemy_entity),
+                ) {
+                    (Some(p), Some(r), Some(h)) => (*p, *r, *h),
+                    _ => continue,
+                };
+
+                // Skip dead enemies
+                if enemy_health.is_dead() {
+                    continue;
+                }
+
+                // Check circle-circle collision
+                if collision::circle_circle_collision(
+                    crate::math::Vec2::new(new_x, new_y),
+                    bullet_radius,
+                    crate::math::Vec2::new(enemy_pos.x, enemy_pos.y),
+                    enemy_radius.value,
+                ) {
+                    // Deal damage
+                    if let Some(health) = world.get_component_mut::<Health>(enemy_entity) {
+                        health.take_damage(bullet.damage);
+                    }
+                    hit_enemy = true;
+                    break;
+                }
+            }
+
+            if hit_enemy {
+                bullets_to_remove.push(bullet_entity);
+                continue;
+            }
+
+            // Update bullet position and lifetime
+            if let Some(pos) = world.get_component_mut::<Position>(bullet_entity) {
+                pos.x = new_x;
+                pos.y = new_y;
+            }
+
+            if let Some(b) = world.get_component_mut::<Bullet>(bullet_entity) {
+                b.lifetime -= dt;
+            }
+        }
+
+        // Remove bullets that hit something or expired
+        for bullet_entity in bullets_to_remove {
+            world.despawn(bullet_entity);
         }
     }
 }
