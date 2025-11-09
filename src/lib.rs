@@ -51,11 +51,29 @@ mod wasm_entry {
     use crate::graphics::Graphics;
     use crate::input;
     use crate::level::Level;
-    use crate::math::Color;
+    use crate::math::{Color, Vec2};
     use crate::render::*;
     use crate::systems::*;
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum GameScreen {
+        LevelSelect,
+        InGame,
+        Settings,
+        About,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum MenuOption {
+        Play,
+        Settings,
+        About,
+    }
+
     struct GameState {
+        screen: GameScreen,
+        selected_level: usize,
+        selected_menu_option: MenuOption,
         world: World,
         movement_system: MovementSystem,
         weapon_system: WeaponUpdateSystem,
@@ -72,11 +90,11 @@ mod wasm_entry {
 
     impl GameState {
         fn new() -> Self {
-            let mut world = World::new();
-            initialize_game(&mut world);
-
             GameState {
-                world,
+                screen: GameScreen::LevelSelect,
+                selected_level: 0,
+                selected_menu_option: MenuOption::Play,
+                world: World::new(),
                 movement_system: MovementSystem,
                 weapon_system: WeaponUpdateSystem,
                 ai_system: AISystem,
@@ -91,6 +109,14 @@ mod wasm_entry {
             }
         }
 
+        fn start_game(&mut self) {
+            self.world.clear();
+            initialize_game(&mut self.world);
+            self.screen = GameScreen::InGame;
+            self.death_time = 0.0;
+            self.level_complete_time = 0.0;
+        }
+
         fn update(&mut self, graphics: &Graphics, current_time: f64) {
             let dt = if self.last_time == 0.0 {
                 0.016 // Initial frame assume 60fps
@@ -102,6 +128,246 @@ mod wasm_entry {
             // Clear background
             graphics.clear(Color::new(20.0 / 255.0, 12.0 / 255.0, 28.0 / 255.0, 1.0));
 
+            match self.screen {
+                GameScreen::LevelSelect => {
+                    self.update_level_select(graphics);
+                }
+                GameScreen::InGame => {
+                    self.update_game(graphics, dt);
+                }
+                GameScreen::Settings => {
+                    self.update_settings(graphics);
+                }
+                GameScreen::About => {
+                    self.update_about(graphics);
+                }
+            }
+
+            // Update input state for next frame
+            input::end_frame();
+        }
+
+        fn update_level_select(&mut self, graphics: &Graphics) {
+            let screen_width = graphics.width();
+            let screen_height = graphics.height();
+
+            // Handle input
+            if input::is_key_pressed("ArrowLeft") {
+                if self.selected_menu_option == MenuOption::Play {
+                    self.selected_level = if self.selected_level == 0 {
+                        11
+                    } else {
+                        self.selected_level - 1
+                    };
+                }
+            }
+            if input::is_key_pressed("ArrowRight") {
+                if self.selected_menu_option == MenuOption::Play {
+                    self.selected_level = (self.selected_level + 1) % 12;
+                }
+            }
+            if input::is_key_pressed("ArrowDown") {
+                self.selected_menu_option = match self.selected_menu_option {
+                    MenuOption::Play => MenuOption::Settings,
+                    MenuOption::Settings => MenuOption::About,
+                    MenuOption::About => MenuOption::Play,
+                };
+            }
+            if input::is_key_pressed("ArrowUp") {
+                self.selected_menu_option = match self.selected_menu_option {
+                    MenuOption::Play => MenuOption::About,
+                    MenuOption::Settings => MenuOption::Play,
+                    MenuOption::About => MenuOption::Settings,
+                };
+            }
+            if input::is_key_pressed("Enter") {
+                match self.selected_menu_option {
+                    MenuOption::Play => {
+                        self.start_game();
+                        return;
+                    }
+                    MenuOption::Settings => {
+                        self.screen = GameScreen::Settings;
+                        return;
+                    }
+                    MenuOption::About => {
+                        self.screen = GameScreen::About;
+                        return;
+                    }
+                }
+            }
+
+            // Render title
+            graphics.draw_text(
+                "OPEN MIAMI",
+                Vec2::new(screen_width / 2.0 - 150.0, 100.0),
+                60.0,
+                Color::new(1.0, 0.09, 0.26, 1.0), // Pink/red
+            );
+
+            // Render level selection
+            let level_y = screen_height / 2.0 - 50.0;
+
+            // Left arrow
+            let arrow_color = if self.selected_menu_option == MenuOption::Play {
+                Color::WHITE
+            } else {
+                Color::GRAY
+            };
+            graphics.draw_text(
+                "<",
+                Vec2::new(screen_width / 2.0 - 150.0, level_y),
+                40.0,
+                arrow_color,
+            );
+
+            // Level number
+            let level_text = format!("LEVEL {}", self.selected_level + 1);
+            graphics.draw_text(
+                &level_text,
+                Vec2::new(screen_width / 2.0 - 80.0, level_y),
+                40.0,
+                Color::WHITE,
+            );
+
+            // Right arrow
+            graphics.draw_text(
+                ">",
+                Vec2::new(screen_width / 2.0 + 120.0, level_y),
+                40.0,
+                arrow_color,
+            );
+
+            // Render menu options
+            let menu_y = screen_height / 2.0 + 100.0;
+            let menu_spacing = 50.0;
+
+            let play_color = if self.selected_menu_option == MenuOption::Play {
+                Color::new(1.0, 0.09, 0.26, 1.0)
+            } else {
+                Color::WHITE
+            };
+            graphics.draw_text(
+                "PRESS ENTER TO PLAY",
+                Vec2::new(screen_width / 2.0 - 150.0, menu_y),
+                30.0,
+                play_color,
+            );
+
+            let settings_color = if self.selected_menu_option == MenuOption::Settings {
+                Color::new(1.0, 0.09, 0.26, 1.0)
+            } else {
+                Color::WHITE
+            };
+            graphics.draw_text(
+                "Settings",
+                Vec2::new(screen_width / 2.0 - 50.0, menu_y + menu_spacing),
+                24.0,
+                settings_color,
+            );
+
+            let about_color = if self.selected_menu_option == MenuOption::About {
+                Color::new(1.0, 0.09, 0.26, 1.0)
+            } else {
+                Color::WHITE
+            };
+            graphics.draw_text(
+                "About",
+                Vec2::new(screen_width / 2.0 - 30.0, menu_y + menu_spacing * 2.0),
+                24.0,
+                about_color,
+            );
+
+            // Controls hint
+            graphics.draw_text(
+                "Arrow Keys to navigate | Enter to select",
+                Vec2::new(screen_width / 2.0 - 200.0, screen_height - 40.0),
+                16.0,
+                Color::GRAY,
+            );
+        }
+
+        fn update_settings(&mut self, graphics: &Graphics) {
+            let screen_width = graphics.width();
+            let screen_height = graphics.height();
+
+            // Handle input
+            if input::is_key_pressed("Escape") || input::is_key_pressed("Enter") {
+                self.screen = GameScreen::LevelSelect;
+            }
+
+            // Render title
+            graphics.draw_text(
+                "SETTINGS",
+                Vec2::new(screen_width / 2.0 - 120.0, 100.0),
+                60.0,
+                Color::new(1.0, 0.09, 0.26, 1.0),
+            );
+
+            // Render message
+            graphics.draw_text(
+                "No settings currently available",
+                Vec2::new(screen_width / 2.0 - 180.0, screen_height / 2.0),
+                30.0,
+                Color::WHITE,
+            );
+
+            // Back hint
+            graphics.draw_text(
+                "Press ESC or Enter to return",
+                Vec2::new(screen_width / 2.0 - 140.0, screen_height - 40.0),
+                16.0,
+                Color::GRAY,
+            );
+        }
+
+        fn update_about(&mut self, graphics: &Graphics) {
+            let screen_width = graphics.width();
+            let screen_height = graphics.height();
+
+            // Handle input
+            if input::is_key_pressed("Escape") || input::is_key_pressed("Enter") {
+                self.screen = GameScreen::LevelSelect;
+            }
+
+            // Render title
+            graphics.draw_text(
+                "ABOUT",
+                Vec2::new(screen_width / 2.0 - 80.0, 100.0),
+                60.0,
+                Color::new(1.0, 0.09, 0.26, 1.0),
+            );
+
+            // Render message
+            graphics.draw_text(
+                "This is Open Miami,",
+                Vec2::new(screen_width / 2.0 - 140.0, screen_height / 2.0 - 40.0),
+                30.0,
+                Color::WHITE,
+            );
+            graphics.draw_text(
+                "a game heavily inspired by Hotline Miami",
+                Vec2::new(screen_width / 2.0 - 260.0, screen_height / 2.0),
+                30.0,
+                Color::WHITE,
+            );
+            graphics.draw_text(
+                "and vibe coded with Claude.",
+                Vec2::new(screen_width / 2.0 - 200.0, screen_height / 2.0 + 40.0),
+                30.0,
+                Color::WHITE,
+            );
+
+            // Back hint
+            graphics.draw_text(
+                "Press ESC or Enter to return",
+                Vec2::new(screen_width / 2.0 - 140.0, screen_height - 40.0),
+                16.0,
+                Color::GRAY,
+            );
+        }
+
+        fn update_game(&mut self, graphics: &Graphics, dt: f32) {
             // Get player state for UI and camera
             let player_alive = is_player_alive(&self.world);
             let player_pos = get_player_position(&self.world);
@@ -180,6 +446,11 @@ mod wasm_entry {
                 initialize_game(&mut self.world);
                 self.death_time = 0.0;
                 self.level_complete_time = 0.0;
+            }
+
+            // Handle escape to return to menu
+            if input::is_key_pressed("Escape") {
+                self.screen = GameScreen::LevelSelect;
             }
         }
     }
