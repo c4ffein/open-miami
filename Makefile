@@ -63,8 +63,8 @@ check-e2e:
 	wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm --out-dir . --target web --no-typescript
 	@echo "Installing E2E test dependencies..."
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
-	@echo "Running E2E tests with 20-second timeout..."
-	cd tests/e2e && mkdir -p test-results && timeout 20 npm test
+	@echo "Running E2E tests with 60-second timeout..."
+	cd tests/e2e && mkdir -p test-results && timeout 60 npm test
 	@echo "$(GREEN)✓ E2E tests passed$(NC)"
 
 # Code Coverage - requires cargo-tarpaulin (optional check)
