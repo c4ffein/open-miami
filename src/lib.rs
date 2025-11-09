@@ -51,7 +51,7 @@ mod wasm_entry {
     use crate::graphics::Graphics;
     use crate::input;
     use crate::level::Level;
-    use crate::math::Color;
+    use crate::math::{Color, Vec2};
     use crate::render::*;
     use crate::systems::*;
 

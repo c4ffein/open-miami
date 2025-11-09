@@ -1,4 +1,4 @@
-.PHONY: verify check-test check-clippy check-fmt check-build check-e2e check-coverage build-wasm help
+.PHONY: verify check-test check-clippy check-fmt check-build check-wasm-build check-e2e check-coverage build-wasm help
 
 # Colors for output
 RED=\033[0;31m
@@ -14,12 +14,13 @@ help:
 	@echo "  make check-clippy    - Run clippy linting"
 	@echo "  make check-fmt       - Check code formatting"
 	@echo "  make check-build     - Build release binary"
+	@echo "  make check-wasm-build - Build for wasm32 target (compilation check only)"
 	@echo "  make build-wasm      - Build WASM and generate JavaScript glue (for local testing)"
 	@echo "  make check-e2e       - Run end-to-end tests (requires WASM dependencies)"
 	@echo "  make check-coverage  - Generate code coverage report (requires cargo-tarpaulin)"
 
 # Run all verification checks (E2E tests excluded by default due to dependency constraints)
-verify: check-fmt check-clippy check-test check-build
+verify: check-fmt check-clippy check-test check-build check-wasm-build
 	@echo "$(GREEN)✓ All core checks passed!$(NC)"
 	@echo "$(YELLOW)Note: E2E tests skipped (run 'make check-e2e' separately if WASM dependencies are available)$(NC)"
 
@@ -51,6 +52,13 @@ check-build:
 	@echo "$(YELLOW)Building release library...$(NC)"
 	cargo build --release --lib --verbose
 	@echo "$(GREEN)✓ Build passed$(NC)"
+
+# WASM Build Check - verify wasm32 target compiles (catches wasm-specific issues)
+check-wasm-build:
+	@echo "$(YELLOW)Checking WASM compilation...$(NC)"
+	@rustup target list --installed | grep -q wasm32-unknown-unknown || (echo "Installing wasm32-unknown-unknown target..." && rustup target add wasm32-unknown-unknown)
+	cargo build --lib --target wasm32-unknown-unknown
+	@echo "$(GREEN)✓ WASM build check passed$(NC)"
 
 # Build WASM - build WASM and generate JavaScript glue for local testing
 build-wasm:
