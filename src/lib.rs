@@ -12,6 +12,7 @@ pub mod collision;
 pub mod components;
 pub mod ecs;
 pub mod game;
+pub mod pathfinding;
 #[cfg(target_arch = "wasm32")]
 pub mod render;
 pub mod systems;
