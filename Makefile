@@ -58,7 +58,11 @@ build-wasm:
 	@rustup target list --installed | grep -q wasm32-unknown-unknown || (echo "Installing wasm32-unknown-unknown target..." && rustup target add wasm32-unknown-unknown)
 	cargo build --release --target wasm32-unknown-unknown
 	@echo "$(YELLOW)Generating wasm-bindgen JavaScript glue...$(NC)"
-	@which wasm-bindgen > /dev/null || (echo "$(YELLOW)Installing wasm-bindgen-cli...$(NC)" && cargo install wasm-bindgen-cli --version 0.2.105)
+	@if ! which wasm-bindgen > /dev/null; then \
+		WASM_BINDGEN_VERSION=$$(grep -A 2 'name = "wasm-bindgen"' Cargo.lock | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/'); \
+		echo "Installing wasm-bindgen-cli v$$WASM_BINDGEN_VERSION to match Cargo.lock..."; \
+		cargo install wasm-bindgen-cli --version $$WASM_BINDGEN_VERSION; \
+	fi
 	wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm --out-dir . --target web --no-typescript
 	@echo "$(GREEN)✓ WASM build complete! Files generated:$(NC)"
 	@echo "  - open_miami.js"
@@ -73,7 +77,11 @@ check-e2e:
 	@echo "Building WASM..."
 	cargo build --release --target wasm32-unknown-unknown
 	@echo "Generating wasm-bindgen JavaScript glue..."
-	@which wasm-bindgen > /dev/null || (echo "$(YELLOW)Installing wasm-bindgen-cli...$(NC)" && cargo install wasm-bindgen-cli)
+	@if ! which wasm-bindgen > /dev/null; then \
+		WASM_BINDGEN_VERSION=$$(grep -A 2 'name = "wasm-bindgen"' Cargo.lock | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/'); \
+		echo "Installing wasm-bindgen-cli v$$WASM_BINDGEN_VERSION to match Cargo.lock..."; \
+		cargo install wasm-bindgen-cli --version $$WASM_BINDGEN_VERSION; \
+	fi
 	wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm --out-dir . --target web --no-typescript
 	@echo "Installing E2E test dependencies..."
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
