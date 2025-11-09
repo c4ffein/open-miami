@@ -1,4 +1,4 @@
-.PHONY: verify check-test check-clippy check-fmt check-build check-e2e check-coverage help
+.PHONY: verify check-test check-clippy check-fmt check-build check-e2e check-coverage build-wasm help
 
 # Colors for output
 RED=\033[0;31m
@@ -14,6 +14,7 @@ help:
 	@echo "  make check-clippy    - Run clippy linting"
 	@echo "  make check-fmt       - Check code formatting"
 	@echo "  make check-build     - Build release binary"
+	@echo "  make build-wasm      - Build WASM and generate JavaScript glue (for local testing)"
 	@echo "  make check-e2e       - Run end-to-end tests (requires WASM dependencies)"
 	@echo "  make check-coverage  - Generate code coverage report (requires cargo-tarpaulin)"
 
@@ -50,6 +51,19 @@ check-build:
 	@echo "$(YELLOW)Building release library...$(NC)"
 	cargo build --release --lib --verbose
 	@echo "$(GREEN)✓ Build passed$(NC)"
+
+# Build WASM - build WASM and generate JavaScript glue for local testing
+build-wasm:
+	@echo "$(YELLOW)Building WASM for local testing...$(NC)"
+	@rustup target list --installed | grep -q wasm32-unknown-unknown || (echo "Installing wasm32-unknown-unknown target..." && rustup target add wasm32-unknown-unknown)
+	cargo build --release --target wasm32-unknown-unknown
+	@echo "$(YELLOW)Generating wasm-bindgen JavaScript glue...$(NC)"
+	@which wasm-bindgen > /dev/null || (echo "$(YELLOW)Installing wasm-bindgen-cli...$(NC)" && cargo install wasm-bindgen-cli --version 0.2.105)
+	wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm --out-dir . --target web --no-typescript
+	@echo "$(GREEN)✓ WASM build complete! Files generated:$(NC)"
+	@echo "  - open_miami.js"
+	@echo "  - open_miami_bg.wasm"
+	@echo "$(YELLOW)You can now open index.html in a web browser (via a local web server)$(NC)"
 
 # E2E Tests - end-to-end tests with Playwright
 # IMPORTANT: Always run via 'make check-e2e' to ensure proper timeout enforcement
