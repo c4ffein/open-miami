@@ -10,8 +10,18 @@ use web_sys::{KeyboardEvent, MouseEvent};
 
 thread_local! {
     static PRESSED_KEYS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static PREVIOUS_PRESSED_KEYS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     static MOUSE_POSITION: RefCell<Vec2> = RefCell::new(Vec2::zero());
     static MOUSE_BUTTONS: RefCell<HashSet<u16>> = RefCell::new(HashSet::new());
+}
+
+/// Call this at the end of each frame to update the previous key state
+pub fn end_frame() {
+    PRESSED_KEYS.with(|current| {
+        PREVIOUS_PRESSED_KEYS.with(|previous| {
+            *previous.borrow_mut() = current.borrow().clone();
+        });
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -85,6 +95,14 @@ pub fn setup_input_handlers() -> Result<(), JsValue> {
 
 pub fn is_key_down(key: &str) -> bool {
     PRESSED_KEYS.with(|keys| keys.borrow().contains(key))
+}
+
+/// Check if a key was just pressed this frame (not held from previous frame)
+pub fn is_key_pressed(key: &str) -> bool {
+    PRESSED_KEYS.with(|current| {
+        PREVIOUS_PRESSED_KEYS
+            .with(|previous| current.borrow().contains(key) && !previous.borrow().contains(key))
+    })
 }
 
 pub fn mouse_position() -> Vec2 {

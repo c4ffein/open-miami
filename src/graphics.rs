@@ -28,6 +28,20 @@ impl Graphics {
             .dyn_into::<HtmlCanvasElement>()
             .map_err(|_| "Element with id 'glcanvas' is not a canvas")?;
 
+        // Set canvas size to window size
+        let width = window
+            .inner_width()
+            .map_err(|_| "Failed to get window width")?
+            .as_f64()
+            .unwrap_or(960.0) as u32;
+        let height = window
+            .inner_height()
+            .map_err(|_| "Failed to get window height")?
+            .as_f64()
+            .unwrap_or(720.0) as u32;
+        canvas.set_width(width);
+        canvas.set_height(height);
+
         let context = canvas
             .get_context("2d")
             .map_err(|_| "Failed to get 2d context")?
