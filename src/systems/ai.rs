@@ -1,5 +1,6 @@
 use crate::components::{AIState, Enemy, Player, Position, Speed, Velocity, AI};
 use crate::ecs::{Entity, System, World};
+use crate::pathfinding::NavigationGrid;
 
 /// System that handles enemy AI behavior
 pub struct AISystem;
@@ -44,6 +45,9 @@ impl System for AISystem {
             None => return, // No player, nothing to do
         };
 
+        // Create navigation grid from world walls
+        let nav_grid = NavigationGrid::new(world.walls());
+
         // Query all enemies with AI, Position, Velocity, and Speed
         let enemies: Vec<Entity> = world.query::<Enemy>();
 
@@ -77,10 +81,32 @@ impl System for AISystem {
             if let Some(velocity) = world.get_component_mut::<Velocity>(entity) {
                 match ai.state {
                     AIState::Chase => {
-                        let (dir_x, dir_y) =
-                            Self::calculate_move_direction(&enemy_pos, &player_pos);
-                        velocity.x = dir_x * speed.value;
-                        velocity.y = dir_y * speed.value;
+                        // Use pathfinding to get next waypoint
+                        let enemy_world_pos = enemy_pos.to_vec2();
+                        let player_world_pos = player_pos.to_vec2();
+
+                        if let Some(next_waypoint) =
+                            nav_grid.get_next_waypoint(enemy_world_pos, player_world_pos)
+                        {
+                            // Calculate direction to waypoint
+                            let dx = next_waypoint.x - enemy_pos.x;
+                            let dy = next_waypoint.y - enemy_pos.y;
+                            let distance = (dx * dx + dy * dy).sqrt();
+
+                            if distance > 0.0 {
+                                velocity.x = (dx / distance) * speed.value;
+                                velocity.y = (dy / distance) * speed.value;
+                            } else {
+                                velocity.x = 0.0;
+                                velocity.y = 0.0;
+                            }
+                        } else {
+                            // No path found, fall back to direct movement
+                            let (dir_x, dir_y) =
+                                Self::calculate_move_direction(&enemy_pos, &player_pos);
+                            velocity.x = dir_x * speed.value;
+                            velocity.y = dir_y * speed.value;
+                        }
                     }
                     AIState::Attack => {
                         // Stop moving when attacking
@@ -232,5 +258,308 @@ mod tests {
         // All enemies should have updated AI states
         let enemies: Vec<_> = world.query::<Enemy>();
         assert_eq!(enemies.len(), 3);
+    }
+
+    #[test]
+    fn test_ai_pathfinding_no_obstacles() {
+        use crate::ecs::world::World;
+
+        let mut world = World::new();
+
+        // Create player (within detection range)
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, Position::new(300.0, 100.0));
+
+        // Create enemy
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(100.0, 100.0));
+        world.add_component(enemy, AI::new());
+        world.add_component(enemy, Velocity::zero());
+        world.add_component(enemy, Speed::new(100.0));
+
+        let mut system = AISystem;
+        system.run(&mut world, 0.016);
+
+        // Enemy should be in Chase state and moving toward player
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert_eq!(ai.state, AIState::Chase);
+
+        let velocity = world.get_component::<Velocity>(enemy).unwrap();
+        // Should have non-zero velocity
+        assert!(velocity.x.abs() > 0.0 || velocity.y.abs() > 0.0);
+
+        // Velocity should point generally toward player
+        assert!(velocity.x > 0.0); // Moving right
+        assert!(velocity.y > 0.0); // Moving down
+    }
+
+    #[test]
+    fn test_ai_pathfinding_with_wall_obstacle() {
+        use crate::ecs::world::World;
+
+        let mut world = World::new();
+
+        // Add a vertical wall between enemy and player
+        world.add_wall(250.0, 0.0, 20.0, 300.0);
+
+        // Create player on right side of wall (within detection range)
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, Position::new(350.0, 150.0));
+
+        // Create enemy on left side of wall
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(100.0, 150.0));
+        world.add_component(enemy, AI::new());
+        world.add_component(enemy, Velocity::zero());
+        world.add_component(enemy, Speed::new(100.0));
+
+        let mut system = AISystem;
+        system.run(&mut world, 0.016);
+
+        // Enemy should be in Chase state
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert_eq!(ai.state, AIState::Chase);
+
+        // Enemy should be moving (pathfinding around wall)
+        let velocity = world.get_component::<Velocity>(enemy).unwrap();
+        assert!(velocity.x.abs() > 0.0 || velocity.y.abs() > 0.0);
+    }
+
+    #[test]
+    fn test_ai_pathfinding_around_corner() {
+        use crate::ecs::world::World;
+
+        let mut world = World::new();
+
+        // Create L-shaped wall
+        world.add_wall(200.0, 200.0, 400.0, 20.0); // Horizontal wall
+        world.add_wall(200.0, 200.0, 20.0, 200.0); // Vertical wall
+
+        // Create player in the corner
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, Position::new(100.0, 300.0));
+
+        // Create enemy outside the corner (within detection range)
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(300.0, 100.0));
+        world.add_component(enemy, AI::new());
+        world.add_component(enemy, Velocity::zero());
+        world.add_component(enemy, Speed::new(100.0));
+
+        let mut system = AISystem;
+        system.run(&mut world, 0.016);
+
+        // Enemy should be chasing
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert_eq!(ai.state, AIState::Chase);
+
+        // Enemy should be moving
+        let velocity = world.get_component::<Velocity>(enemy).unwrap();
+        assert!(velocity.x.abs() > 0.0 || velocity.y.abs() > 0.0);
+    }
+
+    #[test]
+    fn test_ai_pathfinding_multiple_walls() {
+        use crate::ecs::world::World;
+
+        let mut world = World::new();
+
+        // Create a maze of walls
+        world.add_wall(200.0, 0.0, 20.0, 300.0);
+        world.add_wall(400.0, 200.0, 20.0, 400.0);
+
+        // Create player (within detection range)
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, Position::new(350.0, 250.0));
+
+        // Create enemy
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(100.0, 100.0));
+        world.add_component(enemy, AI::new());
+        world.add_component(enemy, Velocity::zero());
+        world.add_component(enemy, Speed::new(100.0));
+
+        let mut system = AISystem;
+        system.run(&mut world, 0.016);
+
+        // Enemy should be chasing
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert_eq!(ai.state, AIState::Chase);
+
+        // Enemy should be moving
+        let velocity = world.get_component::<Velocity>(enemy).unwrap();
+        assert!(velocity.x.abs() > 0.0 || velocity.y.abs() > 0.0);
+    }
+
+    #[test]
+    fn test_ai_pathfinding_enemy_follows_over_time() {
+        use crate::ecs::world::World;
+
+        let mut world = World::new();
+
+        // Create player (within detection range)
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, Position::new(300.0, 100.0));
+
+        // Create enemy
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(100.0, 100.0));
+        world.add_component(enemy, AI::new());
+        world.add_component(enemy, Velocity::zero());
+        world.add_component(enemy, Speed::new(100.0));
+
+        // Get initial distance
+        let initial_pos = *world.get_component::<Position>(enemy).unwrap();
+        let player_pos_clone = *world.get_component::<Position>(player).unwrap();
+        let initial_distance = initial_pos.distance_to(&player_pos_clone);
+
+        let mut system = AISystem;
+
+        // Simulate multiple frames
+        for _ in 0..10 {
+            system.run(&mut world, 0.016);
+
+            // Apply velocity to position (simulate movement system)
+            let enemies: Vec<_> = world.query::<Enemy>();
+            for entity in enemies {
+                // Get velocity first, then update position
+                let vel = *world.get_component::<Velocity>(entity).unwrap();
+                if let Some(pos) = world.get_component_mut::<Position>(entity) {
+                    pos.x += vel.x * 0.016;
+                    pos.y += vel.y * 0.016;
+                }
+            }
+        }
+
+        // Enemy should be closer to player
+        let final_pos = world.get_component::<Position>(enemy).unwrap();
+        let final_distance = final_pos.distance_to(&player_pos_clone);
+
+        assert!(final_distance < initial_distance);
+    }
+
+    #[test]
+    fn test_ai_pathfinding_stops_when_attacking() {
+        use crate::ecs::world::World;
+
+        let mut world = World::new();
+
+        // Create player very close to enemy (within attack range)
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, Position::new(30.0, 0.0));
+
+        // Create enemy
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(0.0, 0.0));
+        world.add_component(enemy, AI::new());
+        world.add_component(enemy, Velocity::zero());
+        world.add_component(enemy, Speed::new(100.0));
+
+        let mut system = AISystem;
+        system.run(&mut world, 0.016);
+
+        // Enemy should be attacking
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert_eq!(ai.state, AIState::Attack);
+
+        // Enemy should stop moving when attacking
+        let velocity = world.get_component::<Velocity>(enemy).unwrap();
+        assert_eq!(velocity.x, 0.0);
+        assert_eq!(velocity.y, 0.0);
+    }
+
+    #[test]
+    fn test_ai_pathfinding_respects_speed() {
+        use crate::ecs::world::World;
+
+        let mut world = World::new();
+
+        // Create player (within detection range of both enemies)
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, Position::new(250.0, 100.0));
+
+        // Create slow enemy
+        let slow_enemy = world.spawn();
+        world.add_component(slow_enemy, Enemy);
+        world.add_component(slow_enemy, Position::new(100.0, 100.0));
+        world.add_component(slow_enemy, AI::new());
+        world.add_component(slow_enemy, Velocity::zero());
+        world.add_component(slow_enemy, Speed::new(50.0));
+
+        // Create fast enemy
+        let fast_enemy = world.spawn();
+        world.add_component(fast_enemy, Enemy);
+        world.add_component(fast_enemy, Position::new(100.0, 120.0));
+        world.add_component(fast_enemy, AI::new());
+        world.add_component(fast_enemy, Velocity::zero());
+        world.add_component(fast_enemy, Speed::new(200.0));
+
+        let mut system = AISystem;
+        system.run(&mut world, 0.016);
+
+        // Both should be chasing
+        let slow_ai = world.get_component::<AI>(slow_enemy).unwrap();
+        let fast_ai = world.get_component::<AI>(fast_enemy).unwrap();
+        assert_eq!(slow_ai.state, AIState::Chase);
+        assert_eq!(fast_ai.state, AIState::Chase);
+
+        // Fast enemy should have higher velocity magnitude
+        let slow_vel = world.get_component::<Velocity>(slow_enemy).unwrap();
+        let fast_vel = world.get_component::<Velocity>(fast_enemy).unwrap();
+
+        let slow_mag = (slow_vel.x * slow_vel.x + slow_vel.y * slow_vel.y).sqrt();
+        let fast_mag = (fast_vel.x * fast_vel.x + fast_vel.y * fast_vel.y).sqrt();
+
+        assert!(fast_mag > slow_mag);
+        assert!((slow_mag - 50.0).abs() < 1.0); // Should be approximately 50.0
+        assert!((fast_mag - 200.0).abs() < 1.0); // Should be approximately 200.0
+    }
+
+    #[test]
+    fn test_ai_pathfinding_sees_through_walls() {
+        use crate::ecs::world::World;
+
+        let mut world = World::new();
+
+        // Add a wall between enemy and player
+        world.add_wall(250.0, 0.0, 20.0, 500.0);
+
+        // Create player on other side of wall (within detection range)
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, Position::new(350.0, 250.0));
+
+        // Create enemy
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(100.0, 250.0));
+        world.add_component(enemy, AI::new());
+        world.add_component(enemy, Velocity::zero());
+        world.add_component(enemy, Speed::new(100.0));
+
+        let mut system = AISystem;
+        system.run(&mut world, 0.016);
+
+        // Enemy should detect player through wall (no line of sight check)
+        // and enter Chase state
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert_eq!(ai.state, AIState::Chase);
+
+        // Enemy should be moving to path around the wall
+        let velocity = world.get_component::<Velocity>(enemy).unwrap();
+        assert!(velocity.x.abs() > 0.0 || velocity.y.abs() > 0.0);
     }
 }
