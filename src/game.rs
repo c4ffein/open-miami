@@ -29,6 +29,7 @@ pub fn spawn_enemy(world: &mut World, position: Vec2) -> Entity {
     world.add_component(entity, Speed::new(100.0));
     world.add_component(entity, Health::new(50));
     world.add_component(entity, Radius::new(12.0));
+    world.add_component(entity, Rotation::new(0.0));
     world.add_component(entity, AI::new());
 
     entity
@@ -36,6 +37,12 @@ pub fn spawn_enemy(world: &mut World, position: Vec2) -> Entity {
 
 /// Initialize a new game world with player and enemies
 pub fn initialize_game(world: &mut World) {
+    // Add walls (must match the walls drawn in level.rs)
+    world.add_wall(200.0, 200.0, 400.0, 20.0); // Horizontal wall
+    world.add_wall(200.0, 200.0, 20.0, 200.0); // Vertical wall (L-shape)
+    world.add_wall(800.0, 300.0, 20.0, 300.0); // Vertical wall
+    world.add_wall(400.0, 600.0, 300.0, 20.0); // Horizontal wall
+
     // Spawn player
     spawn_player(world, Vec2::new(400.0, 300.0));
 

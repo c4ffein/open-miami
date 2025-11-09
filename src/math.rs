@@ -1,4 +1,4 @@
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vec2 {
@@ -75,6 +75,13 @@ impl Neg for Vec2 {
     }
 }
 
+impl AddAssign for Vec2 {
+    fn add_assign(&mut self, other: Vec2) {
+        self.x += other.x;
+        self.y += other.y;
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
     pub r: f32,
@@ -90,6 +97,15 @@ impl Color {
 
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Color { r, g, b, a: 1.0 }
+    }
+
+    pub fn from_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Color {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: a as f32 / 255.0,
+        }
     }
 
     pub const RED: Color = Color {

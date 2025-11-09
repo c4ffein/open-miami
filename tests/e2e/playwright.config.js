@@ -7,6 +7,8 @@ module.exports = defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
+  timeout: 60000, // 60 second timeout per test
+  globalTimeout: 60000, // 60 second global timeout
 
   use: {
     baseURL: 'http://localhost:8000',
@@ -18,7 +20,19 @@ module.exports = defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions: {
+          args: [
+            '--disable-dev-shm-usage',
+            '--disable-blink-features=AutomationControlled',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-gpu',
+            '--single-process',
+          ],
+        },
+      },
     },
   ],
 

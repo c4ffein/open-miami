@@ -1,9 +1,12 @@
+use crate::graphics::Graphics;
 use crate::math::Vec2;
 
 pub struct Camera {
     pub target: Vec2,
     pub offset: Vec2,
     pub zoom: f32,
+    canvas_width: f32,
+    canvas_height: f32,
 }
 
 impl Default for Camera {
@@ -12,6 +15,8 @@ impl Default for Camera {
             target: Vec2::zero(),
             offset: Vec2::zero(),
             zoom: 1.0,
+            canvas_width: 960.0,
+            canvas_height: 720.0,
         }
     }
 }
@@ -25,23 +30,29 @@ impl Camera {
         self.target = player_pos;
     }
 
-    pub fn apply(&self) {
-        // In a pure canvas implementation, we would apply transformations here
-        // For now, this is a placeholder for potential canvas transform operations
+    pub fn apply(&self, graphics: &Graphics) {
+        // Save the current transformation state
+        graphics.save();
+
+        // Center the camera on the target (player)
+        // Translate so that the target appears in the center of the screen
+        let offset_x = self.canvas_width / 2.0 - self.target.x;
+        let offset_y = self.canvas_height / 2.0 - self.target.y;
+
+        graphics.translate(offset_x, offset_y);
     }
 
-    pub fn reset(&self) {
-        // Reset camera transformations
-        // Placeholder for canvas transform reset
+    pub fn reset(&self, graphics: &Graphics) {
+        // Restore the transformation state
+        graphics.restore();
     }
 
     pub fn screen_to_world(&self, screen_pos: Vec2) -> Vec2 {
-        // For now, we'll implement a simple screen-to-world conversion
-        // This assumes the camera is centered on the target
-        // In a full implementation, you'd apply the inverse of the camera transform
+        // Convert screen coordinates to world coordinates
+        // Account for the camera offset that centers the target
+        let world_x = screen_pos.x - (self.canvas_width / 2.0 - self.target.x);
+        let world_y = screen_pos.y - (self.canvas_height / 2.0 - self.target.y);
 
-        // Simplified version: just return screen_pos for now
-        // This can be enhanced later with proper transformation math
-        screen_pos
+        Vec2::new(world_x, world_y)
     }
 }

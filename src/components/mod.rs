@@ -137,7 +137,7 @@ impl AI {
     pub fn new() -> Self {
         AI {
             state: AIState::Idle,
-            detection_range: 300.0,
+            detection_range: 900.0, // Tripled from 300.0
             attack_range: 40.0,
             attack_cooldown: 1.0,
             attack_timer: 0.0,
@@ -177,6 +177,58 @@ pub struct Weapon {
     pub max_ammo: i32,
     pub fire_rate: f32,
     pub fire_timer: f32,
+}
+
+/// Projectile trail for visual feedback
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProjectileTrail {
+    pub start: Position,
+    pub end: Position,
+    pub lifetime: f32,
+    pub max_lifetime: f32,
+}
+
+impl ProjectileTrail {
+    pub fn new(start: Position, end: Position) -> Self {
+        ProjectileTrail {
+            start,
+            end,
+            lifetime: 0.15, // 150ms trail
+            max_lifetime: 0.15,
+        }
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.lifetime > 0.0
+    }
+
+    pub fn alpha(&self) -> f32 {
+        self.lifetime / self.max_lifetime
+    }
+}
+
+/// Physical bullet projectile
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bullet {
+    pub damage: i32,
+    pub speed: f32,
+    pub lifetime: f32,
+    pub max_lifetime: f32,
+}
+
+impl Bullet {
+    pub fn new(damage: i32) -> Self {
+        Bullet {
+            damage,
+            speed: 800.0,  // pixels per second
+            lifetime: 3.0, // 3 seconds max lifetime
+            max_lifetime: 3.0,
+        }
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.lifetime > 0.0
+    }
 }
 
 impl Weapon {

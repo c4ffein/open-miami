@@ -1,4 +1,6 @@
-use crate::components::{Player, Position, Rotation, Speed, Velocity, Weapon, WeaponType};
+use crate::components::{
+    Bullet, Player, Position, Radius, Rotation, Speed, Velocity, Weapon, WeaponType,
+};
 use crate::ecs::{Entity, World};
 use crate::input;
 use crate::math::Vec2;
@@ -45,8 +47,8 @@ impl InputSystem {
             None => return,
         };
 
-        let mut move_x = 0.0;
-        let mut move_y = 0.0;
+        let mut move_x: f32 = 0.0;
+        let mut move_y: f32 = 0.0;
 
         if input::is_key_down(input::keys::W) || input::is_key_down(input::keys::ARROW_UP) {
             move_y -= 1.0;
@@ -109,11 +111,40 @@ impl InputSystem {
         let target_pos = Position::from_vec2(mouse_world_pos);
 
         // Process attack
-        if is_melee {
+        let hit = if is_melee {
             CombatSystem::process_melee(world, player_pos, target_pos, damage, 50.0)
         } else {
-            CombatSystem::process_shoot(world, player_pos, target_pos, damage)
-        }
+            // Spawn physical bullet
+            let bullet_entity = world.spawn();
+
+            // Calculate direction from player to target
+            let dx = target_pos.x - player_pos.x;
+            let dy = target_pos.y - player_pos.y;
+            let length = (dx * dx + dy * dy).sqrt();
+
+            // Normalize direction and multiply by bullet speed
+            let bullet = Bullet::new(damage);
+            let bullet_speed = bullet.speed;
+            let vel_x = if length > 0.0 {
+                (dx / length) * bullet_speed
+            } else {
+                0.0
+            };
+            let vel_y = if length > 0.0 {
+                (dy / length) * bullet_speed
+            } else {
+                0.0
+            };
+
+            world.add_component(bullet_entity, bullet);
+            world.add_component(bullet_entity, player_pos);
+            world.add_component(bullet_entity, Velocity::new(vel_x, vel_y));
+            world.add_component(bullet_entity, Radius::new(2.0)); // Small bullet radius
+
+            false // Bullets hit async, not instant
+        };
+
+        hit
     }
 
     /// Handle weapon switching (1-4 keys)

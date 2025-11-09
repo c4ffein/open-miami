@@ -11,7 +11,7 @@ pub use component::Component;
 pub use entity::Entity;
 pub use query::{Query, QueryMut};
 pub use system::System;
-pub use world::World;
+pub use world::{Wall, World};
 
 // Re-export common types
 pub use crate::math::Vec2;

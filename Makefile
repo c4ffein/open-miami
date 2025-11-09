@@ -1,4 +1,4 @@
-.PHONY: verify check-test check-clippy check-fmt check-build check-e2e check-coverage help
+.PHONY: verify check-test check-clippy check-fmt check-build check-e2e check-coverage build-wasm help
 
 # Colors for output
 RED=\033[0;31m
@@ -14,6 +14,7 @@ help:
 	@echo "  make check-clippy    - Run clippy linting"
 	@echo "  make check-fmt       - Check code formatting"
 	@echo "  make check-build     - Build release binary"
+	@echo "  make build-wasm      - Build WASM and generate JavaScript glue (for local testing)"
 	@echo "  make check-e2e       - Run end-to-end tests (requires WASM dependencies)"
 	@echo "  make check-coverage  - Generate code coverage report (requires cargo-tarpaulin)"
 
@@ -47,20 +48,45 @@ check-fmt:
 
 # Build - release build
 check-build:
-	@echo "$(YELLOW)Building release binary...$(NC)"
-	cargo build --release --verbose
+	@echo "$(YELLOW)Building release library...$(NC)"
+	cargo build --release --lib --verbose
 	@echo "$(GREEN)✓ Build passed$(NC)"
 
+# Build WASM - build WASM and generate JavaScript glue for local testing
+build-wasm:
+	@echo "$(YELLOW)Building WASM for local testing...$(NC)"
+	@rustup target list --installed | grep -q wasm32-unknown-unknown || (echo "Installing wasm32-unknown-unknown target..." && rustup target add wasm32-unknown-unknown)
+	cargo build --release --target wasm32-unknown-unknown
+	@echo "$(YELLOW)Generating wasm-bindgen JavaScript glue...$(NC)"
+	@if ! which wasm-bindgen > /dev/null; then \
+		WASM_BINDGEN_VERSION=$$(grep -A 2 'name = "wasm-bindgen"' Cargo.lock | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/'); \
+		echo "Installing wasm-bindgen-cli v$$WASM_BINDGEN_VERSION to match Cargo.lock..."; \
+		cargo install wasm-bindgen-cli --version $$WASM_BINDGEN_VERSION; \
+	fi
+	wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm --out-dir . --target web --no-typescript
+	@echo "$(GREEN)✓ WASM build complete! Files generated:$(NC)"
+	@echo "  - open_miami.js"
+	@echo "  - open_miami_bg.wasm"
+	@echo "$(YELLOW)You can now open index.html in a web browser (via a local web server)$(NC)"
+
 # E2E Tests - end-to-end tests with Playwright
+# IMPORTANT: Always run via 'make check-e2e' to ensure proper timeout enforcement
+# Running tests directly without timeout can cause Claude Code instances to hang
 check-e2e:
 	@echo "$(YELLOW)Running end-to-end tests...$(NC)"
 	@echo "Building WASM..."
 	cargo build --release --target wasm32-unknown-unknown
-	cp target/wasm32-unknown-unknown/release/open_miami.wasm .
+	@echo "Generating wasm-bindgen JavaScript glue..."
+	@if ! which wasm-bindgen > /dev/null; then \
+		WASM_BINDGEN_VERSION=$$(grep -A 2 'name = "wasm-bindgen"' Cargo.lock | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/'); \
+		echo "Installing wasm-bindgen-cli v$$WASM_BINDGEN_VERSION to match Cargo.lock..."; \
+		cargo install wasm-bindgen-cli --version $$WASM_BINDGEN_VERSION; \
+	fi
+	wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm --out-dir . --target web --no-typescript
 	@echo "Installing E2E test dependencies..."
 	cd tests/e2e && npm install && npx playwright install --with-deps chromium
-	@echo "Running E2E tests..."
-	cd tests/e2e && mkdir -p test-results && npm test
+	@echo "Running E2E tests with 60-second timeout..."
+	cd tests/e2e && mkdir -p test-results && timeout 60 npm test
 	@echo "$(GREEN)✓ E2E tests passed$(NC)"
 
 # Code Coverage - requires cargo-tarpaulin (optional check)

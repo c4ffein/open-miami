@@ -5,6 +5,26 @@ use std::collections::HashMap;
 /// ComponentStorage stores all components of a specific type
 type ComponentStorage = HashMap<Entity, Box<dyn Any>>;
 
+/// Wall obstacle represented as a rectangle
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Wall {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Wall {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Wall {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
 /// World manages all entities and their components
 pub struct World {
     next_entity_id: u64,
@@ -12,6 +32,8 @@ pub struct World {
     components: HashMap<TypeId, ComponentStorage>,
     // Track which entities exist
     entities: Vec<Entity>,
+    // Static walls in the world
+    walls: Vec<Wall>,
 }
 
 impl World {
@@ -20,6 +42,7 @@ impl World {
             next_entity_id: 0,
             components: HashMap::new(),
             entities: Vec::new(),
+            walls: Vec::new(),
         }
     }
 
@@ -116,10 +139,21 @@ impl World {
         &self.entities
     }
 
+    /// Add a wall obstacle to the world
+    pub fn add_wall(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.walls.push(Wall::new(x, y, width, height));
+    }
+
+    /// Get all walls in the world
+    pub fn walls(&self) -> &[Wall] {
+        &self.walls
+    }
+
     /// Clear all entities and components
     pub fn clear(&mut self) {
         self.entities.clear();
         self.components.clear();
+        self.walls.clear();
     }
 }
 

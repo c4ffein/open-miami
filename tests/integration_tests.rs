@@ -110,7 +110,7 @@ fn test_enemy_ai_attacks_when_close() {
 fn test_enemy_ai_idle_when_far() {
     let mut world = World::new();
 
-    let _player = spawn_player(&mut world, Vec2::new(500.0, 0.0));
+    let _player = spawn_player(&mut world, Vec2::new(1000.0, 0.0)); // Beyond 900 detection range
     let enemy = spawn_enemy(&mut world, Vec2::new(0.0, 0.0));
 
     let mut ai_system = AISystem;
@@ -315,4 +315,64 @@ fn test_weapon_ammo_depletion() {
     let weapon = world.get_component::<Weapon>(player).unwrap();
     assert_eq!(weapon.ammo, 0);
     assert!(!weapon.can_fire());
+}
+
+#[test]
+fn test_player_blocked_by_wall() {
+    let mut world = World::new();
+
+    // Player starts at (100, 100)
+    let player = spawn_player(&mut world, Vec2::new(100.0, 100.0));
+
+    // Add a vertical wall at x=150 that blocks right movement
+    // Wall is at (150, 50) with width 20 and height 100
+    // This creates a barrier from y=50 to y=150
+    world.add_wall(150.0, 50.0, 20.0, 100.0);
+
+    // Try to move right - player should hit the wall
+    // Player radius is 15, so they should stop at x = wall_x - player_radius = 150 - 15 = 135
+    world.get_component_mut::<Velocity>(player).unwrap().x = 100.0; // Move right
+    world.get_component_mut::<Velocity>(player).unwrap().y = 0.0;
+
+    let mut movement_system = MovementSystem;
+    movement_system.run(&mut world, 0.5); // Move for 0.5 seconds
+
+    // Player should be blocked by the wall, not at expected x=150
+    let pos = world.get_component::<Position>(player).unwrap();
+    assert!(
+        pos.x < 150.0,
+        "Player should be stopped by wall, but is at x={}",
+        pos.x
+    );
+    assert!(
+        pos.x >= 130.0,
+        "Player should be close to wall at x={}",
+        pos.x
+    ); // Close to wall
+
+    // Now move down to get below the wall (wall ends at y=150)
+    world.get_component_mut::<Velocity>(player).unwrap().x = 0.0;
+    world.get_component_mut::<Velocity>(player).unwrap().y = 100.0; // Move down
+
+    movement_system.run(&mut world, 0.6); // Move down for 0.6 seconds (60 units)
+
+    let pos = world.get_component::<Position>(player).unwrap();
+    assert!(
+        pos.y > 150.0,
+        "Player should have moved past the wall vertically"
+    );
+
+    // Now we can move right again past where the wall was
+    world.get_component_mut::<Velocity>(player).unwrap().x = 100.0; // Move right
+    world.get_component_mut::<Velocity>(player).unwrap().y = 0.0;
+
+    movement_system.run(&mut world, 0.5); // Move right for 0.5 seconds
+
+    let pos = world.get_component::<Position>(player).unwrap();
+    // Now player should be able to move past x=150 since they're below the wall
+    assert!(
+        pos.x > 150.0,
+        "Player should be able to move right past the wall at x={}",
+        pos.x
+    );
 }
