@@ -6,14 +6,57 @@ use crate::math::{Color, Vec2};
 
 /// Render all entities in the world
 pub fn render_entities(world: &World, graphics: &Graphics) {
-    // Render projectile trails first (behind everything)
+    // Render vision cones first (behind everything)
+    render_enemy_vision_cones(world, graphics);
+
+    // Render projectile trails
     render_projectile_trails(world, graphics);
+
+    // Render bullets
+    render_bullets(world, graphics);
 
     // Render enemies
     render_enemies(world, graphics);
 
     // Render player (on top)
     render_player(world, graphics);
+}
+
+/// Render enemy vision cones
+fn render_enemy_vision_cones(world: &World, graphics: &Graphics) {
+    let enemies: Vec<Entity> = world.query::<Enemy>();
+
+    for entity in enemies {
+        let (pos, rotation, ai, health) = match (
+            world.get_component::<Position>(entity),
+            world.get_component::<Rotation>(entity),
+            world.get_component::<AI>(entity),
+            world.get_component::<Health>(entity),
+        ) {
+            (Some(p), Some(r), Some(a), Some(h)) => (p, r, a, h),
+            _ => continue,
+        };
+
+        // Only draw vision cone for alive enemies
+        if health.is_dead() {
+            continue;
+        }
+
+        // Draw a 90-degree cone in the direction the enemy is facing
+        let cone_angle = std::f32::consts::PI / 2.0; // 90 degrees
+        let start_angle = rotation.angle - cone_angle / 2.0;
+        let end_angle = rotation.angle + cone_angle / 2.0;
+
+        // Semi-transparent red cone
+        let color = Color::new(1.0, 0.0, 0.0, 0.1);
+        graphics.draw_arc(
+            Vec2::new(pos.x, pos.y),
+            ai.detection_range,
+            start_angle,
+            end_angle,
+            color,
+        );
+    }
 }
 
 /// Render projectile trails
@@ -36,6 +79,27 @@ fn render_projectile_trails(world: &World, graphics: &Graphics) {
             2.0, // Line width
             color,
         );
+    }
+}
+
+/// Render bullets
+fn render_bullets(world: &World, graphics: &Graphics) {
+    let bullets: Vec<Entity> = world.query::<Bullet>();
+
+    for entity in bullets {
+        let pos = match world.get_component::<Position>(entity) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let radius = world
+            .get_component::<Radius>(entity)
+            .map(|r| r.value)
+            .unwrap_or(2.0);
+
+        // Yellow bullets
+        let color = Color::new(1.0, 0.9, 0.3, 1.0);
+        graphics.draw_circle(Vec2::new(pos.x, pos.y), radius, color);
     }
 }
 
@@ -110,11 +174,14 @@ pub fn render_ui(
     ammo: i32,
     enemies_alive: usize,
     player_alive: bool,
+    death_time: f32,
+    level_complete: bool,
+    level_complete_time: f32,
 ) {
     let screen_width = graphics.width();
     let screen_height = graphics.height();
 
-    if player_alive {
+    if player_alive && !level_complete {
         graphics.draw_text("Health:", Vec2::new(10.0, 30.0), 20.0, Color::WHITE);
         graphics.draw_text(
             &format!("{}", health),
@@ -138,19 +205,79 @@ pub fn render_ui(
             20.0,
             Color::WHITE,
         );
-    } else {
+    } else if !player_alive {
+        // Death screen with animations
+
+        // "YOU DIED" - reveal left to right
+        let message = "YOU DIED";
+        let reveal_duration = 1.0; // 1 second to fully reveal
+        let reveal_progress = (death_time / reveal_duration).min(1.0);
+        let chars_to_show = (message.len() as f32 * reveal_progress) as usize;
+        let revealed_text = &message[0..chars_to_show.min(message.len())];
+
         graphics.draw_text(
-            "YOU DIED",
+            revealed_text,
             Vec2::new(screen_width / 2.0 - 100.0, screen_height / 2.0),
             60.0,
             Color::RED,
         );
+
+        // "Press R to restart" - wobbling animation
+        // Only show after main message is fully revealed
+        if death_time > reveal_duration {
+            let anim_time = death_time - reveal_duration;
+
+            // Wobble position (move up and down)
+            let y_amplitude = 5.0; // pixels
+            let y_speed = 1.5; // Hz
+            let y_offset = y_amplitude * (anim_time * y_speed * 2.0 * std::f32::consts::PI).sin();
+
+            graphics.draw_text(
+                "Press R to restart",
+                Vec2::new(
+                    screen_width / 2.0 - 120.0,
+                    screen_height / 2.0 + 80.0 + y_offset,
+                ),
+                30.0,
+                Color::WHITE,
+            );
+        }
+    } else if level_complete {
+        // Level complete screen with animations
+
+        // "LEVEL COMPLETE" - reveal left to right
+        let message = "LEVEL COMPLETE";
+        let reveal_duration = 1.0;
+        let reveal_progress = (level_complete_time / reveal_duration).min(1.0);
+        let chars_to_show = (message.len() as f32 * reveal_progress) as usize;
+        let revealed_text = &message[0..chars_to_show.min(message.len())];
+
         graphics.draw_text(
-            "Press R to restart",
-            Vec2::new(screen_width / 2.0 - 120.0, screen_height / 2.0 + 40.0),
-            30.0,
-            Color::WHITE,
+            revealed_text,
+            Vec2::new(screen_width / 2.0 - 140.0, screen_height / 2.0),
+            60.0,
+            Color::new(0.0, 1.0, 0.0, 1.0), // Green
         );
+
+        // "TIME TO EXTRACT" - wobbling animation
+        if level_complete_time > reveal_duration {
+            let anim_time = level_complete_time - reveal_duration;
+
+            // Wobble position
+            let y_amplitude = 5.0;
+            let y_speed = 1.5;
+            let y_offset = y_amplitude * (anim_time * y_speed * 2.0 * std::f32::consts::PI).sin();
+
+            graphics.draw_text(
+                "TIME TO EXTRACT",
+                Vec2::new(
+                    screen_width / 2.0 - 120.0,
+                    screen_height / 2.0 + 80.0 + y_offset,
+                ),
+                30.0,
+                Color::WHITE,
+            );
+        }
     }
 
     // Controls info

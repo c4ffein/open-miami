@@ -12,5 +12,5 @@ pub use combat::CombatSystem;
 #[cfg(target_arch = "wasm32")]
 pub use input::InputSystem;
 pub use movement::MovementSystem;
-pub use projectile::ProjectileTrailSystem;
+pub use projectile::{BulletSystem, ProjectileTrailSystem};
 pub use weapon::WeaponUpdateSystem;

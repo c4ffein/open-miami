@@ -110,7 +110,7 @@ fn test_enemy_ai_attacks_when_close() {
 fn test_enemy_ai_idle_when_far() {
     let mut world = World::new();
 
-    let _player = spawn_player(&mut world, Vec2::new(500.0, 0.0));
+    let _player = spawn_player(&mut world, Vec2::new(1000.0, 0.0)); // Beyond 900 detection range
     let enemy = spawn_enemy(&mut world, Vec2::new(0.0, 0.0));
 
     let mut ai_system = AISystem;

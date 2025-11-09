@@ -29,6 +29,7 @@ pub fn spawn_enemy(world: &mut World, position: Vec2) -> Entity {
     world.add_component(entity, Speed::new(100.0));
     world.add_component(entity, Health::new(50));
     world.add_component(entity, Radius::new(12.0));
+    world.add_component(entity, Rotation::new(0.0));
     world.add_component(entity, AI::new());
 
     entity

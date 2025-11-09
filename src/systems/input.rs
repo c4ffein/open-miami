@@ -1,5 +1,6 @@
 use crate::components::{
-    Player, Position, ProjectileTrail, Rotation, Speed, Velocity, Weapon, WeaponType,
+    Bullet, Player, Position, ProjectileTrail, Radius, Rotation, Speed, Velocity, Weapon,
+    WeaponType,
 };
 use crate::ecs::{Entity, World};
 use crate::input;
@@ -114,11 +115,34 @@ impl InputSystem {
         let hit = if is_melee {
             CombatSystem::process_melee(world, player_pos, target_pos, damage, 50.0)
         } else {
-            // Spawn projectile trail for visual feedback
-            let trail_entity = world.spawn();
-            world.add_component(trail_entity, ProjectileTrail::new(player_pos, target_pos));
+            // Spawn physical bullet
+            let bullet_entity = world.spawn();
 
-            CombatSystem::process_shoot(world, player_pos, target_pos, damage)
+            // Calculate direction from player to target
+            let dx = target_pos.x - player_pos.x;
+            let dy = target_pos.y - player_pos.y;
+            let length = (dx * dx + dy * dy).sqrt();
+
+            // Normalize direction and multiply by bullet speed
+            let bullet = Bullet::new(damage);
+            let bullet_speed = bullet.speed;
+            let vel_x = if length > 0.0 {
+                (dx / length) * bullet_speed
+            } else {
+                0.0
+            };
+            let vel_y = if length > 0.0 {
+                (dy / length) * bullet_speed
+            } else {
+                0.0
+            };
+
+            world.add_component(bullet_entity, bullet);
+            world.add_component(bullet_entity, player_pos);
+            world.add_component(bullet_entity, Velocity::new(vel_x, vel_y));
+            world.add_component(bullet_entity, Radius::new(2.0)); // Small bullet radius
+
+            false // Bullets hit async, not instant
         };
 
         hit

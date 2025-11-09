@@ -100,4 +100,42 @@ impl Graphics {
             .set_font(&format!("{}px sans-serif", font_size));
         let _ = self.context.fill_text(text, pos.x as f64, pos.y as f64);
     }
+
+    /// Draw a filled arc (pie slice) for vision cones
+    pub fn draw_arc(
+        &self,
+        center: Vec2,
+        radius: f32,
+        start_angle: f32,
+        end_angle: f32,
+        color: Color,
+    ) {
+        self.context.set_fill_style_str(&color.to_css_string());
+        self.context.begin_path();
+        self.context.move_to(center.x as f64, center.y as f64);
+        let _ = self.context.arc(
+            center.x as f64,
+            center.y as f64,
+            radius as f64,
+            start_angle as f64,
+            end_angle as f64,
+        );
+        self.context.close_path();
+        self.context.fill();
+    }
+
+    /// Save the current transformation state
+    pub fn save(&self) {
+        self.context.save();
+    }
+
+    /// Restore the previous transformation state
+    pub fn restore(&self) {
+        self.context.restore();
+    }
+
+    /// Translate the canvas
+    pub fn translate(&self, x: f32, y: f32) {
+        let _ = self.context.translate(x as f64, y as f64);
+    }
 }
