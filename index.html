@@ -11,24 +11,22 @@
         body {
             margin: 0;
             padding: 0;
-            background: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
+            overflow: hidden;
             font-family: monospace;
             color: #fff;
         }
         #game-container {
-            text-align: center;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #000;
         }
         canvas {
-            border: 2px solid #ff1744;
-            box-shadow: 0 0 20px rgba(255, 23, 68, 0.5);
-        }
-        h1 {
-            color: #ff1744;
-            text-shadow: 0 0 10px rgba(255, 23, 68, 0.8);
+            width: 100%;
+            height: 100%;
+            display: block;
         }
         #loading {
             position: absolute;
@@ -42,10 +40,8 @@
 </head>
 <body>
     <div id="game-container">
-        <h1>🔥 OPEN MIAMI 🔥</h1>
         <div id="loading">Loading...</div>
-        <canvas id="glcanvas" tabindex='1' width="960" height="720"></canvas>
-        <p>An open-source Hotline Miami clone in Rust</p>
+        <canvas id="glcanvas" tabindex='1'></canvas>
     </div>
     <script type="module">
         // Cache busting - add version timestamp
