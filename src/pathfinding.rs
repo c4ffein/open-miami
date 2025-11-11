@@ -108,7 +108,7 @@ impl NavigationGrid {
 
                 // Check if this cell's center would collide with any wall
                 // Using a larger radius to keep enemies away from walls and prevent grinding
-                let collision_radius = GRID_CELL_SIZE * 0.8; // 80% of cell size (testing high value)
+                let collision_radius = GRID_CELL_SIZE * 0.5; // 50% of cell size (reasonable value)
 
                 for wall in walls {
                     if circle_rect_collision(
