@@ -19,20 +19,26 @@ pub fn spawn_player(world: &mut World, position: Vec2) -> Entity {
     entity
 }
 
-/// Spawn an enemy entity
-pub fn spawn_enemy(world: &mut World, position: Vec2) -> Entity {
+/// Spawn an enemy entity with a specific type
+pub fn spawn_enemy_with_type(world: &mut World, position: Vec2, enemy_type: EnemyType) -> Entity {
     let entity = world.spawn();
+    let pos = Position::from_vec2(position);
 
     world.add_component(entity, Enemy);
-    world.add_component(entity, Position::from_vec2(position));
+    world.add_component(entity, pos);
     world.add_component(entity, Velocity::zero());
     world.add_component(entity, Speed::new(100.0));
     world.add_component(entity, Health::new(50));
     world.add_component(entity, Radius::new(12.0));
     world.add_component(entity, Rotation::new(0.0));
-    world.add_component(entity, AI::new());
+    world.add_component(entity, AI::new_with_type(enemy_type, pos));
 
     entity
+}
+
+/// Spawn an enemy entity (default to Idle type for backwards compatibility)
+pub fn spawn_enemy(world: &mut World, position: Vec2) -> Entity {
+    spawn_enemy_with_type(world, position, EnemyType::Idle)
 }
 
 /// Initialize a new game world with player and enemies
@@ -48,13 +54,13 @@ pub fn initialize_game(world: &mut World, level: usize) {
         world.add_wall(800.0, 300.0, 20.0, 300.0); // Vertical wall
         world.add_wall(400.0, 600.0, 300.0, 20.0); // Horizontal wall
 
-        // Original 4 enemies
-        spawn_enemy(world, Vec2::new(600.0, 300.0));
-        spawn_enemy(world, Vec2::new(800.0, 400.0));
-        spawn_enemy(world, Vec2::new(300.0, 500.0));
-        spawn_enemy(world, Vec2::new(700.0, 200.0));
+        // Original 4 enemies with different types
+        spawn_enemy_with_type(world, Vec2::new(600.0, 300.0), EnemyType::Idle);
+        spawn_enemy_with_type(world, Vec2::new(800.0, 400.0), EnemyType::Wandering);
+        spawn_enemy_with_type(world, Vec2::new(300.0, 500.0), EnemyType::Patrolling);
+        spawn_enemy_with_type(world, Vec2::new(700.0, 200.0), EnemyType::Idle);
     } else {
-        // Levels 2-12: 12 enemies (3x more) with varied wall layouts
+        // Levels 2-13: 12 enemies (3x more) with varied wall layouts
         let enemy_count = 12;
 
         // Generate level-specific wall patterns using level as seed
@@ -129,12 +135,22 @@ pub fn initialize_game(world: &mut World, level: usize) {
                 world.add_wall(450.0, 400.0, 250.0, 20.0); // Bottom right
                 world.add_wall(700.0, 400.0, 20.0, 150.0); // Down right
             }
-            _ => {
+            11 => {
                 // Level 12: Arena (minimal walls)
                 world.add_wall(400.0, 250.0, 200.0, 20.0); // Top center
                 world.add_wall(400.0, 500.0, 200.0, 20.0); // Bottom center
                 world.add_wall(300.0, 350.0, 20.0, 100.0); // Left small
                 world.add_wall(680.0, 350.0, 20.0, 100.0); // Right small
+            }
+            _ => {
+                // Level 13: Fortress (thick perimeter and central fortification)
+                world.add_wall(150.0, 150.0, 700.0, 30.0); // Top wall (thick)
+                world.add_wall(150.0, 150.0, 30.0, 500.0); // Left wall (thick)
+                world.add_wall(820.0, 150.0, 30.0, 500.0); // Right wall (thick)
+                world.add_wall(150.0, 620.0, 700.0, 30.0); // Bottom wall (thick)
+                world.add_wall(400.0, 320.0, 100.0, 100.0); // Central fortress
+                world.add_wall(350.0, 280.0, 200.0, 20.0); // Top fortification
+                world.add_wall(350.0, 440.0, 200.0, 20.0); // Bottom fortification
             }
         }
 
@@ -152,7 +168,18 @@ pub fn initialize_game(world: &mut World, level: usize) {
             let variation_x = ((i * 17 + level * 23) % 100) as f32 - 50.0;
             let variation_y = ((i * 31 + level * 19) % 100) as f32 - 50.0;
 
-            spawn_enemy(world, Vec2::new(x + variation_x, y + variation_y));
+            // Distribute enemy types evenly: Idle, Wandering, Patrolling
+            let enemy_type = match i % 3 {
+                0 => EnemyType::Idle,
+                1 => EnemyType::Wandering,
+                _ => EnemyType::Patrolling,
+            };
+
+            spawn_enemy_with_type(
+                world,
+                Vec2::new(x + variation_x, y + variation_y),
+                enemy_type,
+            );
         }
     }
 }
