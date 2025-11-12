@@ -1,4 +1,4 @@
-use crate::collision::circle_rect_collision;
+use crate::collision::{circle_rect_collision, has_line_of_sight_with_padding};
 use crate::ecs::world::Wall;
 use crate::math::Vec2;
 use std::cmp::Ordering;
@@ -91,6 +91,7 @@ impl PartialOrd for AStarNode {
 /// Navigation grid representing walkable/blocked cells
 pub struct NavigationGrid {
     blocked_cells: HashSet<GridCoord>,
+    walls: Vec<Wall>,
 }
 
 impl NavigationGrid {
@@ -126,12 +127,53 @@ impl NavigationGrid {
             }
         }
 
-        NavigationGrid { blocked_cells }
+        NavigationGrid {
+            blocked_cells,
+            walls: walls.to_vec(),
+        }
     }
 
     /// Check if a grid cell is walkable
     pub fn is_walkable(&self, coord: &GridCoord) -> bool {
         coord.is_valid() && !self.blocked_cells.contains(coord)
+    }
+
+    /// Perform string pulling optimization on a path
+    /// Removes redundant waypoints by checking line of sight with inflated walls (25px padding)
+    fn string_pull_path(&self, path: Vec<Vec2>) -> Vec<Vec2> {
+        if path.len() <= 2 {
+            return path; // Can't optimize paths with 2 or fewer waypoints
+        }
+
+        let wall_padding = 25.0; // Same as used in AI system for consistency
+        let mut optimized_path = Vec::new();
+
+        let mut current_idx = 0;
+        optimized_path.push(path[current_idx]);
+
+        while current_idx < path.len() - 1 {
+            // Try to skip ahead as far as possible while maintaining line of sight
+            let mut furthest_visible = current_idx + 1;
+
+            for test_idx in (current_idx + 2)..path.len() {
+                if has_line_of_sight_with_padding(
+                    path[current_idx],
+                    path[test_idx],
+                    &self.walls,
+                    wall_padding,
+                ) {
+                    furthest_visible = test_idx;
+                } else {
+                    break; // Stop searching once we lose line of sight
+                }
+            }
+
+            // Add the furthest visible waypoint
+            current_idx = furthest_visible;
+            optimized_path.push(path[current_idx]);
+        }
+
+        optimized_path
     }
 
     /// Find path from start to goal using A* algorithm
@@ -168,7 +210,8 @@ impl NavigationGrid {
 
             // Goal reached!
             if current == goal_coord {
-                return Some(self.reconstruct_path(came_from, current));
+                let path = self.reconstruct_path(came_from, current);
+                return Some(self.string_pull_path(path));
             }
 
             // Skip if already processed (can happen with duplicate nodes in heap)
