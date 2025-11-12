@@ -138,7 +138,11 @@ fn render_debug_pathfinding(world: &World, graphics: &Graphics) {
                         }
 
                         // Draw target as larger circle
-                        graphics.draw_circle(debug_path.target, 6.0, Color::new(1.0, 0.0, 0.0, 1.0));
+                        graphics.draw_circle(
+                            debug_path.target,
+                            6.0,
+                            Color::new(1.0, 0.0, 0.0, 1.0),
+                        );
                     }
                 }
             }

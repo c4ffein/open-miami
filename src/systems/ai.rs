@@ -409,9 +409,11 @@ impl System for AISystem {
                         {
                             // Store full path for debug visualization
                             if world.has_component::<DebugPath>(entity) {
-                                if let Some(debug_path) = world.get_component_mut::<DebugPath>(entity)
+                                if let Some(debug_path) =
+                                    world.get_component_mut::<DebugPath>(entity)
                                 {
-                                    *debug_path = DebugPath::new(full_path.clone(), target.to_vec2());
+                                    *debug_path =
+                                        DebugPath::new(full_path.clone(), target.to_vec2());
                                 }
                             } else {
                                 world.add_component(

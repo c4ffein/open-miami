@@ -267,7 +267,8 @@ impl NavigationGrid {
                 if distance_to_wall > safety_margin {
                     // Push waypoint toward wall, stopping at safety margin
                     let push_distance = distance_to_wall - safety_margin;
-                    let direction = Vec2::new(to_wall.x / distance_to_wall, to_wall.y / distance_to_wall);
+                    let direction =
+                        Vec2::new(to_wall.x / distance_to_wall, to_wall.y / distance_to_wall);
                     let new_waypoint = Vec2::new(
                         current.x + direction.x * push_distance,
                         current.y + direction.y * push_distance,
