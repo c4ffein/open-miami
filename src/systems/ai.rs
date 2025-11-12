@@ -1,4 +1,4 @@
-use crate::collision::has_line_of_sight;
+use crate::collision::{has_line_of_sight, has_line_of_sight_with_padding};
 use crate::components::{
     AIState, Enemy, EnemyType, Health, Player, Position, Rotation, Speed, Velocity, WanderState, AI,
 };
@@ -314,11 +314,17 @@ impl System for AISystem {
                 AIState::SpottedUnsure => {
                     let target = ai.last_known_player_position.unwrap_or(player_pos);
 
-                    // Check if there's a clear line of sight to the target
-                    let has_clear_path =
-                        has_line_of_sight(enemy_pos.to_vec2(), target.to_vec2(), &walls);
+                    // Use inflated walls for pathfinding decision to prevent wall grinding
+                    // If target is close to a wall, we'll use pathfinding instead of direct movement
+                    let wall_padding = 25.0; // Inflate walls by 25 pixels for pathfinding check
+                    let has_clear_path = has_line_of_sight_with_padding(
+                        enemy_pos.to_vec2(),
+                        target.to_vec2(),
+                        &walls,
+                        wall_padding,
+                    );
 
-                    // If clear line of sight, move directly toward target; otherwise use pathfinding
+                    // If clear line of sight (with inflated walls), move directly; otherwise use pathfinding
                     let movement_target = if has_clear_path {
                         target.to_vec2()
                     } else if let Some(next_waypoint) =
@@ -350,16 +356,24 @@ impl System for AISystem {
                     };
 
                     let dist_to_target = enemy_pos.distance_to(&target);
+
                     if can_see_player && dist_to_target < ai.attack_range {
+                        // Stop and face player when close enough and can see them
                         let dx = player_pos.x - enemy_pos.x;
                         let dy = player_pos.y - enemy_pos.y;
                         (0.0, 0.0, dy.atan2(dx))
                     } else {
-                        // Check if there's a clear line of sight to the target
-                        let has_clear_path =
-                            has_line_of_sight(enemy_pos.to_vec2(), target.to_vec2(), &walls);
+                        // Use inflated walls for pathfinding decision to prevent wall grinding
+                        // If target is close to a wall, we'll use pathfinding instead of direct movement
+                        let wall_padding = 25.0; // Inflate walls by 25 pixels for pathfinding check
+                        let has_clear_path = has_line_of_sight_with_padding(
+                            enemy_pos.to_vec2(),
+                            target.to_vec2(),
+                            &walls,
+                            wall_padding,
+                        );
 
-                        // If clear line of sight, move directly toward target; otherwise use pathfinding
+                        // If clear line of sight (with inflated walls), move directly; otherwise use pathfinding
                         let movement_target = if has_clear_path {
                             target.to_vec2()
                         } else if let Some(next_waypoint) =
