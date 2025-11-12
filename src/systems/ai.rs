@@ -356,13 +356,11 @@ impl System for AISystem {
                     };
 
                     let dist_to_target = enemy_pos.distance_to(&target);
-                    // Stop if within attack range and can see player, OR if close enough to last known position
-                    let should_stop = (can_see_player && dist_to_target < ai.attack_range)
-                        || (!can_see_player && dist_to_target < ai.attack_range * 1.5);
 
-                    if should_stop {
-                        let dx = target.x - enemy_pos.x;
-                        let dy = target.y - enemy_pos.y;
+                    if can_see_player && dist_to_target < ai.attack_range {
+                        // Stop and face player when close enough and can see them
+                        let dx = player_pos.x - enemy_pos.x;
+                        let dy = player_pos.y - enemy_pos.y;
                         (0.0, 0.0, dy.atan2(dx))
                     } else {
                         // Use inflated walls for pathfinding decision to prevent wall grinding
