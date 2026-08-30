@@ -38,13 +38,21 @@ mod op {
     pub const SCALE: f32 = 12.0; // sx sy
     pub const SHOGGOTH: f32 = 13.0; // x y sizePx heading reveal time
     pub const POSTFX: f32 = 14.0; // kind t r g b  (full-screen post pass over the whole frame)
-    pub const PIX_BEGIN: f32 = 15.0; // px w h  (open a pixel-art group: rasterize at art resolution)
+    pub const PIX_BEGIN: f32 = 15.0; // px w h smooth  (open a pixel-art group: rasterize at art resolution)
     pub const PIX_END: f32 = 16.0; // x y  (close it: nearest-upscale the group at (x, y))
     pub const PORTRAIT: f32 = 17.0; // colorIdx x y sizePx time mode  (slow-orbit 3D robot portrait, pixel-art; mode 0 = bust, 1 = headshot)
     pub const GUN_PICKUP: f32 = 18.0; // weaponIdx x y angle sizePx  (3D weapon lying flat, pixel-art)
     pub const PIX_BLIT: f32 = 19.0; // sx sy sw sh x y  (re-draw a rect of the LAST-closed pixel group at (x, y))
     pub const DRIVE: f32 = 20.0; // w h t glitch split px dim o0..o8  (the synthwave drive backdrop, one full-shader pass)
 }
+
+// 21 STATIC_BEGIN key / 22 STATIC_END / 23 STATIC_REF key — the STATIC
+// GEOMETRY CACHE. Their values + framing live in crate::static_geo
+// (host-tested; `Graphics::static_layer` pushes them via
+// `static_geo::open_ops` / `close_ops`): BEGIN..END tessellates the section
+// once into a persistent world-space VBO under `key` (and draws it this
+// frame); REF re-draws it under the renderer's current transform, applied in
+// the vertex shader.
 
 /// Separator between entries in the per-frame text arena. renderer.js splits
 /// on the same character; it can never appear in game text.
@@ -65,6 +73,9 @@ pub struct Graphics {
     cmds: RefCell<Vec<f32>>,
     texts: RefCell<String>,
     text_count: RefCell<u32>,
+    /// Which static-geometry key has been emitted in full (see
+    /// [`static_layer`](Self::static_layer)); mirrors the renderer's cache.
+    static_key: RefCell<crate::static_geo::StaticKey>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -90,6 +101,7 @@ impl Graphics {
             cmds: RefCell::new(Vec::with_capacity(4096)),
             texts: RefCell::new(String::new()),
             text_count: RefCell::new(0),
+            static_key: RefCell::new(crate::static_geo::StaticKey::new()),
         };
         graphics.sync_size();
         Ok(graphics)
@@ -519,7 +531,23 @@ impl Graphics {
     /// it (open the group in the parent frame, rotate inside it: the content
     /// is re-rasterized on the parent's grid every frame).
     pub fn pixel_begin(&self, px: f32, w: f32, h: f32) {
-        self.push(&[op::PIX_BEGIN, px, w, h]);
+        self.push(&[op::PIX_BEGIN, px, w, h, 0.0]);
+    }
+
+    /// [`pixel_begin`](Self::pixel_begin) with a SUB-PIXEL composite: the
+    /// matching `pixel_end` draws the finished pixel image WITHOUT the
+    /// whole-pixel origin snap, so a composite that MOVES / ROTATES
+    /// continuously — the world layer under the swaying camera
+    /// (`render_world` with `?pixel=N`) — glides instead of having its
+    /// motion quantized to whole pixels. Sampling is plain NEAREST either
+    /// way: hard, aliased texel edges (stair-stepping under the roll
+    /// included) are the art direction — never smooth them (CLAUDE.md
+    /// ## Design; an AA sampling shader was built here once and removed on
+    /// purpose). Ordinary props / dialogue groups keep the plain
+    /// `pixel_begin`: their snap is what makes a near-static image
+    /// rock-stable.
+    pub fn pixel_begin_smooth(&self, px: f32, w: f32, h: f32) {
+        self.push(&[op::PIX_BEGIN, px, w, h, 1.0]);
     }
 
     /// Close the pixel-art group opened by [`pixel_begin`](Self::pixel_begin):
@@ -592,6 +620,38 @@ impl Graphics {
             offs[7],
             offs[8],
         ]);
+    }
+
+    /// Draw a STATIC GEOMETRY LAYER — frame-invariant world geometry (the
+    /// floor tiles + walls) cached GPU-side so it costs one draw per frame
+    /// instead of a full re-record + CPU re-tessellation (opcodes 21/22/23;
+    /// contract + host tests in [`crate::static_geo`]).
+    ///
+    /// The FIRST call with a given `key` records `STATIC_BEGIN key`, runs
+    /// `content` (its draw calls land in the stream as usual — renderer.js
+    /// tessellates them once into a persistent VBO, in WORLD coordinates:
+    /// the transform in force at the BEGIN is treated as the CAMERA and
+    /// excluded from the baked vertices), then `STATIC_END`. Every LATER
+    /// call with the same key records just `STATIC_REF key` (2 floats) and
+    /// SKIPS `content` entirely; the renderer re-draws the cached VBO with
+    /// its then-current transform applied in the vertex shader — so the
+    /// cache tracks the camera exactly. A new key re-records and evicts the
+    /// old buffer (one live key: bump the key when the content changes,
+    /// e.g. on floor load).
+    ///
+    /// Rules for `content` (see `static_geo`): SOLID primitives only (no
+    /// text / robots / sprites — they would bake with the wrong texture),
+    /// UNCULLED (record the whole floor: the cache must be valid for every
+    /// camera position; the GPU clips off-screen quads for free), and
+    /// frame-invariant (tint / debug variants must bypass this API and draw
+    /// plainly instead). Do not call inside a pixel-art group.
+    pub fn static_layer(&self, key: u32, content: impl FnOnce()) {
+        let record = self.static_key.borrow_mut().needs_record(key);
+        self.push(&crate::static_geo::open_ops(record, key));
+        if record {
+            content();
+        }
+        self.push(crate::static_geo::close_ops(record));
     }
 
     /// Draw a small 2D-primitive shoggoth icon: a writhing dark mass wearing a

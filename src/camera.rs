@@ -129,7 +129,7 @@ impl Camera {
     }
 
     /// The world point that sits at the centre of the screen.
-    fn focus(&self) -> Vec2 {
+    pub fn focus(&self) -> Vec2 {
         Vec2::new(
             self.target.x + self.look.x + self.cine.x,
             self.target.y + self.look.y + self.cine.y,
@@ -146,16 +146,28 @@ impl Camera {
     }
 
     pub fn apply(&self, graphics: &Graphics) {
-        graphics.save();
         // screen = centre + drift + R(roll) * (world - focus) * zoom
         let f = self.focus();
+        self.apply_composite(graphics);
+        graphics.translate(-f.x, -f.y);
+    }
+
+    /// The COMPOSITE half of `apply()`: centre + drift + roll + zoom, without
+    /// the `-focus` translation. This is the transform the pixelated world
+    /// places its finished art-res image under (`render_world`): the group
+    /// rasterizes on a world-anchored grid and this rigid transform is what
+    /// moves / sways / rotates the whole pixel image at native resolution —
+    /// the vibe's "Before"-mode rotation at the composite quad. After it,
+    /// local units are world units (the zoom is inside), and `apply()` ==
+    /// `apply_composite()` + `translate(-focus)`. Balanced by `reset()`.
+    pub fn apply_composite(&self, graphics: &Graphics) {
+        graphics.save();
         graphics.translate(
             self.canvas_width / 2.0 + self.sway_dx,
             self.canvas_height / 2.0 + self.sway_dy,
         );
         graphics.rotate(self.sway_roll);
         graphics.scale(self.zoom, self.zoom);
-        graphics.translate(-f.x, -f.y);
     }
 
     pub fn reset(&self, graphics: &Graphics) {

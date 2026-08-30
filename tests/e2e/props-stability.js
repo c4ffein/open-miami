@@ -79,9 +79,16 @@ const soloBtn = (listY, i) => [PANEL_X + 12 + 32 + 13, listY + 30 + i * 24 + 10]
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.addInitScript(() => {
-    window.__fakeT = 5000;
+    // Real clock during load (the precompute step's time cap must be able to
+    // elapse — frozen from t=0 the loading screen never finishes); each case
+    // freezes it via setTime once the page is up.
+    window.__fakeT = null;
     const orig = performance.now.bind(performance);
     performance.now = () => (window.__fakeT == null ? orig() : window.__fakeT);
+    // Uncap the FPS: the cap skips any frame less than an interval after the
+    // last one, which under a frozen (or rewound) clock is EVERY frame — the
+    // canvas would go stale and the diffs would compare stale frames.
+    try { localStorage.setItem('om.fps_cap', '0'); } catch (e) {}
   });
   const held = async (x, y) => {
     await page.mouse.move(x, y); await page.waitForTimeout(50);

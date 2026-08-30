@@ -46,6 +46,14 @@ impl Level {
         self.surface
     }
 
+    /// The whole floor rect `(0,0)..(width,height)` — pass to [`render`]
+    /// (`Self::render`) to draw every tile regardless of the camera (the
+    /// static geometry cache records the full floor once; see
+    /// `Graphics::static_layer`).
+    pub fn full_bounds(&self) -> (Vec2, Vec2) {
+        (Vec2::new(0.0, 0.0), Vec2::new(self.width, self.height))
+    }
+
     /// Render the floor. Only tiles overlapping `view_min..view_max`
     /// (world-space camera bounds) are drawn, so cost scales with the screen
     /// size rather than the whole 2000x2000 level.

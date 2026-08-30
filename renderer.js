@@ -23,7 +23,7 @@
     12 SCALE      sx sy
     13 SHOGGOTH   x y sizePx heading reveal time
     14 POSTFX     kind t r g b                        (full-screen post pass)
-    15 PIX_BEGIN  px w h                              (open a pixel-art group)
+    15 PIX_BEGIN  px w h smooth                       (open a pixel-art group)
     16 PIX_END    x y                                 (close it, draw at x y)
     17 PORTRAIT   colorIdx x y sizePx time mode       (dialogue portrait: baked-once
                                                       pixel-art face, rocked in 2D
@@ -44,6 +44,16 @@
                                                       full-shader pass; Rust
                                                       ships the tested tear /
                                                       split schedules)
+    21 STATIC_BEGIN key                               (static geometry cache:
+                                                      tessellate the section
+                                                      once into a persistent
+                                                      world-space VBO under
+                                                      `key`, and draw it)
+    22 STATIC_END                                     (close the recording)
+    23 STATIC_REF  key                                (draw the cached VBO
+                                                      with the current CPU
+                                                      transform applied in
+                                                      the vertex shader)
 
    Everything is drawn as vertex-colored, textured triangles in one
    interleaved dynamic buffer (a 1x1 white texture stands in for solid
@@ -179,17 +189,26 @@ const GLYPH_FS = 48; // rasterization font size; quads scale from this
 const GLYPH_PAD = 2; // padding inside each glyph cell
 const GLYPH_ATLAS_SIZE = 1024;
 
+// uXA/uXB: a 2D affine (rows [a c e] / [b d f]) applied to aPos before the
+// resolution mapping. Identity for every dynamic draw (the CPU tessellation
+// already applied the transform stack); set to the camera transform only
+// while drawing the STATIC geometry cache, whose VBO holds raw world
+// coordinates — that is what lets one baked buffer track a moving camera.
 const VS = `
 attribute vec2 aPos;
 attribute vec2 aUv;
 attribute vec4 aColor;
 uniform vec2 uRes;
+uniform vec3 uXA;
+uniform vec3 uXB;
 varying vec2 vUv;
 varying vec4 vColor;
 void main(){
   vUv = aUv;
   vColor = aColor;
-  gl_Position = vec4(aPos.x / uRes.x * 2.0 - 1.0, 1.0 - aPos.y / uRes.y * 2.0, 0.0, 1.0);
+  vec3 p = vec3(aPos, 1.0);
+  vec2 t = vec2(dot(uXA, p), dot(uXB, p));
+  gl_Position = vec4(t.x / uRes.x * 2.0 - 1.0, 1.0 - t.y / uRes.y * 2.0, 0.0, 1.0);
 }
 `;
 
@@ -205,7 +224,7 @@ void main(){
 
 /* ---- opcode argument counts (mirror of the table above); used by the POSTFX
    pre-scan, which has to walk the stream without executing it ---- */
-const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 3, 2, 6, 5, 6, 16];
+const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1];
 const OP_POSTFX = 14;
 
 /* ---- pixel-art group scratch target ---- */
@@ -562,12 +581,20 @@ export function initRenderer(canvas) {
     // compositor can scan it out directly instead of alpha-blending the
     // whole buffer over the page background.
     alpha: false,
-    // No MSAA: a pixel-art game gains almost nothing from it (sprites, text
-    // and pixel groups are texture quads; only screen-space circle/line
-    // edges smooth), while a multisampled default framebuffer makes every
-    // full-screen layer ~4x the bandwidth — enough to sink fill-rate-poor
-    // GPUs (Intel UHD-class Macs) at Retina resolutions.
+    // NO MSAA, ON PURPOSE — the ALIASING is part of the art direction
+    // (CLAUDE.md ## Design): tilted geometry stair-stepping under the
+    // camera sway is the Hotline-Miami-2 look. (An `?aa=1` MSAA experiment
+    // existed briefly: it also cost 4x bandwidth per full-screen layer and
+    // dropped the 2018 MacBook to 30 fps. Do not re-add antialiasing.)
     antialias: false,
+    // No depth/stencil on the default framebuffer either: the 2D batch
+    // paints in submission order and never depth-tests (DEPTH_TEST stays
+    // disabled), so the default `depth: true` would allocate a full-screen
+    // physical-resolution buffer that is never read or written. The robot
+    // pipeline's small render target keeps its own depth attachment — that
+    // one is real 3D and needs it.
+    depth: false,
+    stencil: false,
     premultipliedAlpha: true,
     preserveDrawingBuffer: false,
     // Dual-GPU laptops: without this Chrome may hand WebGL the INTEGRATED
@@ -628,7 +655,13 @@ export function initRenderer(canvas) {
     aColor: gl.getAttribLocation(prog, "aColor"),
     uRes: gl.getUniformLocation(prog, "uRes"),
     uTex: gl.getUniformLocation(prog, "uTex"),
+    uXA: gl.getUniformLocation(prog, "uXA"),
+    uXB: gl.getUniformLocation(prog, "uXB"),
   };
+  // Identity: dynamic draws are already CPU-transformed. Only the static
+  // geometry cache draw (drawStatic) ever changes these, and it resets them.
+  gl.uniform3f(loc.uXA, 1, 0, 0);
+  gl.uniform3f(loc.uXB, 0, 1, 0);
 
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -1467,12 +1500,19 @@ void main() {
   let lastPix = null;
   // Size of one texel of the open group in current LOCAL units (the min
   // thickness / min diameter clamps). 1/sqrt(|det m|) = local units per texel.
+  // During STATIC recording m is swapped to identity (the VBO records world
+  // coordinates), which would report 1 world unit — but the section still
+  // rasterizes into the open group's texels, so the real texel size comes
+  // from the transform captured at STATIC_BEGIN (the group's world->texel
+  // map). Without this, sub-texel features (the walls' 2-unit border) record
+  // thinner than a texel and pop in/out per wall with the grid phase.
   function pixTexelLocal() {
-    const det = m[0] * m[3] - m[1] * m[2];
+    const mm = staticRec && pix ? staticRec.camM : m;
+    const det = mm[0] * mm[3] - mm[1] * mm[2];
     const s = Math.sqrt(Math.abs(det));
     return s > 1e-9 ? 1 / s : 1;
   }
-  function pixBegin(px, w, h) {
+  function pixBegin(px, w, h, smooth) {
     px = Math.max(1, px || 1);
     const tw = Math.ceil(w / px), th = Math.ceil(h / px);
     if (pixDepth >= PIX_DEPTH || !(tw > 0 && th > 0) || tw > PIX_MAX || th > PIX_MAX) {
@@ -1483,7 +1523,7 @@ void main() {
     flush();
     const tgt = pixTarget(pixDepth);
     const g = {
-      px, w, h, tw, th, tex: tgt.tex, fbo: tgt.fbo,
+      px, w, h, tw, th, smooth: !!smooth, tex: tgt.tex, fbo: tgt.fbo,
       outer: pix, outerM: m, outerStack: stack.length,
       outerFbo: batchFbo, outerW: batchW, outerH: batchH,
       outerVW: batchVW, outerVH: batchVH,
@@ -1528,17 +1568,33 @@ void main() {
     // Snap the on-screen origin to whole pixels of the CURRENT target's
     // coordinate space (CSS pixels on the canvas/scene, the outer group's
     // texels inside a group) so the art pixels do not shimmer as the object
-    // drifts by fractions of a pixel.
-    const sx = m[0] * x + m[2] * y + m[4];
-    const sy = m[1] * x + m[3] * y + m[5];
-    const dx = Math.round(sx) - sx, dy = Math.round(sy) - sy;
+    // drifts by fractions of a pixel. SMOOTH groups (`smooth` = 1 at BEGIN)
+    // skip the snap: a composite that MOVES continuously (the `?pixel=N`
+    // world under the camera sway) places sub-pixel so its motion never
+    // quantizes. Sampling stays NEAREST either way — hard, aliased texel
+    // edges are the art direction (CLAUDE.md ## Design), never smoothed.
+    let dx = 0, dy = 0;
+    if (!g.smooth) {
+      const sx = m[0] * x + m[2] * y + m[4];
+      const sy = m[1] * x + m[3] * y + m[5];
+      dx = Math.round(sx) - sx;
+      dy = Math.round(sy) - sy;
+    }
     m[4] += dx;
     m[5] += dy;
     // Row 0 of the region is the group's bottom (GL's bottom-up window
-    // coordinates through the same VS), so v is flipped like the sprite tiles.
+    // coordinates through the same VS), so v is flipped like the sprite
+    // tiles. The flip is anchored at the INTEGER row count `th` (the
+    // viewport the content rasterized in), NOT at the fractional g.h/g.px:
+    // with a fractional group height the content's top row sits at texel
+    // row th, its bottom at th - h/px — anchoring v at 0 would shift every
+    // sample up by the ceil remainder (NEAREST rounds that to a whole-row
+    // shift, and the remainder CHANGES as a camera-sized group resizes, so
+    // all horizontal content would swim row by row while the camera pans).
     const u1 = g.w / g.px / PIX_MAX;
-    const v0 = g.h / g.px / PIX_MAX;
-    quad(x, y, g.w, g.h, 0, v0, u1, 0, 1, 1, 1, 1);
+    const v0 = g.th / PIX_MAX;
+    const v1 = (g.th - g.h / g.px) / PIX_MAX;
+    quad(x, y, g.w, g.h, 0, v0, u1, v1, 1, 1, 1, 1);
     m[4] -= dx;
     m[5] -= dy;
     flush();
@@ -1563,11 +1619,12 @@ void main() {
     const dx = Math.round(tx) - tx, dy = Math.round(ty) - ty;
     m[4] += dx;
     m[5] += dy;
-    // v flipped like PIX_END: local y = 0 is the group's TOP texel row.
+    // v flipped like PIX_END: local y = 0 is the group's TOP texel row,
+    // anchored at the INTEGER row count g.th (see the pixEnd comment).
     const u0 = sx / g.px / PIX_MAX;
     const u1 = (sx + sw) / g.px / PIX_MAX;
-    const v0 = (g.h - sy) / g.px / PIX_MAX;
-    const v1 = (g.h - sy - sh) / g.px / PIX_MAX;
+    const v0 = (g.th - sy / g.px) / PIX_MAX;
+    const v1 = (g.th - (sy + sh) / g.px) / PIX_MAX;
     quad(x, y, sw, sh, u0, v0, u1, v1, 1, 1, 1, 1);
     m[4] -= dx;
     m[5] -= dy;
@@ -1704,7 +1761,115 @@ void main() {
     m[3] = -b0 * s + d0 * c;
   }
 
+  /* ---- STATIC GEOMETRY CACHE (opcodes 21/22/23) ----
+     Frame-invariant world geometry (the floor tiles + walls) baked ONCE into
+     a persistent VBO and re-drawn every later frame for a 2-float STATIC_REF
+     — instead of ~2000 floats re-recorded and re-tessellated per frame (the
+     bulk of the `walk` span). STATIC_BEGIN `key` flushes and starts routing
+     every tessellated vertex into a growable side buffer, with the transform
+     in force at the BEGIN (the camera) REPLACED by identity — so the
+     vertices come out in WORLD coordinates, while the section's own
+     save/translate/... still apply. STATIC_END uploads the buffer to a
+     persistent VBO under `key` (gl.bufferData STATIC_DRAW, once; a
+     different key's old buffer is deleted — one live key, the current
+     floor), restores the camera transform and draws the cache. STATIC_REF
+     `key` just draws it: the CPU-side transform at that point (the camera,
+     which moves/zooms/sways every frame) is handed to the batch vertex
+     shader as the uXA/uXB affine uniform, applied on the GPU — identical
+     math to the CPU path, so the cache tracks the camera exactly; dynamic
+     draws keep uXA/uXB at identity. The section must be SOLID geometry only
+     (everything samples whiteTex): text or sprites inside would bake with
+     the wrong texture. Works inside a pixel group too (the `?pixel=N`
+     world): there `m` is the group's world->texel mapping — still affine —
+     and the batch target is the group's scratch region, so the same VBO
+     draws into the group's texels; one buffer serves both modes. */
+  let staticCache = null; // { key, vbo, count } — the one cached section
+  let staticRec = null; // { key, camM } while recording BEGIN..END
+  let staticVerts = new Float32Array(4096 * FLOATS_PER_VERT); // grows
+  let staticCount = 0;
+  let staticWarned = false;
+  function staticVert(x, y, u, v, r, g, b, a) {
+    if ((staticCount + 1) * FLOATS_PER_VERT > staticVerts.length) {
+      const grown = new Float32Array(staticVerts.length * 2);
+      grown.set(staticVerts);
+      staticVerts = grown;
+    }
+    const o = staticCount * FLOATS_PER_VERT;
+    staticVerts[o] = x;
+    staticVerts[o + 1] = y;
+    staticVerts[o + 2] = u;
+    staticVerts[o + 3] = v;
+    staticVerts[o + 4] = r;
+    staticVerts[o + 5] = g;
+    staticVerts[o + 6] = b;
+    staticVerts[o + 7] = a;
+    staticCount++;
+  }
+  function staticBegin(key) {
+    flush(); // everything recorded before the section draws first (order)
+    staticRec = { key, camM: m };
+    m = [1, 0, 0, 1, 0, 0]; // record in world coordinates
+    staticCount = 0;
+  }
+  function staticEnd() {
+    if (!staticRec) return;
+    const { key, camM } = staticRec;
+    staticRec = null;
+    m = camM; // the camera transform is live again
+    if (staticCache && staticCache.key !== key) {
+      gl.deleteBuffer(staticCache.vbo); // a new key evicts the old floor
+      staticCache = null;
+    }
+    if (!staticCache) staticCache = { key, vbo: gl.createBuffer(), count: 0 };
+    gl.bindBuffer(gl.ARRAY_BUFFER, staticCache.vbo);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      staticVerts.subarray(0, staticCount * FLOATS_PER_VERT),
+      gl.STATIC_DRAW
+    );
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    staticCache.key = key;
+    staticCache.count = staticCount;
+    drawStatic(key); // the build frame draws it too
+  }
+  function drawStatic(key) {
+    if (!staticCache || staticCache.key !== key || staticCache.count === 0) {
+      if (!staticWarned) {
+        staticWarned = true;
+        console.error("frameRender: STATIC_REF for uncached key", key);
+      }
+      return;
+    }
+    flush(); // pending dynamic geometry first (draw order)
+    // The camera: the CPU-side transform at this point, applied in the VS.
+    gl.uniform3f(loc.uXA, m[0], m[2], m[4]);
+    gl.uniform3f(loc.uXB, m[1], m[3], m[5]);
+    gl.bindTexture(gl.TEXTURE_2D, whiteTex); // the section is solid geometry
+    gl.bindBuffer(gl.ARRAY_BUFFER, staticCache.vbo);
+    gl.vertexAttribPointer(loc.aPos, 2, gl.FLOAT, false, STRIDE, 0);
+    gl.vertexAttribPointer(loc.aUv, 2, gl.FLOAT, false, STRIDE, 8);
+    gl.vertexAttribPointer(loc.aColor, 4, gl.FLOAT, false, STRIDE, 16);
+    gl.drawArrays(gl.TRIANGLES, 0, staticCache.count);
+    // Hand the state back to the dynamic batch: identity + the stream VBO.
+    gl.uniform3f(loc.uXA, 1, 0, 0);
+    gl.uniform3f(loc.uXB, 0, 1, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.vertexAttribPointer(loc.aPos, 2, gl.FLOAT, false, STRIDE, 0);
+    gl.vertexAttribPointer(loc.aUv, 2, gl.FLOAT, false, STRIDE, 8);
+    gl.vertexAttribPointer(loc.aColor, 4, gl.FLOAT, false, STRIDE, 16);
+  }
+
   function vert(x, y, u, v, r, g, b, a) {
+    if (staticRec) {
+      // Recording a static section: world-space vertex into the side buffer
+      // (m is identity + the section's own local transforms).
+      staticVert(
+        m[0] * x + m[2] * y + m[4],
+        m[1] * x + m[3] * y + m[5],
+        u, v, r, g, b, a
+      );
+      return;
+    }
     if (vCount >= MAX_VERTS) flush(); // order-safe: same texture, same state
     const o = vCount * FLOATS_PER_VERT;
     verts[o] = m[0] * x + m[2] * y + m[4];
@@ -1731,6 +1896,12 @@ void main() {
   // Vertex already in TARGET space (device pixels, or the open group's
   // texels): bypasses the transform.
   function vertRaw(tx, ty, u, v, r, g, b, a) {
+    if (staticRec) {
+      // During static recording target space IS world space (m = identity +
+      // the section's own transforms; circles tessellate through here).
+      staticVert(tx, ty, u, v, r, g, b, a);
+      return;
+    }
     if (vCount >= MAX_VERTS) flush();
     const o = vCount * FLOATS_PER_VERT;
     verts[o] = tx;
@@ -2153,6 +2324,7 @@ void main() {
     pixDepth = 0;
     pixStack.length = 0;
     lastPix = null; // a PIX_BLIT never samples a previous frame's texels
+    staticRec = null; // an unterminated static recording never leaks either
     bindBatchState();
     gl.uniform1i(loc.uTex, 0);
 
@@ -2248,8 +2420,8 @@ void main() {
           i += 5;
           break;
         case 15: // PIX_BEGIN
-          pixBegin(cmds[i], cmds[i + 1], cmds[i + 2]);
-          i += 3;
+          pixBegin(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3] !== 0);
+          i += 4;
           break;
         case 16: // PIX_END
           pixEnd(cmds[i], cmds[i + 1]);
@@ -2271,6 +2443,17 @@ void main() {
           drawDrive(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4],
             cmds[i + 5], cmds[i + 6], cmds, i + 7);
           i += 16;
+          break;
+        case 21: // STATIC_BEGIN (key)
+          staticBegin(cmds[i]);
+          i += 1;
+          break;
+        case 22: // STATIC_END
+          staticEnd();
+          break;
+        case 23: // STATIC_REF (key)
+          drawStatic(cmds[i]);
+          i += 1;
           break;
         default:
           // Unknown opcode: the stream is corrupt; stop rather than

@@ -2,6 +2,36 @@
 - NEVER add any additional dependency
 
 ## Design
+- THE VIBE — "pixelated assets in a modern engine", not real pixel art
+  (the Hotline-Miami approach): assets are BAKED at a low art resolution
+  (robots/portraits/guns at their tile px, props at their saved px, the
+  drive at its art grid) and then MOVED SMOOTHLY — rotated, translated,
+  swayed — at native resolution and full frame rate. The crunch comes from
+  the ASSET resolution, never from a screen-space pixel grid: rotation
+  angles and motion are continuous (a baked sprite tilts as a rigid chunky
+  image), animation stays 60 fps, and upscaling is NEAREST at real screen
+  pixels (see SIZING). The planned endgame applies this to the WHOLE WORLD:
+  the level rasterizes into an art-res pixel group and that finished image
+  is what the camera moves/sways/rotates — rigid-pixel-image rotation at
+  the COMPOSITE quad ("Before" mode, like the props/portraits), rendered
+  with a bleed margin so tilting never exposes void; NOT rotation inside
+  the group (per-frame re-rasterization = edge crawl). Consequences:
+  screen-space quantization of motion / rotation / camera is off-vibe;
+  BLURRY downscale is off-vibe (art-res rasterization + NEAREST upscale is
+  the vibe — the crunch must come from the art grid); and — DECIDED,
+  do not re-litigate — THE ALIASING IS PART OF THE ART DIRECTION (the
+  HM2 look): tilted geometry and rotated pixel images keep hard,
+  stair-stepped, all-or-nothing edges. NO ANTIALIASING of any kind: no
+  MSAA (`antialias: false` stays — an `?aa=1` experiment antialiased the
+  walls beautifully AND dropped the 2018 MacBook to 30 fps, 4x bandwidth
+  per full-screen layer at Retina), no sampling-side smoothing (a
+  texel-snap AA shader on the world composite was built, verified
+  pixel-perfect, and REMOVED on purpose), no FXAA (it would soften the
+  sprite/text crunch). Smoothness lives ONLY in MOTION: the `smooth`
+  composite flag means sub-pixel PLACEMENT (no origin snap), never soft
+  sampling. All of this is BUILT: `?pixel=N` runs the world through a
+  world-anchored sub-pixel-composite group (see the `?floor=N` bullet),
+  and the static geometry cache draws inside it
 - ALL on-screen text is UPPERCASE — VT323 renders far better in caps and
   all-caps is the game's look. Enforced STRUCTURALLY: `Graphics::draw_text`
   ASCII-uppercases every string at the single rendering boundary, so write
@@ -56,8 +86,9 @@
   frame through the scene FBO);
   the `?viz` EFFECTS tab previews them all. Only the last POSTFX of a
   frame applies
-- Opcodes 15/16 = PIXEL-ART GROUPS: `PIX_BEGIN px w h` … `PIX_END x y`
-  (`Graphics::pixel_begin` / `pixel_end`). The principle: never average or
+- Opcodes 15/16 = PIXEL-ART GROUPS: `PIX_BEGIN px w h smooth` …
+  `PIX_END x y` (`Graphics::pixel_begin` / `pixel_end`; `smooth` = 1 via
+  `pixel_begin_smooth`). The principle: never average or
   point-sample a hi-res image — RASTERIZE AT THE ART RESOLUTION and upscale
   NEAREST. BEGIN flushes, redirects the batch into a `ceil(w/px) x ceil(h/px)`
   texel region of a 1024² NEAREST scratch FBO (cleared transparent) and
@@ -69,7 +100,22 @@
   restores the outer target + transform (unbalanced saves are discarded) and
   draws the group as a `(w, h)` quad at `(x, y)` in the outer transform
   (a rotation in force at BEGIN rotates the finished pixel image), origin
-  snapped to whole pixels of the target it lands in. Groups NEST up to 4
+  snapped to whole pixels of the target it lands in. With `smooth` = 1 the
+  composite skips the origin snap (for a pixel image that moves / rotates
+  continuously — the world group): the quad places SUB-PIXEL so the
+  motion glides, while sampling stays plain NEAREST — hard aliased texel
+  edges, per the art direction (## Design). The composite's v flip is
+  anchored at the INTEGER texel row count (a fractional `h/px` would
+  shift sampling by the ceil remainder, which changes as a camera-sized
+  group resizes — content would swim row by row while panning).
+  `tests/e2e/composite-coherence.js` (standalone bun script, like
+  props-stability) asserts the composite numerically at DPR 1 and 2:
+  edge position matches the analytic expectation (incl. FRACTIONAL group
+  sizes — the v-flip regression), slope matches the requested angle,
+  texel interiors stay pure and rigid, and the smooth flag's sub-pixel
+  placement tracks fractional motion while the snapped one quantizes it;
+  `/render-tests/<name>` (serve.py route to render-tests.html) is the
+  human-eye version of the same scenes. Groups NEST up to 4
   deep (`PIX_DEPTH`): each depth owns its own scratch texture + FBO
   (lazily created), an inner END composites into the enclosing group's
   texels (premultiplied), whose grid it snaps to. Groups over 1024 texels
@@ -141,15 +187,44 @@
   placed per frame in renderer.js (same integer hash as Rust's `hash01`)
   and handed to the shader as uniforms; the scene geometry constants are
   MIRRORED between drive.rs's tunables and the shader — edit both or
-  neither. The canvas context is also created with `antialias: false`
-  (no MSAA): sprites/text/groups are texture quads, and a multisampled
+  neither. The canvas context is created with `antialias: false`
+  (ALWAYS — aliasing is the art direction, see ## Design): sprites/text/groups
+  are texture quads, and a multisampled
   default framebuffer ~4x-es the bandwidth of every full-screen layer
+- Opcodes 21/22/23 = the STATIC GEOMETRY CACHE: `STATIC_BEGIN key` …
+  `STATIC_END` / `STATIC_REF key` (`Graphics::static_layer(key, content)`;
+  op values + framing host-tested in `src/static_geo.rs`). Frame-invariant
+  world geometry — the floor TILES + WALLS only — is tessellated ONCE by
+  renderer.js into a persistent VBO under `key`, in WORLD coordinates (the
+  transform in force at the BEGIN is the camera and is excluded: BEGIN swaps
+  the CPU transform for identity, END restores it), uploaded with one
+  STATIC_DRAW bufferData and drawn that frame; every later frame the wasm
+  emits just `STATIC_REF key` (2 floats — `static_layer` skips its closure
+  entirely) and the renderer draws the cached VBO with its then-current CPU
+  transform (the camera: pan/zoom/sway) applied IN THE VERTEX SHADER via the
+  batch program's `uXA`/`uXB` affine uniforms (identity for all dynamic
+  draws — one shader). ONE key live at a time: a new key evicts (deletes)
+  the old buffer; `load_floor` bumps the key (`floor_static_key`), a
+  checkpoint restore keeps it (same floor = same tiles/walls; a death
+  restart re-records — always correct). Sections must be SOLID primitives
+  only (everything samples the white texture — no text/sprites), recorded
+  UNCULLED (`Level::full_bounds`: the cache must hold for every camera
+  position, the GPU clips), and frame-invariant: `update_game`'s world path
+  BYPASSES the cache (plain per-frame draws, no static ops) during the
+  kill flash (per-frame floor tint) and with debug overlays on (I: walls
+  interleave their inflated-boundary outlines); the cached VBO survives
+  bypass frames. The cache DOES work inside the `?pixel=N` world group
+  (punt lifted): the world-space VBO draws into the group's texels through
+  the same vertex-shader affine (there the CPU transform is the group's
+  world->texel mapping — still affine), one buffer serving both modes. Props, elevators, actors, HUD stay dynamic
+  (draw-order safe), and the editor / `?viz` map never records sections
 - The command opcode tables in src/graphics.rs (`mod op`), renderer.js
   (incl. its `OP_ARGS` arity table used by the POSTFX pre-scan) and
-  tests/e2e/specs/helpers.js (`OP_ARGS`) must stay in sync
+  tests/e2e/specs/helpers.js (`OP_ARGS`) must stay in sync (ops 21-23's
+  values live in `src/static_geo.rs`)
 
 ## Repo layout (post-`proto/`)
-- Root: `index.html`, `renderer.js`, `robot-core.js` (the 3D->2D robot pipeline, imported by renderer.js at runtime), `shoggoth-core.js` (the boss pipeline, built on robot-core), `serve.py` (dev server, no-store + level-editor write API)
+- Root: `index.html`, `renderer.js`, `robot-core.js` (the 3D->2D robot pipeline, imported by renderer.js at runtime), `shoggoth-core.js` (the boss pipeline, built on robot-core), `serve.py` (dev server, no-store + level-editor write API + the `/render-tests/<name>` route), `docs.html` (the `/docs` page: the RENDERING PIPELINE map — hand-built HTML/CSS mirroring the mermaid source in `docs/PIPELINE.md`, which GitHub renders — plus the persistent-vs-per-frame table, the cost model and links to every doc; serve.py routes `/docs` to it, `/docs/*.md` stay real files), `render-tests.html` (RENDER TESTS: a renderer-only harness — no wasm, no game — that drives `initRenderer`/`frameRender` with hand-built command streams so the smooth pixel-group composite can be eyeballed in isolation on any GPU; tests `square` (rocking black square), `sway` (the exact game sway over a checker/walls scene), `split` (smooth vs hard composite side by side); tweak via `?px=&amp=&period=&smooth=&zoom=`)
 - `tools/`: the `?viz` panels — `inspector.html` (character inspector: `?kind=robot&color=…` / `?kind=shoggoth&phase=masked|enraged`, `&embed=1` for the SPRITES tab; 3D orbit + 2D top-down views), `levels.html` + `levels-editor*.js` (level + scenario editor, LEVELS tab) — and `gen_levels.py`, `gen_props.py`
 - `levels/`: `floor_00.json` (the ground-level cold open: gate / parking lot, passive crowd), `floor_01..13.json`, `floor_13h.json`, `index.json` — the floors' single source of truth (format: `docs/SCENARIO_FORMAT.md`). Level *index* = position in `index.json` (sorted by id: index 0 = floor 0); `?floor=N` takes the floor **id** A floor may carry `"props": [{ "kind", "x", "y", "rot" (deg, cw), "size" (world units, default 100) }]` = placed set dressing (`kind` = a `PROP_NAMES` snake_case id, validated by `gen_levels.py` → `FloorDef.props: &[PropPlacement]`); DECORATION ONLY — drawn in-game by `src/floor_props.rs` (`render_floor_props`, called in `update_game` after the walls and before the actors, inside the `?pixel=N` world group), no collision
 - `src/levels_data.rs` is GENERATED from `levels/*.json` by `make gen-levels`; `make check-levels` validates + checks it is current. Never hand-edit it.
@@ -173,7 +248,7 @@
   result toast) — then run `make gen-props`), MUSICS (tracker + SFX),
   LEVELS (the NATIVE level editor, see below), EFFECTS (previews
   every POSTFX shader kind + the 2D shoggoth glitch)
-- `/?floor=N` starts the game directly on floor id N (0 = the gate / parking lot cold open, 14 = 13½); music starts on the first key/click. Add `&pixel=N` (N ≥ 2, EXPERIMENT, no gameplay change) to rasterize the WORLD layer of `update_game` (camera.apply … camera.reset: floor, walls, entities, robots, boss) in a canvas-sized pixel group of N-px art pixels while the HUD/comms stay crisp (`pixel_world` in GameState). Add `&debug` (`/?floor=14&debug`) to enable the debug tooling: with debug overlays on (I), **K** purges all rogues (incl. the boss; debug/e2e helper) and **B** cracks the boss's mask (drops it to the enrage threshold so the live mask-off / raw form can be previewed)
+- `/?floor=N` starts the game directly on floor id N (0 = the gate / parking lot cold open, 14 = 13½); music starts on the first key/click. Add `&pixel=N` (N ≥ 2 WORLD units per art pixel, no gameplay change) to rasterize the SCENERY of `update_game` (floor, walls, props, elevators) at art resolution the vibe's way: the group's texel grid is WORLD-ANCHORED (its origin snaps to whole art pixels of the world, so panning never re-phases the texels) with a bleed margin, only `translate(-focus)`-style placement lands inside the group, and the camera's composite half (`Camera::apply_composite`: centre + drift + roll + zoom) sits OUTSIDE it — the sway moves/rotates the finished pixel image at native res through the sub-pixel composite (`pixel_begin_smooth`: no origin snap — gliding motion, NEAREST sampling, hard aliased edges per the art direction). The MOVING actors (robots, boss, bullets, weapons, gate arrow) draw AFTER the group closes, straight under the camera transform: they are already baked pixel sprites and must MOVE SMOOTHLY at native resolution — re-quantizing them onto the world grid makes a walking robot hop world-texel by world-texel and the whole scene FEEL snapped even though the backdrop glides. HUD/comms stay crisp (`pixel_world` in GameState); the static geometry cache stays active inside the group. Add `&noise=0` to turn the TV-static film grain off (title + in-game — the clean-image A/B switch). ALL url params: `docs/URL_PARAMS.md`. Add `&debug` (`/?floor=14&debug`) to enable the debug tooling: with debug overlays on (I), **K** purges all rogues (incl. the boss; debug/e2e helper) and **B** cracks the boss's mask (drops it to the enrage threshold so the live mask-off / raw form can be previewed)
 - The ending (`src/ending.rs`): extracting through a `"to": "surface"` exit (`scenario::SURFACE_EXIT`; 13½'s car) → EXFILTRATED card → the `extracted` scenario step's UPLINK comms until the feed idles → 2.5 s blur-out (POSTFX 0) → `GameScreen::Ending` credits (the `CREDITS` const list) over the ELEVATOR RIDE HOME (`ending::render_ride`: the car top-down at dead centre, the live coral robot idling in it, shaft lights streaking outward) under POSTFX 10 WARP TRAILS (`Ending::warp_t` ramps in over ~6 s, holds, eases to an idle glow as the roll settles); Enter/Esc → level select
 - Level editor SAVE = `PUT /levels/<file>.json` to serve.py, guarded by the `X-Editor-Token` header (token from `$EDITOR_TOKEN` or the gitignored `.editor-token`, printed at server start): the native editor through `window.vizSaveLevel(file, json)` (index.html, same token prompt + toast as `vizSaveProps`; then `make gen-levels`), the web editor directly (its COPY DIFF gives a `patch -p1` unified diff).
 

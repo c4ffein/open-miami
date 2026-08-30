@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPEN MIAMI // RENDER TESTS</title>
+<style>
+  /* Pure renderer harness: no wasm, no game, no fonts — renderer.js is driven
+     directly with hand-built command streams so the compositing path (the
+     sub-pixel pixel-group composite behind ?pixel=N) can be eyeballed in
+     isolation on any machine/GPU. Served at /render-tests/<name> by serve.py
+     (or open render-tests.html?t=<name>). */
+  html, body { margin: 0; height: 100%; background: #101014; overflow: hidden; }
+  #glcanvas { display: block; width: 100vw; height: 100vh; }
+  #hud {
+    position: fixed; left: 12px; top: 10px; color: #9aa; z-index: 2;
+    font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    user-select: none; pointer-events: none; white-space: pre;
+  }
+  #hud a { color: #f39; pointer-events: auto; }
+</style>
+</head>
+<body>
+<canvas id="glcanvas"></canvas>
+<div id="hud"></div>
+<script type="module">
+  // Resolve renderer.js against the repo root whichever way this page was
+  // reached: /render-tests/<name> (serve.py rewrite) or .../render-tests.html
+  // (static hosting, e.g. Pages under a subpath).
+  const base = location.pathname.replace(/render-tests(\.html)?(\/.*)?$/, '');
+  const { initRenderer } = await import(`${base}renderer.js?v=${Date.now()}`);
+  const canvas = document.getElementById('glcanvas');
+  const frameRender = initRenderer(canvas);
+
+  // ---- URL: /render-tests/<name> (serve.py rewrite) or ?t=<name> ----
+  const q = new URLSearchParams(location.search);
+  const m = location.pathname.match(/\/render-tests\/([a-z0-9-]+)/);
+  const name = (m && m[1]) || q.get('t') || 'index';
+  const P = (key, dflt) => { const v = parseFloat(q.get(key)); return isNaN(v) ? dflt : v; };
+  const link = (n) => m ? `/render-tests/${n}` : `render-tests.html?t=${n}`;
+
+  // ---- opcode helpers (values = src/graphics.rs `mod op`) ----
+  const CLEAR = (r, g, b) => [0, r, g, b, 1];
+  const RECT = (x, y, w, h, r, g, b) => [1, x, y, w, h, r, g, b, 1];
+  const RECTL = (x, y, w, h, t, r, g, b) => [2, x, y, w, h, t, r, g, b, 1];
+  const LINE = (x1, y1, x2, y2, t, r, g, b) => [4, x1, y1, x2, y2, t, r, g, b, 1];
+  const SAVE = [7], RESTORE = [8];
+  const TRANSLATE = (x, y) => [9, x, y];
+  const ROTATE = (a) => [10, a];
+  const SCALE = (s) => [12, s, s];
+  const PIX_BEGIN = (px, w, h, smooth) => [15, px, w, h, smooth];
+  const PIX_END = (x, y) => [16, x, y];
+
+  // The game's camera sway (src/camera.rs SWAY_*): the exact motion the
+  // pixelated world composite is asked to perform.
+  const GAME_ROLL = 0.0061, GAME_ROLL_HZ = 0.11, GAME_DRIFT = 2.5, GAME_DRIFT_HZ = 0.07;
+  const sway = (t) => ({
+    roll: Math.sin(t * GAME_ROLL_HZ * 2 * Math.PI) * GAME_ROLL,
+    dx: Math.sin(t * GAME_DRIFT_HZ * 2 * Math.PI) * GAME_DRIFT,
+    dy: Math.cos(t * GAME_DRIFT_HZ * 2 * Math.PI * 1.37 + 1.1) * GAME_DRIFT,
+  });
+
+  // A game-vibe scene drawn in GROUP-LOCAL units: checker floor, two walls
+  // exactly like render.rs draw_wall (fill + 2-unit border), sub-texel lines
+  // and a small circle — the primitives the pixel-art rule has to handle.
+  function scene(W, H) {
+    const s = [];
+    for (let ty = 0; ty < H / 40; ty++)
+      for (let tx = 0; tx < W / 40; tx++) {
+        const dark = (tx + ty) % 2 === 0;
+        s.push(...RECT(tx * 40, ty * 40, 40, 40,
+          dark ? 0.145 : 0.165, dark ? 0.13 : 0.15, dark ? 0.17 : 0.19));
+      }
+    const wall = (x, y, w, h) => {
+      s.push(...RECT(x, y, w, h, 80 / 255, 60 / 255, 70 / 255));
+      s.push(...RECTL(x, y, w, h, 2, 100 / 255, 80 / 255, 90 / 255));
+    };
+    const r = Math.round;
+    wall(r(W * 0.08), r(H * 0.12), r(W * 0.84), 34);
+    wall(r(W * 0.12), r(H * 0.29), 34, r(H * 0.56));
+    wall(r(W * 0.81), r(H * 0.29), 34, r(H * 0.56));
+    s.push(...LINE(r(W * 0.23), r(H * 0.46), r(W * 0.77), r(H * 0.46), 1, 0.5, 0.45, 0.55));
+    s.push(...LINE(r(W * 0.23), r(H * 0.46) + 4, r(W * 0.77), r(H * 0.46) + 4, 1, 0.08, 0.06, 0.1));
+    const sq = r(W * 0.23), sx = r(W * 0.42), sy = r(H * 0.56);
+    s.push(...RECT(sx, sy, sq, sq, 0, 0, 0)); // the black square
+    s.push(...RECTL(sx - 6, sy - 6, sq + 12, sq + 12, 2, 0.85, 0.3, 0.55));
+    return s;
+  }
+
+  // ---- the tests ----
+  const TESTS = {
+    // A black square gently rocking through the sub-pixel composite: the
+    // minimal pixelated-world. Edges are HARD and stair-step under the tilt
+    // (aliasing is the art direction — CLAUDE.md ## Design); the chunky
+    // interior stays rigid and the MOTION glides sub-pixel.
+    square: {
+      desc: 'black square, sub-pixel composite, rocking',
+      params: { px: 8, amp: 2, period: 4, smooth: 1, zoom: 1 },
+      frame(t, w, h, p) {
+        const a = (p.amp * Math.PI / 180) * Math.sin(t * 2 * Math.PI / p.period);
+        return [
+          ...CLEAR(0.85, 0.85, 0.85),
+          ...SAVE, ...TRANSLATE(w / 2, h / 2), ...ROTATE(a), ...SCALE(p.zoom),
+          ...PIX_BEGIN(p.px, 480, 480, p.smooth),
+          ...RECT(0, 0, 480, 480, 1, 1, 1),
+          ...RECT(120, 120, 240, 240, 0, 0, 0),
+          ...PIX_END(-240, -240),
+          ...RESTORE,
+        ];
+      },
+    },
+    // The game's exact sway (roll 0.35° @ 0.11 Hz + 2.5px drift) over a
+    // game-like scene at game-like art scale/zoom. What the ?pixel=N world
+    // does, minus the game.
+    sway: {
+      desc: 'game sway over a checker/walls scene',
+      params: { px: 3, smooth: 1, zoom: 1.95 },
+      frame(t, w, h, p) {
+        const { roll, dx, dy } = sway(t);
+        const W = 520, H = 520;
+        return [
+          ...CLEAR(0.04, 0.04, 0.06),
+          ...SAVE, ...TRANSLATE(w / 2 + dx, h / 2 + dy), ...ROTATE(roll), ...SCALE(p.zoom),
+          ...PIX_BEGIN(p.px, W, H, p.smooth),
+          ...scene(W, H),
+          ...PIX_END(-W / 2, -H / 2),
+          ...RESTORE,
+        ];
+      },
+    },
+    // The same rocking scene twice: LEFT through the sub-pixel composite
+    // (what the game uses — gliding motion), RIGHT through the snapped one
+    // (motion quantized to whole pixels). Edges are hard-aliased in BOTH;
+    // the difference is the MOTION.
+    split: {
+      desc: 'left sub-pixel glide vs right snapped composite',
+      params: { px: 6, amp: 2, period: 4, zoom: 1 },
+      frame(t, w, h, p) {
+        const a = (p.amp * Math.PI / 180) * Math.sin(t * 2 * Math.PI / p.period);
+        const W = 400, H = 400;
+        const half = (cx, smooth) => [
+          ...SAVE, ...TRANSLATE(cx, h / 2), ...ROTATE(a), ...SCALE(p.zoom),
+          ...PIX_BEGIN(p.px, W, H, smooth),
+          ...scene(W, H),
+          ...PIX_END(-W / 2, -H / 2),
+          ...RESTORE,
+        ];
+        return [
+          ...CLEAR(0.04, 0.04, 0.06),
+          ...half(w * 0.27, 1),
+          ...half(w * 0.73, 0),
+        ];
+      },
+    },
+  };
+
+  const hud = document.getElementById('hud');
+  const links = Object.keys(TESTS).map((n) => `<a href="${link(n)}">${n}</a>`).join('  ');
+  if (!TESTS[name]) {
+    hud.innerHTML = `OPEN MIAMI // RENDER TESTS\n${links}\n\npick one — tweak with ?px= &amp;amp=(deg) &amp;period=(s) &amp;smooth=0|1 &amp;zoom=`;
+  } else {
+    const test = TESTS[name];
+    const p = {};
+    for (const [k, v] of Object.entries(test.params)) p[k] = P(k, v);
+    hud.innerHTML = `${name} — ${test.desc}\n${Object.entries(p).map(([k, v]) => k + '=' + v).join('  ')}\n${links}`;
+    const t0 = performance.now();
+    const loop = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+      if (canvas.width !== pw || canvas.height !== ph) {
+        canvas.width = pw;
+        canvas.height = ph;
+        canvas.dataset.dpr = String(dpr);
+      }
+      const t = (performance.now() - t0) / 1000;
+      frameRender(new Float32Array(test.frame(t, w, h, p)), '');
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+  }
+</script>
+</body>
+</html>

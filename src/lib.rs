@@ -32,6 +32,7 @@ pub mod render_comms;
 pub mod render_dialogue;
 pub mod scenario;
 pub mod sim;
+pub mod static_geo;
 pub mod systems;
 
 // Camera and level rendering (WASM-only, depend on the canvas Graphics)
@@ -1154,10 +1155,14 @@ mod wasm_entry {
         viz_props: Vec<PropViz>,
         /// PROPS gallery "GRID": overlay the art-pixel grid on the preview.
         viz_pixel_grid: bool,
-        /// EXPERIMENT `?pixel=N`: rasterize the in-game WORLD layer (floor,
-        /// walls, entities, robots, boss — not the HUD) in a pixel group of
-        /// N-px art pixels. 0 = off (the default).
+        /// `?pixel=N`: rasterize the in-game SCENERY (floor, walls, props,
+        /// elevators — actors and HUD stay native-smooth) in a world-anchored
+        /// pixel group of N-world-unit art pixels. 0 = off (the default).
         pixel_world: u32,
+        /// `?noise=0` turns the TV-static film grain off (title screen and
+        /// in-game alike) — an A/B switch for judging the pixelated world
+        /// with a clean image. Default true (docs/URL_PARAMS.md).
+        noise_enabled: bool,
         /// LEVELS tab: the native level editor (`editor_ui.rs`).
         editor: crate::editor_ui::Editor,
         /// EFFECTS tab: the running preview — -1 = the 2D shoggoth glitch,
@@ -1171,6 +1176,11 @@ mod wasm_entry {
         prev_enemies_alive: usize,
         /// Seconds left on the kill flash (background strobes red/blue).
         kill_flash: f32,
+        /// Key of the static geometry cache (floor tiles + walls baked into a
+        /// persistent renderer-side VBO, `Graphics::static_layer`). Bumped by
+        /// every `load_floor` so a floor change re-records; a checkpoint
+        /// restore keeps it (same floor — the tiles and walls are identical).
+        floor_static_key: u32,
         prev_level_complete: bool,
         prev_boss_enraged: bool,
         prev_all_dead: bool,
@@ -1255,6 +1265,10 @@ mod wasm_entry {
                     .and_then(|v| v.parse::<u32>().ok())
                     .filter(|&n| n >= 2)
                     .unwrap_or(0),
+                noise_enabled: !matches!(
+                    url_param("noise").as_deref(),
+                    Some("0") | Some("false") | Some("off")
+                ),
                 editor: crate::editor_ui::Editor::new(),
                 effect_kind: -1,
                 effect_start: 0.0,
@@ -1262,6 +1276,7 @@ mod wasm_entry {
                 mg_sfx_cooldown: 0.0,
                 prev_enemies_alive: 0,
                 kill_flash: 0.0,
+                floor_static_key: 0,
                 prev_level_complete: false,
                 prev_boss_enraged: false,
                 prev_all_dead: false,
@@ -1299,6 +1314,11 @@ mod wasm_entry {
 
         /// (Re)build the world for `selected_level` and start its scenario.
         fn load_floor(&mut self) {
+            // New floor geometry: invalidate the static tiles+walls cache
+            // (the renderer evicts the old VBO when the new key records).
+            // Death restarts re-load the same floor — the content would be
+            // identical, but bumping is always correct and costs one record.
+            self.floor_static_key = self.floor_static_key.wrapping_add(1);
             self.world.clear();
             initialize_game(&mut self.world, self.selected_level);
             self.scenario = Some(ScenarioState::new(floor_def(self.selected_level)));
@@ -2573,7 +2593,9 @@ mod wasm_entry {
 
             // A faint TV-static shimmer over the whole title screen.
             // (Last POSTFX wins, so an open modal's kind 12 replaces it.)
-            graphics.postfx(13, TV_STATIC_T, Color::WHITE);
+            if self.noise_enabled {
+                graphics.postfx(13, TV_STATIC_T, Color::WHITE);
+            }
         }
 
         /// The shared SETTINGS / ABOUT modal chrome over the live title
@@ -2882,22 +2904,67 @@ mod wasm_entry {
         /// simulation, so the pause screen re-draws the frozen world behind
         /// its modal with `dt = 0` (only the kill-flash decay reads `dt`).
         fn render_world(&mut self, graphics: &Graphics, dt: f32, accent: (u8, u8, u8)) {
-            // EXPERIMENT `?pixel=N`: the whole world layer (everything between
-            // camera.apply and camera.reset) is rasterized at N-px art
-            // resolution and nearest-upscaled; the HUD stays crisp. Note
-            // the robots / boss are already pixelated tiles, so inside the
-            // group they get quantized twice (tile px, then the group px).
-            if self.pixel_world >= 2 {
-                graphics.pixel_begin(self.pixel_world as f32, graphics.width(), graphics.height());
-            }
-
-            // Apply camera transform for world rendering
-            self.camera.apply(graphics);
-
-            // Render level (only the tiles visible in the camera viewport)
-            let (view_min, view_max) = self
+            // `?pixel=N` (N in WORLD units per art pixel): THE VIBE's endgame —
+            // the SCENERY (floor, walls, props, elevators) rasterizes at art
+            // resolution on a WORLD-ANCHORED grid (the group origin snaps to
+            // whole art pixels of the world, so the texels never re-phase as
+            // the camera pans), and the FINISHED pixel image is what the
+            // camera moves: the composite half of the camera (centre + drift
+            // + roll + zoom) sits OUTSIDE the group, so the sway rotates /
+            // glides the rigid pixel image at native resolution
+            // ("Before"-mode rotation at the composite quad — never
+            // re-rasterization inside the group, which would crawl). The
+            // group is drawn with the SUB-PIXEL composite (no origin snap:
+            // the motion glides; sampling stays NEAREST — the aliased edges
+            // are the art direction, see CLAUDE.md ## Design) and rendered
+            // with a bleed margin so the roll never exposes void at the
+            // screen edges.
+            //
+            // The MOVING actors — robots, boss, bullets, weapons, the gate
+            // arrow — draw AFTER the group closes, straight under the camera
+            // transform: they are already baked pixel sprites (robot tiles,
+            // gun sprites) and per the vibe they must MOVE SMOOTHLY at
+            // native resolution, never be re-quantized onto the world grid
+            // (inside the group a walking robot hops world-texel by
+            // world-texel — the whole scene then FEELS snapped even though
+            // the backdrop glides). The HUD stays crisp outside everything.
+            let (mut view_min, mut view_max) = self
                 .camera
                 .visible_bounds(graphics.width(), graphics.height());
+            let pixel_on = self.pixel_world >= 2;
+            if pixel_on {
+                let px = self.pixel_world as f32;
+                // Bleed: covers the sway roll's edge excursion, the drift and
+                // the origin snap (a handful of texels is plenty at 0.35°).
+                let margin = px * 4.0 + 16.0;
+                let ox = ((view_min.x - margin) / px).floor() * px;
+                let oy = ((view_min.y - margin) / px).floor() * px;
+                // Whole-texel group size: the renderer's composite flip is
+                // anchored at the integer row count, and a fractional height
+                // would make the ceil remainder vary as the camera moves.
+                let gw = ((view_max.x + margin - ox) / px).ceil() * px;
+                let gh = ((view_max.y + margin - oy) / px).ceil() * px;
+                let f = self.camera.focus();
+                self.camera.apply_composite(graphics);
+                // An extra save so closing the scenery group can return to
+                // the PURE composite transform — correct even when an
+                // oversized group fell back to pass-through (its END is a
+                // no-op and the translates below must unwind regardless).
+                graphics.save();
+                // Place the group rect relative to the focus BEFORE the
+                // group opens: pixel_end lands at local (0, 0), which keeps
+                // the renderer's oversized-group pass-through fallback
+                // seamless (a skipped BEGIN leaves this transform in force).
+                graphics.translate(ox - f.x, oy - f.y);
+                graphics.pixel_begin_smooth(px, gw, gh);
+                graphics.translate(-ox, -oy);
+                // Everything the group can show (bleed included) must be
+                // drawn: cull to the group rect, not the visible bounds.
+                view_min = Vec2::new(ox, oy);
+                view_max = Vec2::new(ox + gw, oy + gh);
+            } else {
+                self.camera.apply(graphics);
+            }
             // View culling for the expensive sprites (live 3D robots / guns /
             // the boss) and the placed props: anything whose footprint lies
             // fully outside these inflated bounds skips its commands.
@@ -2916,10 +2983,40 @@ mod wasm_entry {
             } else {
                 None
             };
-            self.level.render(graphics, view_min, view_max, tint);
+            // STATIC GEOMETRY CACHE: the tiles + walls do not change between
+            // frames, so they are baked once per floor into a persistent
+            // renderer-side VBO (world coordinates) and every later frame
+            // costs a 2-float STATIC_REF + one draw with the camera applied
+            // in the vertex shader (`Graphics::static_layer`, opcodes
+            // 21/22/23). The cache works inside the `?pixel=N` world group
+            // too: the VBO's world coordinates go through the group's
+            // world->texel transform via the same vertex-shader affine, so
+            // the pixelated world keeps the command-stream win. Bypassed —
+            // plain per-frame draws, exactly the old path — whenever the
+            // section would not be frame-invariant:
+            //   - kill flash: the floor tiles are tinted per frame;
+            //   - debug overlays (I): walls draw their inflated pathfinding
+            //     boundaries interleaved with the wall rects.
+            // The cached VBO survives those bypass frames (the renderer only
+            // evicts on a key change), so the flash / overlay toggling off
+            // returns to the cache without a re-record.
+            if tint.is_none() && !self.show_infos {
+                let (floor_min, floor_max) = self.level.full_bounds();
+                let level = &self.level;
+                let world = &self.world;
+                graphics.static_layer(self.floor_static_key, || {
+                    // Record the WHOLE floor, not the camera-culled range:
+                    // the cache must be valid for every camera position (the
+                    // GPU clips off-screen quads for free).
+                    level.render(graphics, floor_min, floor_max, None);
+                    render_walls(world, graphics, false);
+                });
+            } else {
+                self.level.render(graphics, view_min, view_max, tint);
 
-            // Render walls from the world
-            render_walls(&self.world, graphics, self.show_infos);
+                // Render walls from the world
+                render_walls(&self.world, graphics, self.show_infos);
+            }
 
             // Placed props: floor furniture over the tiles / walls, under the
             // actors (decoration only, no collision).
@@ -2940,6 +3037,18 @@ mod wasm_entry {
             );
             if self.show_infos {
                 render_zones_debug(&self.world, graphics);
+            }
+
+            // Scenery done. In pixel mode: composite the world image NOW
+            // (under the sway transform, sub-pixel smooth), then rebuild the
+            // plain camera space (composite + translate(-focus)) for the
+            // actors — baked pixel sprites gliding at native resolution over
+            // the pixelated scenery, the Hotline-Miami layering.
+            if pixel_on {
+                graphics.pixel_end(0.0, 0.0);
+                graphics.restore(); // back to the pure composite transform
+                let f = self.camera.focus();
+                graphics.translate(-f.x, -f.y);
             }
 
             // Downed / dead bots first: the ground weapons (in
@@ -2984,11 +3093,10 @@ mod wasm_entry {
                 draw_pixel_arrow(graphics, anchor.x, anchor.y - 58.0 + bob, accent);
             }
 
-            // Reset camera for UI rendering
+            // Reset camera for UI rendering (in pixel mode the scenery group
+            // was already closed before the actors; both paths sit at
+            // composite + translate(-focus) = the camera transform here).
             self.camera.reset(graphics);
-            if self.pixel_world >= 2 {
-                graphics.pixel_end(0.0, 0.0);
-            }
         }
 
         fn update_game(&mut self, graphics: &Graphics, dt: f32) {
@@ -3514,8 +3622,10 @@ mod wasm_entry {
             // frame (world + HUD alike — POSTFX is frame-level) at half the
             // title's opacity. Emitted BEFORE the outro's blur-out below:
             // last POSTFX wins, so the dissolve replaces the static during
-            // the exfil fade.
-            graphics.postfx(13, TV_STATIC_GAME_T, Color::WHITE);
+            // the exfil fade. `?noise=0` turns it off (A/B switch).
+            if self.noise_enabled {
+                graphics.postfx(13, TV_STATIC_GAME_T, Color::WHITE);
+            }
 
             // Extraction card done -> ride to the next floor (13's car jams
             // into 13½ and its boss intro; the boss floor's car goes home:

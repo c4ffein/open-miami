@@ -30,6 +30,10 @@ Thumbs.db
 # Session screenshots (generated, not part of the project)
 /shots/
 
+# screenshot crops dropped in the root for analysis (perf-trace .json files
+# stay VISIBLE as untracked on purpose — review them before cleaning up)
+/*.png
+
 # local editor write token for serve.py (never commit)
 .editor-token
 __pycache__/

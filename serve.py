@@ -198,15 +198,30 @@ def is_private_path(url_path):
     return bool(parts) and parts[0] in PRIVATE_TOP
 
 
+def rewrite_path(url_path):
+    """Pretty routes: /render-tests[/<name>] serves render-tests.html (the
+    page reads the test name from location.pathname), and /docs serves the
+    docs.html pipeline page (paths under /docs/ stay real files — the
+    markdown docs live there)."""
+    p = url_path.split("?", 1)[0]
+    if p == "/render-tests" or p.startswith("/render-tests/"):
+        return "/render-tests.html"
+    if p in ("/docs", "/docs/"):
+        return "/docs.html"
+    return url_path
+
+
 class NoCache(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if is_private_path(self.path):
             return self.send_error(404, "Not found")
+        self.path = rewrite_path(self.path)
         return super().do_GET()
 
     def do_HEAD(self):
         if is_private_path(self.path):
             return self.send_error(404, "Not found")
+        self.path = rewrite_path(self.path)
         return super().do_HEAD()
 
     def end_headers(self):

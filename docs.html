@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPEN MIAMI // PIPELINE</title>
+<style>
+  /* The dev docs page (served at /docs by serve.py, or open docs.html).
+     Self-contained on purpose (no libraries — the no-dependency rule): the
+     rendering-pipeline diagram is hand-built HTML/CSS mirroring the mermaid
+     source in docs/PIPELINE.md (which GitHub renders as a real diagram). */
+  @font-face {
+    font-family: 'VT323Docs';
+    src: url('assets/fonts/VT323-Regular.ttf') format('truetype');
+    font-display: swap;
+  }
+  :root {
+    --bg: #101014; --panel: #16161d; --box: #1c1c26; --line: #2c2c3a;
+    --ink: #b8b8c8; --dim: #70707f; --pink: #ff3399; --cyan: #37d8d8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); }
+  body {
+    font-family: 'VT323Docs', ui-monospace, Menlo, Consolas, monospace;
+    font-size: 19px; line-height: 1.45; padding: 34px 18px 70px;
+  }
+  main { max-width: 880px; margin: 0 auto; }
+  h1 {
+    color: var(--pink); font-size: 34px; font-weight: normal; margin: 0 0 2px;
+    letter-spacing: 2px; text-shadow: 0 0 14px rgba(255, 51, 153, 0.45);
+  }
+  .sub { color: var(--dim); margin: 0 0 30px; }
+  h2 {
+    color: var(--cyan); font-size: 23px; font-weight: normal;
+    letter-spacing: 2px; margin: 44px 0 14px;
+    border-bottom: 1px solid var(--line); padding-bottom: 4px;
+  }
+  /* ---- the flow diagram ---- */
+  .panel {
+    border: 1px solid var(--line); border-left: 3px solid var(--pink);
+    background: var(--panel); padding: 14px 16px 16px; margin: 0;
+  }
+  .panel.gpu { border-left-color: var(--cyan); }
+  .panel > .tag {
+    color: var(--pink); letter-spacing: 2px; font-size: 17px; margin-bottom: 10px;
+  }
+  .panel.gpu > .tag { color: var(--cyan); }
+  .box {
+    border: 1px solid var(--line); background: var(--box);
+    padding: 8px 12px; margin: 0;
+  }
+  .box b { color: #e8e8f2; font-weight: normal; }
+  .box .n { color: var(--dim); font-size: 16px; display: block; }
+  .arrow {
+    text-align: center; color: var(--pink); padding: 3px 0; line-height: 1;
+    font-size: 17px;
+  }
+  .arrow .lbl { color: var(--dim); font-size: 16px; }
+  .cross {
+    border: 1px dashed var(--pink); color: #e8e8f2; text-align: center;
+    padding: 8px 12px; margin: 8px 0; background: rgba(255, 51, 153, 0.06);
+  }
+  .cross .n { color: var(--dim); font-size: 16px; display: block; }
+  .paths {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 8px; margin-top: 8px;
+  }
+  .fb {
+    border: 1px solid var(--cyan); background: #12161c; text-align: center;
+    padding: 9px 12px; color: #dff5f5; margin: 0;
+  }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  @media (max-width: 640px) { .split { grid-template-columns: 1fr; } }
+  .chips { margin-top: 8px; }
+  .chip {
+    display: inline-block; border: 1px solid var(--line); color: var(--dim);
+    padding: 0 7px; margin: 2px 3px 0 0; font-size: 15px; letter-spacing: 1px;
+  }
+  /* ---- prose bits ---- */
+  ol { padding-left: 26px; } ol li { margin: 6px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 17px; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { color: var(--cyan); font-weight: normal; letter-spacing: 1px; }
+  ul { padding-left: 24px; } ul li { margin: 6px 0; }
+  a { color: var(--pink); }
+  .note { color: var(--dim); font-size: 17px; }
+  code { color: #e8e8f2; font-family: inherit; background: var(--box); padding: 0 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OPEN MIAMI // RENDERING PIPELINE</h1>
+  <p class="sub">ONE FRAME, END TO END · MERMAID SOURCE: <a href="docs/PIPELINE.md">docs/PIPELINE.md</a> (GITHUB RENDERS IT)</p>
+
+  <div class="panel">
+    <div class="tag">WASM ENGINE (RUST) — SIMULATION ONLY</div>
+    <div class="box"><b>requestAnimationFrame</b> <span class="n">the FPS cap may skip the whole frame — no sim, no draw</span></div>
+    <div class="arrow">▼</div>
+    <div class="box"><b>update()</b> <span class="n">input · simulation · AI · scenario</span></div>
+    <div class="arrow">▼</div>
+    <div class="box"><b>render_*() records the frame</b>
+      <span class="n">Graphics = one flat f32 command stream, CSS-pixel coordinates</span>
+      <div class="chips">
+        <span class="chip">RECT</span><span class="chip">LINE</span><span class="chip">CIRCLE</span><span class="chip">ARC</span><span class="chip">TEXT</span><span class="chip">TRANSFORMS</span><span class="chip">ROBOT</span><span class="chip">SHOGGOTH</span><span class="chip">PORTRAIT</span><span class="chip">GUN_PICKUP</span><span class="chip">PIX_BEGIN/END/BLIT</span><span class="chip">STATIC_BEGIN/END/REF</span><span class="chip">DRIVE</span><span class="chip">POSTFX</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="cross"><b>window.frameRender(cmds, texts)</b>
+    <span class="n">ONE zero-copy wasm → JS crossing per frame</span></div>
+
+  <div class="panel gpu">
+    <div class="tag">RENDERER.JS (WEBGL1) — OWNS THE CANVAS + GPU</div>
+    <div class="box"><b>POSTFX pre-scan → opcode walk</b>
+      <span class="n">kinds 0–12 anywhere in the stream route the whole frame into the scene FBO first</span></div>
+    <div class="arrow">▼ <span class="lbl">the walk feeds seven paths</span></div>
+    <div class="paths">
+      <div class="box"><b>BATCH</b> <span class="n">one shader, CPU transform stack; triangles accumulate and flush on texture / target changes</span></div>
+      <div class="box"><b>STATIC CACHE</b> <span class="n">floor + walls tessellated ONCE into a persistent world-space VBO; each later frame sends 2 floats and the camera applies in the vertex shader (uXA/uXB)</span></div>
+      <div class="box"><b>PIXEL-ART GROUPS</b> <span class="n">batch redirected into an art-res NEAREST scratch FBO; END composites the finished image as ONE quad — origin-snapped (props) or sub-pixel (the ?pixel world: motion glides, sampling stays NEAREST — aliasing is the art direction)</span></div>
+      <div class="box"><b>LIVE ROBOTS / BOSS</b> <span class="n">3D→2D every frame (robot-core / shoggoth-core) into per-frame scratch tile atlases — continuous animation, no cache</span></div>
+      <div class="box"><b>BAKED SPRITES</b> <span class="n">dialogue portraits + ground guns rendered ONCE into a persistent atlas, then drawn as rigid rocking / spinning quads</span></div>
+      <div class="box"><b>TEXT</b> <span class="n">VT323 glyph atlas, lazily baked; every string ASCII-uppercased at the draw boundary</span></div>
+      <div class="box"><b>DRIVE BACKDROP</b> <span class="n">one full-shader pass at art resolution, then one upscaled quad</span></div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="fb"><b>DEFAULT FRAMEBUFFER</b> — physical pixels (CSS × devicePixelRatio) · antialias: false, ON PURPOSE</div>
+    <div class="arrow">▼ <span class="lbl">then, over the finished frame</span></div>
+    <div class="split">
+      <div class="box"><b>POSTFX 0–12 (when present)</b> <span class="n">scene FBO → one full-screen post shader → back to the canvas (blur-out, CRT, VHS, modal static…; kind 10 keeps a warp-trails feedback accumulator)</span></div>
+      <div class="box"><b>TV STATIC (kind 13)</b> <span class="n">NOT a post pass: one alpha-blended quad sampling a pre-rolled 512² noise texture at a random per-frame offset. Cost = one full-screen read + write — the cheapest possible overlay, still visible on the FPS counter at Retina. ?noise=0 removes it</span></div>
+    </div>
+  </div>
+
+  <h2>ANATOMY OF AN IN-GAME FRAME</h2>
+  <ol>
+    <li><b>clear</b></li>
+    <li><b>world scenery</b> — floor tiles + walls (the STATIC cache), placed props, elevators. With <code>?pixel=N</code> all of it rasterizes inside the world-anchored art-res group and composites as one sub-pixel quad under the camera sway (roll + drift applied to the finished image).</li>
+    <li><b>actors</b> — corpses, then ground weapons, then standing robots + boss + bullets: baked/live pixel sprites on quads that move smoothly at native resolution, never snapped to the world grid.</li>
+    <li><b>HUD + comms</b> — health, objective, dialogue letterbox, rocking portraits: crisp, outside any group.</li>
+    <li><b>TV-static grain quad</b> (<code>?noise=0</code> removes it).</li>
+    <li><b>POSTFX pass</b>, if any (pause modal wash, kill blur-out, warp trails…).</li>
+  </ol>
+
+  <h2>PERSISTENT VS PER-FRAME</h2>
+  <table>
+    <tr><th>PERSISTENT (BUILT ONCE, REUSED)</th><th>PER-FRAME</th></tr>
+    <tr><td>STATIC cache VBO (current floor's tiles + walls; evicted on floor change)</td><td>everything dynamic in the batch (actors, prop layers, HUD)</td></tr>
+    <tr><td>portrait / ground-gun atlas (baked per color / weapon on first use)</td><td>robot + boss tiles (live 3D→2D, continuous time)</td></tr>
+    <tr><td>VT323 glyph atlas (grown lazily)</td><td>pixel-group scratch contents (re-rasterized when used)</td></tr>
+    <tr><td>512² TV-noise texture (rolled once at startup)</td><td>the noise quad's random UV offset</td></tr>
+    <tr><td>DRIVE / warp / scene FBO targets (lazy, reused)</td><td>their contents</td></tr>
+  </table>
+
+  <h2>THE COST MODEL</h2>
+  <ul>
+    <li><b>Bandwidth is the enemy</b> at Retina: every full-screen layer reads (+ writes) ~4.5M physical pixels. MSAA (~4x per layer) measured 30 fps on the 2018 MacBook and was removed; the grain quad — the cheapest possible overlay — still pays one read + write.</li>
+    <li><b>The command stream is the CPU contract</b>: one crossing per frame; the STATIC cache turns a floor's ~2000 re-recorded floats into 2.</li>
+    <li><b>Art-res rasterization is a fill win</b>: pixel groups and the DRIVE shader compute at art resolution and pay native resolution only for one upscaled quad — the crunch and the savings come from the same place.</li>
+    <li><b>Aliasing is the art direction</b> (CLAUDE.md ## Design): hard stair-stepped edges everywhere; smoothness lives only in motion.</li>
+  </ul>
+
+  <h2>MORE DOCS</h2>
+  <ul>
+    <li><a href="docs/PIPELINE.md">PIPELINE.md</a> — this page's mermaid source (rendered by GitHub)</li>
+    <li><a href="docs/URL_PARAMS.md">URL_PARAMS.md</a> — every query flag, by page</li>
+    <li><a href="docs/SCENARIO_FORMAT.md">SCENARIO_FORMAT.md</a> — the floors' scenario format</li>
+    <li><a href="docs/PROPS_FORMAT.md">PROPS_FORMAT.md</a> — the prop library's saved settings</li>
+    <li><a href="render-tests.html">/render-tests</a> — the renderer-only eyeball harness</li>
+  </ul>
+</main>
+</body>
+</html>
