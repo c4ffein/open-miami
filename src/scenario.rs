@@ -2435,7 +2435,8 @@ mod tests {
         assert!(GateInput::Pickup.satisfied_by(&GameEvent::Pickup));
         assert!(GateInput::Strike.satisfied_by(&GameEvent::StrikeLanded));
         assert!(!GateInput::Strike.satisfied_by(&GameEvent::EnemyHit {
-            by: WeaponType::Melee
+            by: WeaponType::Melee,
+            at: crate::math::Vec2::zero(),
         }));
         assert!(GateInput::Fire.satisfied_by(&GameEvent::PlayerFired(WeaponType::Pistol)));
         assert!(

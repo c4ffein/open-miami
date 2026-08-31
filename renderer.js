@@ -54,6 +54,15 @@
                                                       with the current CPU
                                                       transform applied in
                                                       the vertex shader)
+    24 BACKDROP   w h t px                            (the neon-wave void
+                                                      behind/outside the
+                                                      level: art-res shader
+                                                      pass + one upscaled
+                                                      quad, like DRIVE)
+    25 HEAD       colorIdx x y angle sizePx           (detached robot head on
+                                                      the floor: baked-once
+                                                      pixel-art sprite, quad
+                                                      spun in 2D by `angle`)
 
    Everything is drawn as vertex-colored, textured triangles in one
    interleaved dynamic buffer (a 1x1 white texture stands in for solid
@@ -142,7 +151,8 @@ const TEXT_SEP = "\u001f";
 
 /* ---- robot tables (indices mirror src/graphics.rs draw_robot) ----------- */
 const ROBOT_COLORS = ["coral", "red", "violet", "magenta"];
-const ROBOT_POSES = ["idle", "walk", "shoot", "hit", "downed"];
+const ROBOT_POSES = ["idle", "walk", "shoot", "hit", "downed",
+  "downed_headless", "kick", "stomp"];
 const ROBOT_WEAPONS = ["fist", "pistol", "machinegun", "shotgun"];
 const ROBOT_TILE = 128; // per-robot tile resolution (px) in the scratch atlas
 const ROBOT_PX = 3; // robot-core pixelation block size at this tile size
@@ -159,7 +169,10 @@ const SHOG_ATLAS_SIZE = 768; // 2x2 = 4 bosses per batch (one is the norm)
    quad that samples them — true pixel art, never smoothed. One 64px tile per
    sprite; a ground gun uses a GUN_ART-texel corner of its tile. */
 const FX_TILE = 64; // tile side = the portrait's art resolution (texels)
-const GUN_ART = 24; // ground-gun art resolution (texels) within a tile
+const GUN_ART = 32; // ground-gun art resolution (texels) within a tile
+// (32 divides ROBOT_TILE exactly: renderGun's pixelate block is a clean
+//  128/32 = 4, and the detailed gun silhouettes get room to read)
+const HEAD_ART = 16; // detached-head art resolution (texels) within a tile
 /* ---- pixel-sprite cache (PORTRAIT + GUNPICKUP) ----
    Classic Hotline-Miami-style portraits: each (colorIdx, mode) face is
    rendered through the 3D pipeline exactly once — FIXED camera at the base
@@ -224,7 +237,7 @@ void main(){
 
 /* ---- opcode argument counts (mirror of the table above); used by the POSTFX
    pre-scan, which has to walk the stream without executing it ---- */
-const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1];
+const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1, 4, 5];
 const OP_POSTFX = 14;
 
 /* ---- pixel-art group scratch target ---- */
@@ -870,6 +883,33 @@ export function initRenderer(canvas) {
     portraitCache.set(key, slot);
     return slot;
   }
+  const headBakeOpts = {
+    color: "coral", px: ROBOT_TILE / HEAD_ART, transparent: true,
+  };
+  const headBakeTarget = { fbo: portraitFbo, x: 0, y: 0, w: HEAD_ART, h: HEAD_ART };
+  // Slot of the detached-head sprite for `colorIdx`, baked on first use: one
+  // renderHead (the head + visor cubes, face-up, true top-down) at angle 0
+  // into a HEAD_ART-texel corner of a cache tile. Spinning the baked sprite
+  // in 2D is equivalent to spinning the model (see gunSlotFor). Keys
+  // -10 - colorIdx keep clear of the guns' -1..-4.
+  function headSlotFor(colorIdx) {
+    const key = -10 - colorIdx;
+    let slot = portraitCache.get(key);
+    if (slot !== undefined) return slot;
+    slot = portraitCache.size;
+    flush();
+    gl.disableVertexAttribArray(loc.aPos);
+    gl.disableVertexAttribArray(loc.aUv);
+    gl.disableVertexAttribArray(loc.aColor);
+    headBakeOpts.color = ROBOT_COLORS[colorIdx] || ROBOT_COLORS[0];
+    headBakeTarget.x = (slot % portraitCols) * FX_TILE;
+    headBakeTarget.y = Math.floor(slot / portraitCols) * FX_TILE;
+    robotPipe.renderHead(headBakeOpts, headBakeTarget);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    bindBatchState();
+    portraitCache.set(key, slot);
+    return slot;
+  }
 
   /* ---- POSTFX: offscreen scene target + the full-screen post program ---- */
   const postProg = gl.createProgram();
@@ -1453,6 +1493,109 @@ void main() {
     // PASS 2: the finished art-pixel image as ONE NEAREST-upscaled quad at
     // the current transform's origin (texel row 0 is the scene's bottom).
     setTexture(driveTex);
+    quad(0, 0, w, h, 0, 1, 1, 0, 1, 1, 1, 1);
+  }
+
+  /* ---- BACKDROP (opcode 24): the neon-wave void, one shader pass ----
+     What shows OUTSIDE the level's floor bounds: 2-3 slow overlapping
+     sine-field interference waves in heavily-darkened hot pink / cyan /
+     violet over near-black. DRIVE economics — the shader runs once per ART
+     pixel (px ~6 CSS px) into a tiny NEAREST target, then ONE upscaled
+     opaque quad at the current transform's origin. Normal frame content:
+     when POSTFX is active it lands in the scene FBO like everything else.
+     Deliberately dim — the play area must dominate; peak brightness stays
+     below every floor base tone in src/palette.rs (a void, not a light
+     show). Periods 10 s+ (angular speeds <= ~0.5 rad/s). */
+  const BACKDROP_FS = `
+precision mediump float;
+uniform vec2 uSize;   // rect size, CSS px
+uniform float uTexH;  // render-target height, texels (for the y flip)
+uniform float uT;     // clock, seconds
+uniform float uPx;    // art-pixel size, CSS px
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x, uTexH - gl_FragCoord.y) * uPx;
+  // Aspect-preserving field coordinate (waves keep their shape on resize).
+  vec2 q = p / max(uSize.y, 1.0);
+  // Three slow interference fields (periods ~15-45 s).
+  float a = sin(q.x * 4.1 + uT * 0.23) + sin(q.y * 3.3 - uT * 0.17);
+  float b = sin((q.x + q.y) * 2.6 - uT * 0.13) + sin(q.x * 1.7 - q.y * 2.9 + uT * 0.19);
+  float c = sin(q.x * 5.3 - uT * 0.11) * sin(q.y * 4.7 + uT * 0.29);
+  // Near-black void base + heavily-darkened neon crests (peak channel stays
+  // ~0.07 — below ASPHALT_DARK, the darkest floor base in src/palette.rs).
+  vec3 col = vec3(0.008, 0.005, 0.014);
+  col += vec3(0.042, 0.005, 0.026) * smoothstep(0.9, 1.9, a);   // hot pink
+  col += vec3(0.005, 0.032, 0.040) * smoothstep(0.9, 1.9, b);   // cyan
+  col += vec3(0.016, 0.007, 0.028) * (0.5 + 0.5 * c);           // violet wash
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+  const backdropProg = gl.createProgram();
+  gl.attachShader(backdropProg, compile(gl.VERTEX_SHADER, DRIVE_VS));
+  gl.attachShader(backdropProg, compile(gl.FRAGMENT_SHADER, BACKDROP_FS));
+  gl.linkProgram(backdropProg);
+  if (!gl.getProgramParameter(backdropProg, gl.LINK_STATUS)) {
+    throw new Error("Backdrop program link failed: " + gl.getProgramInfoLog(backdropProg));
+  }
+  const backdropLoc = {
+    aPos: gl.getAttribLocation(backdropProg, "aPos"),
+    uSize: gl.getUniformLocation(backdropProg, "uSize"),
+    uTexH: gl.getUniformLocation(backdropProg, "uTexH"),
+    uT: gl.getUniformLocation(backdropProg, "uT"),
+    uPx: gl.getUniformLocation(backdropProg, "uPx"),
+  };
+  // The backdrop's ART-RESOLUTION render target (ceil(w/px) x ceil(h/px)
+  // texels, NEAREST) — its own texture: the drive's target may be live in
+  // the same frame (`?viz` previews).
+  let backdropTex = null, backdropFbo = null, backdropTW = 0, backdropTH = 0;
+  function ensureBackdropTarget(tw, th) {
+    if (backdropTW === tw && backdropTH === th) return;
+    if (!backdropTex) {
+      backdropTex = gl.createTexture();
+      backdropFbo = gl.createFramebuffer();
+      gl.bindTexture(gl.TEXTURE_2D, backdropTex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, backdropTex);
+    }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tw, th, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, backdropFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, backdropTex, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error("Backdrop framebuffer is incomplete; the game cannot render.");
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    backdropTW = tw;
+    backdropTH = th;
+  }
+  function drawBackdrop(w, h, t, px) {
+    flush();
+    // PASS 1: the waves, one fragment per art pixel, into the tiny target.
+    const tw = Math.ceil(w / px), th = Math.ceil(h / px);
+    ensureBackdropTarget(tw, th);
+    gl.useProgram(backdropProg);
+    gl.disableVertexAttribArray(loc.aUv);
+    gl.disableVertexAttribArray(loc.aColor);
+    gl.bindBuffer(gl.ARRAY_BUFFER, postVbo);
+    gl.enableVertexAttribArray(backdropLoc.aPos);
+    gl.vertexAttribPointer(backdropLoc.aPos, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform2f(backdropLoc.uSize, w, h);
+    gl.uniform1f(backdropLoc.uTexH, th);
+    gl.uniform1f(backdropLoc.uT, t);
+    gl.uniform1f(backdropLoc.uPx, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, backdropFbo);
+    gl.viewport(0, 0, tw, th);
+    gl.disable(gl.BLEND); // the backdrop is opaque
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    if (backdropLoc.aPos !== loc.aPos) gl.disableVertexAttribArray(backdropLoc.aPos);
+    bindBatchState(); // restores target, program, blend, attribs, buffers
+    // PASS 2: the finished art-pixel image as ONE NEAREST-upscaled quad at
+    // the current transform's origin (texel row 0 is the scene's bottom).
+    setTexture(backdropTex);
     quad(0, 0, w, h, 0, 1, 1, 0, 1, 1, 1, 1);
   }
 
@@ -2280,6 +2423,36 @@ void main() {
     vert(x - ex + fx, y - ey + fy, u0, v1, 1, 1, 1, 1);
   }
 
+  // Detached robot head on the floor (the KICK finisher's trophy): the head
+  // + visor cubes face-up at HEAD_ART texels, baked ONCE per colorIdx into
+  // the persistent pixel-sprite cache, then NEAREST-upscaled to sizePx on a
+  // quad ROTATED in 2D by `angle` around its centre — the physics' live
+  // spin glides at native resolution while the pixels stay chunky. World
+  // space (through the transform stack).
+  function drawHead(colorIdx, x, y, angle, sizePx) {
+    const ci = ROBOT_COLORS[colorIdx | 0] ? colorIdx | 0 : 0;
+    const slot = headSlotFor(ci); // bakes on first use
+    setTexture(portraitTex);
+    if (vCount + 6 > MAX_VERTS) flush();
+    const tx = (slot % portraitCols) * FX_TILE;
+    const ty = Math.floor(slot / portraitCols) * FX_TILE;
+    // v flipped: pass 2 renders bottom-up (see drawRobot)
+    const u0 = tx / PORTRAIT_ATLAS_SIZE;
+    const v0 = (ty + HEAD_ART) / PORTRAIT_ATLAS_SIZE;
+    const u1 = (tx + HEAD_ART) / PORTRAIT_ATLAS_SIZE;
+    const v1 = ty / PORTRAIT_ATLAS_SIZE;
+    const h = sizePx / 2;
+    const c = Math.cos(angle), s = Math.sin(angle);
+    const ex = h * c, ey = h * s; // half-extent along the rotated x axis
+    const fx = -h * s, fy = h * c; // half-extent along the rotated y axis
+    vert(x - ex - fx, y - ey - fy, u0, v0, 1, 1, 1, 1);
+    vert(x + ex - fx, y + ey - fy, u1, v0, 1, 1, 1, 1);
+    vert(x + ex + fx, y + ey + fy, u1, v1, 1, 1, 1, 1);
+    vert(x - ex - fx, y - ey - fy, u0, v0, 1, 1, 1, 1);
+    vert(x + ex + fx, y + ey + fy, u1, v1, 1, 1, 1, 1);
+    vert(x - ex + fx, y - ey + fy, u0, v1, 1, 1, 1, 1);
+  }
+
   /* ---- frame execution ---- */
   function frameRender(cmds, textArena) {
     // Perf (?perf): the `walk` span covers the opcode loop + batch building
@@ -2454,6 +2627,14 @@ void main() {
         case 23: // STATIC_REF (key)
           drawStatic(cmds[i]);
           i += 1;
+          break;
+        case 24: // BACKDROP (w h t px)
+          drawBackdrop(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3]);
+          i += 4;
+          break;
+        case 25: // HEAD
+          drawHead(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4]);
+          i += 5;
           break;
         default:
           // Unknown opcode: the stream is corrupt; stop rather than

@@ -473,11 +473,18 @@ impl Fists {
 }
 
 /// The flavour of a finisher, decided by what the player holds when they
-/// trigger it (see `systems::finisher::FinisherSystem`).
+/// trigger it plus a deterministic variety hash (see
+/// `systems::finisher::FinisherSystem::kind_for`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FinisherKind {
     /// Unarmed: drop onto the downed bot and pound — three quick hits.
     Pound,
+    /// Unarmed variant: two quick downward stomps, the second one lethal.
+    Stomp,
+    /// Melee-flavoured variant: KICK the downed bot's head clean off — one
+    /// sweeping kick whose impact decapitates the victim and launches a
+    /// physically-simulated [`DetachedHead`].
+    Kick,
     /// Metal bar (or an empty gun swung like one): one overhead blow.
     Overhead,
     /// A loaded gun: one point-blank shot straight down. Costs a round.
@@ -489,6 +496,8 @@ impl FinisherKind {
     pub fn duration(self) -> f32 {
         match self {
             FinisherKind::Pound => 0.7,
+            FinisherKind::Stomp => 0.45,
+            FinisherKind::Kick => 0.55,
             FinisherKind::Overhead => 0.5,
             FinisherKind::Execute(_) => 0.4,
         }
@@ -499,10 +508,40 @@ impl FinisherKind {
     pub fn impacts(self) -> &'static [f32] {
         match self {
             FinisherKind::Pound => &[0.15, 0.40, 0.65],
+            FinisherKind::Stomp => &[0.14, 0.34],
+            FinisherKind::Kick => &[0.28],
             FinisherKind::Overhead => &[0.35],
             FinisherKind::Execute(_) => &[0.25],
         }
     }
+}
+
+/// Marker on a corpse whose head was kicked off: the renderer draws its
+/// downed sprite with the head cubes skipped (`downed_headless` pose).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Headless;
+
+/// A robot head knocked clean off by the KICK finisher: a small baked pixel
+/// sprite with its own 2D physics — launched along the kick, spinning,
+/// sliding out on friction, bouncing off walls, and finally resting on the
+/// floor as a persistent little corpse detail (see `systems::head`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DetachedHead {
+    /// Robot colour table index (matches `Graphics::draw_robot`).
+    pub color_idx: u32,
+    /// Slide velocity, px/s. Both zero once the head has come to rest.
+    pub vx: f32,
+    pub vy: f32,
+    /// Current 2D sprite angle (radians) — the visible spin.
+    pub spin: f32,
+    /// Spin direction: +1 or -1. The spin RATE is tied to the slide speed
+    /// (a resting head does not spin), this only picks the way it turns.
+    pub spin_dir: f32,
+    /// Spawn order, for the oldest-first ring cap (see `head::MAX_HEADS`).
+    pub seq: u32,
+    /// Where the head detached: the oil splat decal stays here.
+    pub origin_x: f32,
+    pub origin_y: f32,
 }
 
 /// A running finisher, held by the PLAYER while they execute a downed enemy.
@@ -694,8 +733,11 @@ pub enum GameEvent {
     PlayerFired(WeaponType),
     /// The player pulled the trigger on an empty gun.
     DryFire,
-    /// A player attack connected with an enemy.
-    EnemyHit { by: WeaponType },
+    /// A player attack connected with an enemy. `at` is the world-space
+    /// impact point (a bullet's entry point on the bot's rim, a melee blow's
+    /// victim centre) — where the electric spark burst pops
+    /// ([`crate::sparks`]).
+    EnemyHit { by: WeaponType, at: Vec2 },
     /// An enemy's health just reached zero.
     EnemyDown,
     /// The player took damage (and survived the frame or not).

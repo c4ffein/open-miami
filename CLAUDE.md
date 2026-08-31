@@ -156,7 +156,7 @@
   weaponIdx 0 bar/1 pistol/2 machinegun/3 shotgun = robot-core's
   `GROUND_WEAPON_MODELS`): a weapon lying flat as its 3D model
   (`RobotPipeline.renderGun`, top-down, laid on its side), BAKED ONCE per
-  weaponIdx at angle 0 (24-texel art, `GUN_ART`) into the same persistent
+  weaponIdx at angle 0 (32-texel art, `GUN_ART`) into the same persistent
   cache atlas as the portraits (negative Map keys) and drawn as that rigid
   pixel sprite on a quad rotated in 2D by `angle` — equivalent to spinning
   the model, since the top-down ortho camera only sees up-facing normals;
@@ -218,6 +218,40 @@
   the same vertex-shader affine (there the CPU transform is the group's
   world->texel mapping — still affine), one buffer serving both modes. Props, elevators, actors, HUD stay dynamic
   (draw-order safe), and the editor / `?viz` map never records sections
+- Opcode 24 = `BACKDROP w h t px` (`Graphics::backdrop`): the NEON-WAVE
+  VOID behind/outside the level — slow interference waves (periods 10 s+)
+  of heavily-darkened hot pink / cyan / violet over near-black, peak
+  brightness below every floor tone in src/palette.rs (a void, not a light
+  show). DRIVE economics: renderer.js's BACKDROP_FS computes every ART
+  pixel (`px` ~6 CSS px) into its own tiny `ceil(w/px) x ceil(h/px)`
+  NEAREST target, then ONE upscaled opaque quad at the current transform's
+  origin. Drawn FIRST in `render_world`, full-screen in SCREEN space
+  (before the camera / the `?pixel=N` scenery group — both modes, and the
+  kill-flash bypass frames too); the floor tiles (clipped to the floor's
+  rect by `Level::set_size`) + walls paint over it, so it only shows
+  outside the level. Normal frame content under POSTFX (it lands in the
+  scene FBO like everything else)
+- Opcode 25 = `HEAD colorIdx x y angle sizePx` (`Graphics::draw_head`): a
+  DETACHED ROBOT HEAD lying face-up on the floor — the KICK finisher's
+  trophy. Baked ONCE per colour through `RobotPipeline.renderHead` (the head
+  + visor cubes only, true top-down, tipped ~0.4 rad so the visor band and
+  crown both read, 16-texel art `HEAD_ART`) into the same persistent cache
+  atlas as portraits/guns (Map keys `-10 - colorIdx`) and drawn as that
+  rigid pixel sprite on a quad ROTATED in 2D by `angle` — the physics' live
+  spin glides at native res, actor-layer (after the `?pixel=N` group
+  closes). The sim side is `src/systems/head.rs` (host-tested): the KICK
+  finisher's impact decapitates its victim — the corpse gets `Headless`
+  (rendered as robot-core pose `downed_headless`, head cubes collapsed) and
+  a `DetachedHead` launches along the kick (deterministic jitter/spin from
+  a hash seed), mirrors the thrown-weapon/knockback physics (friction
+  slide to rest, damped wall bounces, sub-stepped vs walls), then persists
+  as a corpse detail under a `MAX_HEADS` oldest-first ring cap; lib.rs
+  draws an oil splat + drip trail at the detach point. FINISHER VARIETY:
+  `FinisherSystem::kind_for(weapon, seed)` picks per victim by a
+  deterministic hash — unarmed = POUND / STOMP (two-hit quick stomp) /
+  KICK, bar or empty gun = OVERHEAD / KICK, loaded gun always EXECUTE; the
+  player poses `kick` / `stomp` in robot-core's `posePlan` run on the
+  finisher's own timer (choreographed to `FinisherKind::impacts`)
 - The command opcode tables in src/graphics.rs (`mod op`), renderer.js
   (incl. its `OP_ARGS` arity table used by the POSTFX pre-scan) and
   tests/e2e/specs/helpers.js (`OP_ARGS`) must stay in sync (ops 21-23's
@@ -245,7 +279,9 @@
   preview, the LAYERS list under the preview has per layer an eye (hide in
   the preview), S (solo) and a BEFORE / AFTER pixel-mode toggle, SAVE PUTs
   `props/props.json` via `window.vizSaveProps` (index.html; token prompt +
-  result toast) — then run `make gen-props`), MUSICS (tracker + SFX),
+  result toast) — then run `make gen-props`), MUSICS (two pages,
+  TRACKER / SOUNDS buttons like SPRITES': TRACKER — songs + the live
+  step-sequencer — and SOUNDS — the one-shot SFX board),
   LEVELS (the NATIVE level editor, see below), EFFECTS (previews
   every POSTFX shader kind + the 2D shoggoth glitch)
 - `/?floor=N` starts the game directly on floor id N (0 = the gate / parking lot cold open, 14 = 13½); music starts on the first key/click. Add `&pixel=N` (N ≥ 2 WORLD units per art pixel, no gameplay change) to rasterize the SCENERY of `update_game` (floor, walls, props, elevators) at art resolution the vibe's way: the group's texel grid is WORLD-ANCHORED (its origin snaps to whole art pixels of the world, so panning never re-phases the texels) with a bleed margin, only `translate(-focus)`-style placement lands inside the group, and the camera's composite half (`Camera::apply_composite`: centre + drift + roll + zoom) sits OUTSIDE it — the sway moves/rotates the finished pixel image at native res through the sub-pixel composite (`pixel_begin_smooth`: no origin snap — gliding motion, NEAREST sampling, hard aliased edges per the art direction). The MOVING actors (robots, boss, bullets, weapons, gate arrow) draw AFTER the group closes, straight under the camera transform: they are already baked pixel sprites and must MOVE SMOOTHLY at native resolution — re-quantizing them onto the world grid makes a walking robot hop world-texel by world-texel and the whole scene FEEL snapped even though the backdrop glides. HUD/comms stay crisp (`pixel_world` in GameState); the static geometry cache stays active inside the group. Add `&noise=0` to turn the TV-static film grain off (title + in-game — the clean-image A/B switch). ALL url params: `docs/URL_PARAMS.md`. Add `&debug` (`/?floor=14&debug`) to enable the debug tooling: with debug overlays on (I), **K** purges all rogues (incl. the boss; debug/e2e helper) and **B** cracks the boss's mask (drops it to the enrage threshold so the live mask-off / raw form can be previewed)

@@ -22,8 +22,9 @@ test.describe('Open Miami - Level Completion', () => {
     await loadFloor(page, 1);
     const texts = await lastFrameTexts(page);
 
-    // The in-game HUD, not the title/level-select screen.
-    expect(texts).toEqual(expect.arrayContaining(['HEALTH:', 'WEAPON:', 'ROGUES:']));
+    // The in-game HUD, not the title/level-select screen. (The held weapon
+    // lives in the sliding bottom-left ammo box now, not a WEAPON: line.)
+    expect(texts).toEqual(expect.arrayContaining(['HEALTH:', 'ROGUES:']));
     expect(Number(hudValue(texts, 'HEALTH:'))).toBeGreaterThan(0);
     expect(Number(hudValue(texts, 'ROGUES:'))).toBeGreaterThan(0);
     // Floor 1's objective names its exit.

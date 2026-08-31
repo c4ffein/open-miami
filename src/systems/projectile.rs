@@ -125,8 +125,23 @@ impl System for BulletSystem {
                         health.take_damage(bullet.damage);
                         killed = health.is_dead();
                     }
+                    // Impact point for the spark burst: the bot's rim facing
+                    // the incoming round (falls back to the centre if the
+                    // round spawned inside the bot).
+                    let dx = bullet_pos.x - enemy_pos.x;
+                    let dy = bullet_pos.y - enemy_pos.y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    let at = if dist > 1e-3 {
+                        crate::math::Vec2::new(
+                            enemy_pos.x + dx / dist * enemy_radius.value,
+                            enemy_pos.y + dy / dist * enemy_radius.value,
+                        )
+                    } else {
+                        crate::math::Vec2::new(enemy_pos.x, enemy_pos.y)
+                    };
                     world.push_event(GameEvent::EnemyHit {
                         by: bullet.weapon_type,
+                        at,
                     });
                     // Shove the enemy along the bullet's travel direction — the
                     // live combat knockback (process_shoot is test-only; real
@@ -239,12 +254,16 @@ mod tests {
         }
         assert!(world.query::<Bullet>().is_empty(), "bullet consumed on hit");
         assert_eq!(world.get_component::<Health>(enemy).unwrap().current, 70);
-        assert_eq!(
-            world.drain_events(),
-            vec![GameEvent::EnemyHit {
-                by: WeaponType::Shotgun
-            }]
-        );
+        let events = world.drain_events();
+        assert_eq!(events.len(), 1);
+        let GameEvent::EnemyHit { by, at } = events[0] else {
+            panic!("expected EnemyHit, got {:?}", events[0]);
+        };
+        assert_eq!(by, WeaponType::Shotgun);
+        // The impact point sits on the bot's rim, facing the shooter (-x).
+        let d = crate::math::Vec2::new(at.x - 50.0, at.y);
+        assert!((d.length() - 12.0).abs() < 0.01, "on the rim: {at:?}");
+        assert!(at.x < 50.0, "facing the incoming round: {at:?}");
     }
 
     #[test]

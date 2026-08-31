@@ -50,7 +50,8 @@ export const PALETTES = {
   violet:  {body:[0.55,0.35,0.90], accent:[0.75,0.60,1.0], trim:[0.18,0.12,0.34]},
 };
 
-export const POSES = ["idle", "walk", "shoot", "hit", "downed"];
+export const POSES = ["idle", "walk", "shoot", "hit", "downed",
+                      "downed_headless", "kick", "stomp"];
 
 /* ---------- weapons ----------
    Box-built weapon models in the same style as the robot. Each model is a small
@@ -67,10 +68,15 @@ export const POSES = ["idle", "walk", "shoot", "hit", "downed"];
    "fist" is the bare-hand / no-weapon case: no boxes, arm stays in its pose. */
 export const WEAPONS = ["fist", "pistol", "machinegun", "shotgun"];
 
-// Lightened for the true straight-down bake: dark gunmetal vanished against the
-// near-black floor, so weapons now read as a clear steel silhouette from above.
-const GUN_METAL = [0.44, 0.46, 0.52]; // body
-const GUN_DARK  = [0.24, 0.25, 0.30]; // grip / mag / dark parts
+// Gun palette — four fixed tones picked to SURVIVE the ground bake's color
+// path (mix 0.28 toward GROUND_ACCENT for up-facing normals, then 4-level
+// posterize): each lands on a distinct quantized tone from straight above,
+// so slide/frame/grip/wood separation stays readable on the tiny ground art
+// even with interior ink disabled. Metallic + muted, per the art direction.
+const GUN_METAL = [0.44, 0.46, 0.52]; // receiver / frame steel  (-> 0.50 grey)
+const GUN_LIGHT = [0.62, 0.65, 0.72]; // slide top / bright steel (-> 0.75 grey)
+const GUN_DARK  = [0.13, 0.14, 0.17]; // grip / mag / barrel darks (-> 0.25 grey)
+const GUN_WOOD  = [0.42, 0.20, 0.12]; // shotgun furniture       (-> warm brown)
 
 /* Ground models: the weapons as they lie on the floor (pickups / thrown
    weapons), indexed to match the Rust WeaponType mapping used by the
@@ -80,30 +86,57 @@ const GUN_DARK  = [0.24, 0.25, 0.30]; // grip / mag / dark parts
    the local +Y shift that centres each model on its midpoint so a resting /
    spinning weapon rotates around its own centre. */
 const BAR_MODEL = [
-  {t:[0,-0.02, 0.0], s:[0.13,1.10,0.13], c:GUN_METAL, id:0.90}, // the bar itself
-  {t:[0, 0.42, 0.0], s:[0.17,0.26,0.17], c:GUN_DARK,  id:0.88}, // taped grip
-  {t:[0,-0.53, 0.0], s:[0.15,0.12,0.15], c:"accent",  id:0.98}, // scuffed tip
+  {t:[0,-0.02, 0.0], s:[0.11,1.10,0.11], c:GUN_METAL, id:0.90}, // the bar itself
+  {t:[0, 0.40, 0.0], s:[0.16,0.26,0.16], c:GUN_DARK,  id:0.88}, // taped grip wrap
+  {t:[0, 0.25, 0.0], s:[0.14,0.05,0.14], c:GUN_LIGHT, id:0.87}, // wrap band (grip edge)
+  {t:[0, 0.55, 0.0], s:[0.14,0.06,0.14], c:GUN_LIGHT, id:0.87}, // pommel end cap
+  {t:[0,-0.545,0.0], s:[0.15,0.10,0.15], c:"accent",  id:0.98}, // scuffed strike tip
 ];
 
+/* Model frame conventions (gun-hand local): -Y = forward (muzzle), +Y = rear
+   (grip / stock, up the arm), +Z = the gun's top (sights), -Z = down (grip,
+   magazine), X = thickness. On the ground the model lies on its side, so the
+   Y x Z side profile faces the camera and boxes with a LARGER X extent win
+   the depth test over the base parts they overlap (serrations, ports, pump). */
 export const WEAPON_MODELS = {
   fist: [],
   pistol: [
-    {t:[0,-0.05, 0.04], s:[0.19,0.34,0.17], c:GUN_METAL, id:0.90}, // slide / body
-    {t:[0,-0.26, 0.04], s:[0.10,0.15,0.11], c:"accent",  id:0.98}, // muzzle glow
-    {t:[0, 0.11,-0.12], s:[0.12,0.22,0.16], c:GUN_DARK,  id:0.88}, // grip (hangs down/back)
+    {t:[0,-0.05,  0.02 ], s:[0.15, 0.40, 0.08 ], c:GUN_METAL, id:0.90}, // frame
+    {t:[0,-0.09,  0.09 ], s:[0.16, 0.44, 0.085], c:GUN_LIGHT, id:0.91}, // slide (rides on top)
+    {t:[0, 0.085, 0.095], s:[0.175,0.07, 0.08 ], c:GUN_DARK,  id:0.89}, // rear slide serrations
+    {t:[0,-0.04,  0.105], s:[0.175,0.10, 0.05 ], c:GUN_DARK,  id:0.89}, // ejection port
+    {t:[0,-0.27,  0.145], s:[0.18, 0.04, 0.04 ], c:GUN_DARK,  id:0.88}, // front sight nub
+    {t:[0,-0.35,  0.09 ], s:[0.18, 0.07, 0.06 ], c:"accent",  id:0.98}, // muzzle (protrudes past the slide)
+    {t:[0, 0.13, -0.07 ], s:[0.13, 0.12, 0.12 ], c:GUN_DARK,  id:0.88}, // grip upper
+    {t:[0, 0.175,-0.165], s:[0.13, 0.12, 0.10 ], c:GUN_DARK,  id:0.88}, // grip lower (raked back)
+    {t:[0, 0.20, -0.235], s:[0.145,0.12, 0.04 ], c:GUN_LIGHT, id:0.87}, // grip base plate
+    {t:[0,-0.10, -0.095], s:[0.045,0.03, 0.15 ], c:GUN_DARK,  id:0.86}, // trigger guard front
+    {t:[0,-0.02, -0.16 ], s:[0.045,0.19, 0.03 ], c:GUN_DARK,  id:0.86}, // trigger guard bottom
   ],
   machinegun: [
-    {t:[0,-0.12, 0.04], s:[0.21,0.64,0.18], c:GUN_METAL, id:0.90}, // long receiver + barrel
-    {t:[0,-0.49, 0.04], s:[0.09,0.16,0.10], c:"accent",  id:0.98}, // muzzle glow
-    {t:[0, 0.05,-0.16], s:[0.14,0.26,0.21], c:GUN_DARK,  id:0.87}, // magazine (hangs down)
-    {t:[0, 0.13,-0.09], s:[0.11,0.18,0.15], c:GUN_DARK,  id:0.88}, // grip
-    {t:[0,-0.30, 0.15], s:[0.09,0.42,0.06], c:GUN_DARK,  id:0.86}, // top rail
+    {t:[0, 0.03,  0.02 ], s:[0.16, 0.44, 0.13 ], c:GUN_METAL, id:0.90}, // receiver
+    {t:[0,-0.34,  0.02 ], s:[0.14, 0.30, 0.10 ], c:GUN_DARK,  id:0.89}, // handguard (darker, slimmer)
+    {t:[0,-0.55,  0.035], s:[0.065,0.14, 0.055], c:GUN_DARK,  id:0.88}, // protruding barrel
+    {t:[0,-0.645, 0.035], s:[0.085,0.06, 0.075], c:"accent",  id:0.98}, // muzzle device
+    {t:[0,-0.005,-0.13 ], s:[0.11, 0.13, 0.11 ], c:GUN_DARK,  id:0.87}, // magazine (at the well)
+    {t:[0,-0.035,-0.215], s:[0.11, 0.12, 0.09 ], c:GUN_DARK,  id:0.87}, // magazine (tips forward)
+    {t:[0,-0.075,-0.285], s:[0.11, 0.11, 0.07 ], c:GUN_DARK,  id:0.87}, // magazine toe (the curve)
+    {t:[0, 0.185,-0.135], s:[0.10, 0.10, 0.13 ], c:GUN_DARK,  id:0.88}, // pistol grip
+    {t:[0, 0.355,-0.05 ], s:[0.11, 0.25, 0.10 ], c:GUN_METAL, id:0.89}, // stock (dropped a touch)
+    {t:[0, 0.505,-0.05 ], s:[0.13, 0.05, 0.14 ], c:GUN_DARK,  id:0.88}, // butt pad
+    {t:[0,-0.455, 0.115], s:[0.05, 0.035,0.075], c:GUN_DARK,  id:0.86}, // front sight post
+    {t:[0, 0.145, 0.105], s:[0.06, 0.05, 0.045], c:GUN_DARK,  id:0.86}, // rear sight
   ],
   shotgun: [
-    {t:[0,-0.16, 0.06], s:[0.22,0.60,0.15], c:GUN_METAL, id:0.90}, // upper barrel
-    {t:[0,-0.12,-0.07], s:[0.22,0.44,0.14], c:GUN_DARK,  id:0.89}, // pump / forestock
-    {t:[0,-0.44, 0.06], s:[0.12,0.16,0.12], c:"accent",  id:0.98}, // muzzle glow
-    {t:[0, 0.12,-0.11], s:[0.12,0.24,0.17], c:GUN_DARK,  id:0.88}, // grip / stock
+    {t:[0, 0.10,  0.03 ], s:[0.16, 0.30, 0.15 ], c:GUN_METAL, id:0.90}, // receiver
+    {t:[0,-0.32,  0.10 ], s:[0.12, 0.58, 0.07 ], c:GUN_METAL, id:0.89}, // long barrel (on top; steel so
+    //   the held top-down view keeps a bright stick, like the legacy model)
+    {t:[0,-0.28, -0.01 ], s:[0.07, 0.46, 0.05 ], c:GUN_DARK,  id:0.88}, // magazine tube under it
+    {t:[0,-0.30, -0.02 ], s:[0.17, 0.18, 0.10 ], c:GUN_WOOD,  id:0.87}, // pump handle
+    {t:[0, 0.33, -0.06 ], s:[0.13, 0.26, 0.13 ], c:GUN_WOOD,  id:0.88}, // shoulder stock (dropped)
+    {t:[0, 0.475,-0.065], s:[0.145,0.05, 0.13 ], c:GUN_DARK,  id:0.87}, // butt pad
+    {t:[0,-0.575, 0.155], s:[0.05, 0.03, 0.04 ], c:GUN_LIGHT, id:0.86}, // bead sight
+    {t:[0,-0.645, 0.10 ], s:[0.10, 0.05, 0.08 ], c:"accent",  id:0.98}, // muzzle glow
   ],
 };
 
@@ -115,7 +148,7 @@ export const GROUND_WEAPON_MODELS = [
 ];
 // Local +Y shift that centres each ground model (the guns' mass sits toward
 // the muzzle in the gun-hand frame).
-const GROUND_WEAPON_CENTER = [0.0, 0.06, 0.20, 0.14];
+const GROUND_WEAPON_CENTER = [0.01, 0.06, 0.07, 0.085];
 // Muzzle-glow accent used for weapons on the ground (no owner to tint them).
 const GROUND_ACCENT = [1.0, 0.75, 0.55];
 
@@ -185,13 +218,13 @@ function norm(a){const l=Math.hypot(a[0],a[1],a[2])||1;return [a[0]/l,a[1]/l,a[2
    per-vertex part index selects the part's pose matrix out of a mat4 uniform
    array, and per-vertex selectors pick the body/accent colors out of a small
    color table — so a robot is ONE drawArrays (two when armed: body + weapon)
-   instead of one call per box. Uniform budget: 20 mat4 (80 vec4) + uVP (4) +
-   6 vec3 colors (6) = 90 vec4, well inside the WebGL1 minimum of 128.
+   instead of one call per box. Uniform budget: 27 mat4 (108 vec4) + uVP (4) +
+   8 vec3 colors (8) = 120 vec4, inside the WebGL1 minimum of 128.
    Lighting / part-id-in-alpha are EXACTLY the legacy per-part shader: the
    normal is transformed by the pose matrix's upper-left 3x3 (what
    M4.normalFromModel produced) and the color math is unchanged, the values
    just arrive through varyings (constant across a part) instead of uniforms. */
-const PALETTE_PARTS = 20; // 15 body slots (incl. the bare-hand barrel) + 5 weapon boxes
+const PALETTE_PARTS = 27; // 15 body slots (incl. the bare-hand barrel) + 12 weapon boxes
 const WEAPON_SLOT0 = 15; // palette slot of a held weapon's first box
 const sceneVS = `
 attribute vec3 aPos;
@@ -199,7 +232,7 @@ attribute vec3 aNormal;
 attribute vec4 aExtra;  // x part/palette index, y color sel, z accent sel, w part id
 uniform mat4 uVP;
 uniform mat4 uPart[${PALETTE_PARTS}];
-uniform vec3 uColors[6];
+uniform vec3 uColors[8];
 varying vec3 vN;
 varying vec3 vColor;
 varying vec3 vAccent;
@@ -325,8 +358,10 @@ function makeCube(){
      then the held weapon models (palette slots 15+), then the ground weapon
      models (palette slots 0+; their own color/id tags — see renderGun).
    Color selectors index the per-render uColors table:
-     0 pal.body  1 pal.accent  2 pal.trim  3 GUN_METAL  4 GUN_DARK  5 GROUND_ACCENT */
-const COL_BODY=0, COL_ACCENT=1, COL_TRIM=2, COL_METAL=3, COL_DARK=4, COL_GROUND=5;
+     0 pal.body  1 pal.accent  2 pal.trim  3 GUN_METAL  4 GUN_DARK
+     5 GROUND_ACCENT  6 GUN_LIGHT  7 GUN_WOOD */
+const COL_BODY=0, COL_ACCENT=1, COL_TRIM=2, COL_METAL=3, COL_DARK=4, COL_GROUND=5,
+      COL_LIGHT=6, COL_WOOD=7;
 // (colorSel, accentSel, id) per body palette slot — the exact colors/ids the
 // legacy _drawPart calls passed (ids: 0.4/0.45/0.5 +- 0.32 legs, 0.6/0.65
 // +- 0.62 arms; the clamping of -0.02 / 1.2x to the 8-bit alpha range is
@@ -362,13 +397,20 @@ function buildMergedMesh(){
     cubes++;
   }
   const weaponColSel = (c, accentSel) =>
-    c === "accent" ? accentSel : (c === GUN_METAL ? COL_METAL : COL_DARK);
+    c === "accent" ? accentSel :
+    c === GUN_METAL ? COL_METAL :
+    c === GUN_LIGHT ? COL_LIGHT :
+    c === GUN_WOOD  ? COL_WOOD  : COL_DARK;
   BODY_PART_TAGS.forEach(([colSel, accSel, id], slot) => addCube(slot, colSel, accSel, id));
   const held = {};
   for(const w of ["pistol", "machinegun", "shotgun"]){
     const first = cubes * cube.count;
+    // One shared id (0.9) for the whole weapon, like the ground bake: the
+    // detailed models are a dozen small boxes, and per-box ids would ink
+    // every texel of the tiny held art black. The weapon still outlines
+    // against the arm/body (different ids); interior read = color separation.
     WEAPON_MODELS[w].forEach((b, j) =>
-      addCube(WEAPON_SLOT0 + j, weaponColSel(b.c, COL_ACCENT), COL_ACCENT, b.id));
+      addCube(WEAPON_SLOT0 + j, weaponColSel(b.c, COL_ACCENT), COL_ACCENT, 0.9));
     held[w] = {first, count: cubes*cube.count - first};
   }
   const ground = GROUND_WEAPON_MODELS.map((model) => {
@@ -414,6 +456,7 @@ function posePlan(pose, time, relaxed){
   const walkPhase = time*2.0*Math.PI;
   const swing  = Math.sin(walkPhase)*0.6;
   const swing2 = Math.sin(walkPhase+Math.PI)*0.6;
+  const ss = (v)=>{ v = Math.min(Math.max(v, 0), 1); return v*v*(3-2*v); };
 
   // defaults (a neutral standing rig)
   const P = {
@@ -475,6 +518,7 @@ function posePlan(pose, time, relaxed){
       break;
     }
 
+    case "downed_headless": // a KICK victim: same sprawl, head cubes skipped
     case "downed": {
       // knocked flat on its back, limbs askew. `time` is seconds since the
       // knockdown landed: the first ~0.25s eases from upright to sprawled
@@ -491,6 +535,44 @@ function posePlan(pose, time, relaxed){
       P.legA  = 0.55*e; P.legB = -0.38*e;   // legs splayed
       P.armLp = -0.45*e; P.armRp = 0.35*e;  // arms askew...
       P.armRaise = 1.25*e;                  // ...flung up past the head
+      P.headless = (pose === "downed_headless");
+      break;
+    }
+
+    case "kick": {
+      // The head-kick finisher. `time` is seconds into the finisher (the
+      // impact lands at ~0.28s, see FinisherKind::Kick): the kicking leg
+      // cocks back, sweeps through horizontally at the impact, then eases
+      // back down while the body leans back off the kick for balance.
+      const t = Math.max(time, 0);
+      const wind   = ss(t/0.16);            // cock the leg back...
+      const sweep  = ss((t-0.16)/0.12);     // ...sweep it clean through
+      const settle = ss((t-0.36)/0.19);     // ...and put it back down
+      const k = 1 - settle*0.85;
+      P.legA  = 0.14;                       // support leg planted
+      P.legB  = (0.60*wind - 2.20*sweep)*k; // windup -> full forward extension
+      P.lean  = (0.14*wind + 0.38*sweep)*k; // torso leans back off the kick
+      P.bob   = -0.05*sweep*k;
+      P.armLp = -0.70*sweep*k;              // arms scissor for balance:
+      P.armRp = 0.55*sweep*k;               // left forward, right back
+      P.armOut = 0.16; P.elbow = 0.20;
+      break;
+    }
+
+    case "stomp": {
+      // The two-hit quick stomp finisher. `time` is seconds into it: the
+      // stomping knee jerks up ahead of each scheduled impact (0.14s and
+      // 0.34s, see FinisherKind::Stomp) and slams down ON it.
+      const t = Math.max(time, 0);
+      const pulse = (ti)=>
+        Math.max(0, ss((t-(ti-0.13))/0.085) - ss((t-(ti-0.045))/0.045));
+      const lift = Math.max(pulse(0.14), pulse(0.34));
+      P.legA  = 0.10;                       // support leg planted
+      P.legB  = -1.05*lift;                 // stomping knee hiked up forward
+      P.lean  = -0.10*lift;                 // slight crouch over the body
+      P.bob   = 0.05*lift - 0.02;
+      P.armRaise = 0.35*lift;               // arms pump with each stomp
+      P.armLp = 0.25; P.armRp = 0.25;
       break;
     }
 
@@ -672,10 +754,12 @@ class RobotPipeline extends SpritePipeline {
     this.groundRanges = mesh.ground;            // weaponIdx  -> {first, count}
     this.palette = new Float32Array(PALETTE_PARTS * 16); // the mat4 uniform array
     // uColors: [body, accent, trim] filled per render; the fixed tail never changes
-    this.colorTable = new Float32Array(18);
+    this.colorTable = new Float32Array(24);
     this.colorTable.set(GUN_METAL, COL_METAL * 3);
     this.colorTable.set(GUN_DARK, COL_DARK * 3);
     this.colorTable.set(GROUND_ACCENT, COL_GROUND * 3);
+    this.colorTable.set(GUN_LIGHT, COL_LIGHT * 3);
+    this.colorTable.set(GUN_WOOD, COL_WOOD * 3);
   }
 
   // Bind the merged skinned mesh (interleaved pos3/nrm3/extra4, 40-byte stride).
@@ -718,6 +802,12 @@ class RobotPipeline extends SpritePipeline {
     P.set(part(root, 0,1.95,0.02, 0,0,0, 0.62,0.55,0.55).draw, 1*S);
     P.set(part(root, 0,1.98,0.28, 0,0,0, 0.5,0.16,0.08).draw, 2*S);
     P.set(part(root, 0,0.72,0, 0,0,0, 0.8,0.3,0.5).draw, 3*S);
+    if(plan.headless){
+      // decapitated (the "downed_headless" pose): collapse the head + visor
+      // cubes to zero — degenerate triangles rasterize nothing, so the one
+      // merged draw below stays a single call.
+      P.fill(0, 1*S, 3*S);
+    }
 
     // legs (pivot at hip, swing around X so they step fwd/back along Z)
     function leg(sideX, ph, slot){
@@ -867,6 +957,50 @@ class RobotPipeline extends SpritePipeline {
     // luma-ink threshold out of reach and disable the id-boundary ink; only
     // the outer silhouette ring survives, which keeps the weapon readable on
     // any floor without eating its fill.
+    const prevEdge = this.edge;
+    this.edge = 9.0;
+    this._postPass(target, opts.px, !!opts.transparent, 0.0);
+    this.edge = prevEdge;
+  }
+
+  /* render one DETACHED HEAD lying on the ground (a KICK finisher trophy):
+     the head + visor cubes only, seen by the same true top-down camera as
+     the robots, laid FACE-UP so the camera sees the visor — a decapitated
+     head staring at the ceiling. Baked once per colour at angle 0 (the
+     caller's cache) and spun as a 2D quad, exactly like the ground guns:
+     under the straight-down ortho the two are equivalent.
+     opts: {color|pal, px, transparent, halfV}
+     target: see SpritePipeline._postPass. */
+  renderHead(opts, target){
+    const gl=this.gl;
+    const pal = opts.pal || PALETTES[(opts.color||"coral")] || PALETTES.coral;
+
+    this._beginScene();
+    const VP = topDownVP(opts.halfV || 0.55);
+    gl.useProgram(this.sceneProg);
+    this._bindMesh();
+
+    // Ground frame: lift the head centre to the camera's focus height and
+    // pitch the face (local +Z, the visor side) up toward world +Y — tipped
+    // ~0.4 rad short of straight up, so the camera sees the visor band AND
+    // a sliver of the head's crown (the tilt is what makes it read as a
+    // decapitated head staring at the ceiling, not a plain box). Cube
+    // offsets/scales are the body rig's own head (slot 1) and visor strip
+    // (slot 2) values, re-anchored at the head; the visor is nudged a bit
+    // proud of the face so it always wins the depth test in the bake.
+    const base = M4.mul(M4.translate(0,0.9,0), M4.rotX(-Math.PI/2 + 0.4));
+    const P=this.palette;
+    P.set(M4.mul(base, M4.scale(0.62,0.55,0.55)), 1*16);
+    P.set(M4.mul(base, M4.mul(M4.translate(0,0.03,0.29), M4.scale(0.5,0.16,0.12))), 2*16);
+    this.colorTable.set(pal.body, COL_BODY*3);
+    this.colorTable.set(pal.accent, COL_ACCENT*3);
+    this.colorTable.set(pal.trim, COL_TRIM*3);
+    this._uploadUniforms(VP, 3);
+    // the head + visor cubes sit contiguously after the torso in the buffer
+    gl.drawArrays(gl.TRIANGLES, this.cubeVerts, this.cubeVerts*2);
+    this._unbindMesh();
+
+    // Tiny art: silhouette-only ink, like the ground guns.
     const prevEdge = this.edge;
     this.edge = 9.0;
     this._postPass(target, opts.px, !!opts.transparent, 0.0);

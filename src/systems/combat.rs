@@ -238,6 +238,7 @@ impl CombatSystem {
                     hit_any = true;
                     world.push_event(GameEvent::EnemyHit {
                         by: WeaponType::Melee,
+                        at: crate::math::Vec2::new(enemy_pos.x, enemy_pos.y),
                     });
                     world.push_event(GameEvent::StrikeLanded);
                 }
@@ -295,6 +296,7 @@ impl CombatSystem {
                     hit_any = true;
                     world.push_event(GameEvent::EnemyHit {
                         by: WeaponType::Melee,
+                        at: crate::math::Vec2::new(enemy_pos.x, enemy_pos.y),
                     });
                     world.push_event(GameEvent::PunchLanded);
                 }
@@ -538,11 +540,13 @@ mod tests {
             world.drain_events(),
             vec![
                 GameEvent::EnemyHit {
-                    by: WeaponType::Melee
+                    by: WeaponType::Melee,
+                    at: crate::math::Vec2::new(30.0, 0.0),
                 },
                 GameEvent::StrikeLanded,
                 GameEvent::EnemyHit {
-                    by: WeaponType::Melee
+                    by: WeaponType::Melee,
+                    at: crate::math::Vec2::new(40.0, 0.0),
                 },
                 GameEvent::StrikeLanded,
             ]

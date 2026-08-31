@@ -4,11 +4,21 @@
 //! [`FinisherSystem::try_start`] begins a finisher instead of a normal attack:
 //! a [`Finisher`] component lands on the player, locking their movement and
 //! fire for its duration (the input layer checks [`FinisherSystem::active`]).
-//! The flavour depends on what the player holds ([`FinisherSystem::kind_for`]):
+//! The flavour depends on what the player holds plus a deterministic variety
+//! hash ([`FinisherSystem::kind_for`]) so ground kills don't all look alike:
 //!
-//! * unarmed — POUND: drop onto the bot and hammer it, three quick hits;
-//! * metal bar (or an empty gun swung like one) — OVERHEAD: one heavy blow;
+//! * unarmed — a hash-picked one of POUND (drop onto the bot and hammer it,
+//!   three quick hits), STOMP (two quick downward stomps) or KICK (punt the
+//!   downed bot's head clean off — see below);
+//! * metal bar (or an empty gun swung like one) — OVERHEAD: one heavy blow,
+//!   or sometimes the KICK;
 //! * loaded gun — EXECUTE: one point-blank shot straight down (costs a round).
+//!
+//! The KICK's impact DECAPITATES the victim: the corpse gets the
+//! [`Headless`] marker (rendered as the headless downed pose) and a
+//! [`DetachedHead`] entity launches along the kick with full 2D physics —
+//! spin, friction slide, wall bounces — then rests on the floor as a
+//! persistent corpse detail (see `systems::head`).
 //!
 //! The system then ticks the animation: at every scheduled impact the victim
 //! is shoved and an [`GameEvent::EnemyHit`] rings out (the existing per-weapon
@@ -19,11 +29,14 @@
 //! outright, so it can never be finished either.
 
 use crate::components::{
-    Boss, Enemy, Finisher, FinisherKind, GameEvent, Health, Player, Position, Rotation, Stunned,
-    Velocity, Weapon, WeaponType,
+    Boss, Enemy, Finisher, FinisherKind, GameEvent, Headless, Health, Player, Position, Rotation,
+    Stunned, Velocity, Weapon, WeaponType, AI,
 };
+use crate::drive::hash01;
 use crate::ecs::{Entity, System, World};
+use crate::math::Vec2;
 use crate::systems::combat::CombatSystem;
+use crate::systems::head;
 
 /// How close (px, centre to centre) the player must be to a downed enemy to
 /// finish it: player radius 15 + enemy radius 12 + a hand's reach of slack —
@@ -42,14 +55,34 @@ const PIN_MARGIN: f32 = 0.25;
 pub struct FinisherSystem;
 
 impl FinisherSystem {
-    /// The finisher flavour for what the player currently holds.
-    pub fn kind_for(weapon: Option<&Weapon>) -> FinisherKind {
+    /// The deterministic variety seed for finishing this victim where it
+    /// lies: the victim's id mixed with its (coarse) position, so the same
+    /// bot downed in the same spot always gets the same finisher, while
+    /// different victims / different fights vary.
+    pub fn variant_seed(victim: Entity, pos: Position) -> u32 {
+        (victim.0 as u32)
+            .wrapping_mul(0x9E37_79B9)
+            .wrapping_add(((pos.x * 0.1) as i32 as u32).wrapping_mul(31))
+            .wrapping_add(((pos.y * 0.1) as i32 as u32).wrapping_mul(131))
+    }
+
+    /// The finisher flavour for what the player currently holds, varied by a
+    /// deterministic hash `seed` (see [`Self::variant_seed`]) so ground kills
+    /// rotate through the pool instead of always playing the same animation.
+    pub fn kind_for(weapon: Option<&Weapon>, seed: u32) -> FinisherKind {
+        let roll = hash01(seed, 0xF1A5);
         match weapon {
-            None => FinisherKind::Pound,
-            Some(w) if w.weapon_type.is_melee() => FinisherKind::Overhead,
-            Some(w) if w.ammo > 0 => FinisherKind::Execute(w.weapon_type),
-            // An empty gun has nothing to fire point-blank: swing it instead.
-            Some(_) => FinisherKind::Overhead,
+            // Unarmed pool: pound / two-hit stomp / head-kick.
+            None if roll < 0.40 => FinisherKind::Pound,
+            None if roll < 0.70 => FinisherKind::Stomp,
+            None => FinisherKind::Kick,
+            Some(w) if w.ammo > 0 && !w.weapon_type.is_melee() => {
+                FinisherKind::Execute(w.weapon_type)
+            }
+            // Melee bar / empty gun pool: the overhead blow, sometimes the
+            // kick instead (hands are full, the leg is not).
+            Some(_) if roll < 0.65 => FinisherKind::Overhead,
+            Some(_) => FinisherKind::Kick,
         }
     }
 
@@ -120,7 +153,8 @@ impl FinisherSystem {
             (1.0, 0.0)
         };
 
-        let kind = Self::kind_for(world.get_component::<Weapon>(player));
+        let seed = Self::variant_seed(victim, victim_pos);
+        let kind = Self::kind_for(world.get_component::<Weapon>(player), seed);
 
         // Face the victim and stop dead for the whole animation.
         if let Some(rot) = world.get_component_mut::<Rotation>(player) {
@@ -130,9 +164,10 @@ impl FinisherSystem {
             vel.x = 0.0;
             vel.y = 0.0;
         }
-        // The bar (or the empty gun used as one) goes up with a swing whoosh;
-        // pound and execute make their noise at the impact itself.
-        if kind == FinisherKind::Overhead {
+        // The bar (or the empty gun used as one) goes up with a swing whoosh,
+        // and the kick winds up with the same whoosh; pound, stomp and
+        // execute make their noise at the impact itself.
+        if kind == FinisherKind::Overhead || kind == FinisherKind::Kick {
             world.push_event(GameEvent::PlayerFired(WeaponType::Melee));
         }
 
@@ -166,12 +201,30 @@ impl FinisherSystem {
             fin.dir_y,
             FINISHER_IMPACT_KNOCKBACK,
         );
+        // Spark bursts pop on the victim itself.
+        let at = world
+            .get_component::<Position>(fin.target)
+            .map(|p| crate::math::Vec2::new(p.x, p.y))
+            .unwrap_or(crate::math::Vec2::zero());
         match fin.kind {
-            // A fist / bar slamming a metal bot: the melee impact clank.
-            FinisherKind::Pound | FinisherKind::Overhead => {
+            // A fist / boot / bar slamming a metal bot: the melee clank.
+            FinisherKind::Pound | FinisherKind::Stomp | FinisherKind::Overhead => {
                 world.push_event(GameEvent::EnemyHit {
                     by: WeaponType::Melee,
+                    at,
                 });
+            }
+            // The sweeping kick: the clank, and the killing impact TAKES THE
+            // HEAD OFF — the corpse goes headless and the head launches along
+            // the kick with its own physics (`systems::head`).
+            FinisherKind::Kick => {
+                world.push_event(GameEvent::EnemyHit {
+                    by: WeaponType::Melee,
+                    at,
+                });
+                if kill {
+                    Self::decapitate(world, fin);
+                }
             }
             // The point-blank shot: gunshot + that gun's impact, one round gone.
             FinisherKind::Execute(gun) => {
@@ -180,7 +233,7 @@ impl FinisherSystem {
                     weapon.fire_timer = weapon.fire_rate;
                 }
                 world.push_event(GameEvent::PlayerFired(gun));
-                world.push_event(GameEvent::EnemyHit { by: gun });
+                world.push_event(GameEvent::EnemyHit { by: gun, at });
             }
         }
         if kill {
@@ -188,6 +241,34 @@ impl FinisherSystem {
                 health.take_damage(health.max.max(health.current));
             }
         }
+    }
+
+    /// The kick's killing impact: mark the victim [`Headless`] (its downed
+    /// sprite loses the head cubes) and launch a [`DetachedHead`] from where
+    /// the sprawled head sits, along the kick direction. Deterministic: the
+    /// jitter/spin seed derives from the victim id.
+    fn decapitate(world: &mut World, fin: &Finisher) {
+        let victim_pos = match world.get_component::<Position>(fin.target) {
+            Some(p) => *p,
+            None => return,
+        };
+        // The sprawled body lies head-first along its recorded fall angle;
+        // without one, the head pops off away from the kicker.
+        let head_angle = world
+            .get_component::<Stunned>(fin.target)
+            .map(|s| s.fall_angle)
+            .unwrap_or_else(|| fin.dir_y.atan2(fin.dir_x));
+        let at = Vec2::new(
+            victim_pos.x + head_angle.cos() * head::HEAD_NECK_OFFSET,
+            victim_pos.y + head_angle.sin() * head::HEAD_NECK_OFFSET,
+        );
+        let color_idx = world
+            .get_component::<AI>(fin.target)
+            .map(|ai| head::color_for(ai.initial_type))
+            .unwrap_or(1);
+        world.add_component(fin.target, Headless);
+        let seed = (fin.target.0 as u32).wrapping_mul(0x85EB_CA6B);
+        head::spawn_head(world, at, Vec2::new(fin.dir_x, fin.dir_y), color_idx, seed);
     }
 }
 
@@ -248,7 +329,7 @@ impl System for FinisherSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::Radius;
+    use crate::components::{DetachedHead, Radius};
     use crate::systems::combat::{CombatSystem, KNOCKDOWN_SECS, PUNCH_DAMAGE, PUNCH_RANGE};
     use crate::systems::StunSystem;
 
@@ -287,6 +368,13 @@ mod tests {
         }
     }
 
+    /// Pin the just-started finisher to a specific kind: the variant hash
+    /// picks deterministically but arbitrarily, and these tests each probe
+    /// ONE flavour's behaviour.
+    fn force_kind(world: &mut World, player: Entity, kind: FinisherKind) {
+        world.get_component_mut::<Finisher>(player).unwrap().kind = kind;
+    }
+
     #[test]
     fn test_unarmed_punch_downs_but_does_not_kill() {
         let mut world = World::new();
@@ -315,7 +403,8 @@ mod tests {
             world.drain_events(),
             vec![
                 GameEvent::EnemyHit {
-                    by: WeaponType::Melee
+                    by: WeaponType::Melee,
+                    at: crate::math::Vec2::new(30.0, 0.0),
                 },
                 GameEvent::PunchLanded,
             ]
@@ -461,10 +550,13 @@ mod tests {
         let victim = spawn_downed_enemy(&mut world, 30.0, 0.0);
 
         assert!(FinisherSystem::try_start(&mut world));
-        assert_eq!(
+        // Unarmed pool member (whichever the hash picked); this test probes
+        // the POUND timings specifically.
+        assert!(matches!(
             world.get_component::<Finisher>(player).unwrap().kind,
-            FinisherKind::Pound
-        );
+            FinisherKind::Pound | FinisherKind::Stomp | FinisherKind::Kick
+        ));
+        force_kind(&mut world, player, FinisherKind::Pound);
 
         // Halfway through: two pounds in, the victim is hurt but NOT dead yet.
         run_secs(&mut world, 0.5);
@@ -481,9 +573,13 @@ mod tests {
             .drain_events()
             .into_iter()
             .filter(|e| {
-                *e == GameEvent::EnemyHit {
-                    by: WeaponType::Melee,
-                }
+                matches!(
+                    e,
+                    GameEvent::EnemyHit {
+                        by: WeaponType::Melee,
+                        ..
+                    }
+                )
             })
             .count();
         assert_eq!(clanks, 3);
@@ -498,6 +594,8 @@ mod tests {
         world.get_component_mut::<Stunned>(victim).unwrap().timer = 0.05;
 
         assert!(FinisherSystem::try_start(&mut world));
+        // Pin the slowest flavour so the knockdown clock is really outlived.
+        force_kind(&mut world, player, FinisherKind::Pound);
         // ...but the victim never gets back up before dying.
         run_secs(&mut world, 0.5);
         assert!(world.has_component::<Stunned>(victim));
@@ -514,10 +612,12 @@ mod tests {
         let victim = spawn_downed_enemy(&mut world, 30.0, 0.0);
 
         assert!(FinisherSystem::try_start(&mut world));
-        assert_eq!(
+        // Armed-melee pool member; this test probes the OVERHEAD timing.
+        assert!(matches!(
             world.get_component::<Finisher>(player).unwrap().kind,
-            FinisherKind::Overhead
-        );
+            FinisherKind::Overhead | FinisherKind::Kick
+        ));
+        force_kind(&mut world, player, FinisherKind::Overhead);
 
         // Before the swing lands (0.35 s) the victim is still alive.
         run_secs(&mut world, 0.25);
@@ -545,9 +645,13 @@ mod tests {
         // The shot and its point-blank impact were announced.
         let events = world.drain_events();
         assert!(events.contains(&GameEvent::PlayerFired(WeaponType::Pistol)));
-        assert!(events.contains(&GameEvent::EnemyHit {
-            by: WeaponType::Pistol
-        }));
+        assert!(events.iter().any(|e| matches!(
+            e,
+            GameEvent::EnemyHit {
+                by: WeaponType::Pistol,
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -558,10 +662,12 @@ mod tests {
         let victim = spawn_downed_enemy(&mut world, 30.0, 0.0);
 
         assert!(FinisherSystem::try_start(&mut world));
-        assert_eq!(
+        // An empty gun can never EXECUTE — it lands in the melee pool.
+        assert!(matches!(
             world.get_component::<Finisher>(player).unwrap().kind,
-            FinisherKind::Overhead
-        );
+            FinisherKind::Overhead | FinisherKind::Kick
+        ));
+        force_kind(&mut world, player, FinisherKind::Overhead);
         run_secs(&mut world, 0.6);
         assert!(world.get_component::<Health>(victim).unwrap().is_dead());
         // No round appeared from nowhere.
@@ -581,6 +687,110 @@ mod tests {
             near
         );
         let _ = far;
+    }
+
+    #[test]
+    fn test_kind_pool_is_deterministic_and_varied() {
+        // Same seed -> same pick, every time.
+        for seed in 0..64u32 {
+            assert_eq!(
+                FinisherSystem::kind_for(None, seed),
+                FinisherSystem::kind_for(None, seed)
+            );
+        }
+        // Across seeds the unarmed pool shows all three flavours...
+        let picks: Vec<_> = (0..64u32)
+            .map(|s| FinisherSystem::kind_for(None, s))
+            .collect();
+        assert!(picks.contains(&FinisherKind::Pound));
+        assert!(picks.contains(&FinisherKind::Stomp));
+        assert!(picks.contains(&FinisherKind::Kick));
+        // ...the bar pool shows both of its flavours...
+        let bar = Weapon::new(WeaponType::Melee);
+        let bar_picks: Vec<_> = (0..64u32)
+            .map(|s| FinisherSystem::kind_for(Some(&bar), s))
+            .collect();
+        assert!(bar_picks.contains(&FinisherKind::Overhead));
+        assert!(bar_picks.contains(&FinisherKind::Kick));
+        // ...and a loaded gun ALWAYS executes.
+        let gun = Weapon::new(WeaponType::Pistol);
+        assert!((0..64u32).all(|s| FinisherSystem::kind_for(Some(&gun), s)
+            == FinisherKind::Execute(WeaponType::Pistol)));
+    }
+
+    #[test]
+    fn test_kick_finisher_decapitates_and_launches_the_head() {
+        let mut world = World::new();
+        let player = spawn_player_at(&mut world, 0.0, 0.0, None);
+        let victim = spawn_downed_enemy(&mut world, 30.0, 0.0);
+
+        assert!(FinisherSystem::try_start(&mut world));
+        force_kind(&mut world, player, FinisherKind::Kick);
+
+        // Before the boot lands (0.28 s): head still on.
+        run_secs(&mut world, 0.2);
+        assert!(world.get_component::<Health>(victim).unwrap().is_alive());
+        assert!(!world.has_component::<Headless>(victim));
+        assert!(world.query::<DetachedHead>().is_empty());
+
+        // Past the impact: dead, headless, and the head is flying the kick's
+        // way (+x here) at launch speed less a few friction frames.
+        run_secs(&mut world, 0.2);
+        assert!(world.get_component::<Health>(victim).unwrap().is_dead());
+        assert!(world.has_component::<Headless>(victim));
+        let heads = world.query::<DetachedHead>();
+        assert_eq!(heads.len(), 1);
+        let d = world.get_component::<DetachedHead>(heads[0]).unwrap();
+        assert!(
+            d.vx > 0.0,
+            "head launched along the kick (+x), vx = {}",
+            d.vx
+        );
+        assert_eq!(d.color_idx, 1); // no AI brief on the test victim: default red
+
+        // Run the whole rig long enough and the head comes to rest, persists.
+        let mut heads_sys = crate::systems::head::HeadSystem;
+        for _ in 0..200 {
+            heads_sys.run(&mut world, 0.016);
+        }
+        let d = world.get_component::<DetachedHead>(heads[0]).unwrap();
+        assert!(crate::systems::head::is_resting(d));
+    }
+
+    #[test]
+    fn test_stomp_finisher_lands_two_hits_and_kills_on_the_second() {
+        let mut world = World::new();
+        let player = spawn_player_at(&mut world, 0.0, 0.0, None);
+        let victim = spawn_downed_enemy(&mut world, 30.0, 0.0);
+
+        assert!(FinisherSystem::try_start(&mut world));
+        force_kind(&mut world, player, FinisherKind::Stomp);
+
+        // After the first stomp (0.14 s) the victim is still alive...
+        run_secs(&mut world, 0.25);
+        assert!(world.get_component::<Health>(victim).unwrap().is_alive());
+        // ...the second (0.34 s) is the kill; no decapitation from a stomp.
+        run_secs(&mut world, 0.25);
+        assert!(world.get_component::<Health>(victim).unwrap().is_dead());
+        assert!(!world.has_component::<Headless>(victim));
+        assert!(world.query::<DetachedHead>().is_empty());
+        assert!(!world.has_component::<Finisher>(player));
+
+        // Exactly two stomp clanks rang out.
+        let clanks = world
+            .drain_events()
+            .into_iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    GameEvent::EnemyHit {
+                        by: WeaponType::Melee,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(clanks, 2);
     }
 
     #[test]

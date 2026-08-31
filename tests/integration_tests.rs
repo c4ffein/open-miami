@@ -564,7 +564,8 @@ fn test_sim_events_fire_hit_down() {
             matches!(
                 e,
                 GameEvent::EnemyHit {
-                    by: WeaponType::Pistol
+                    by: WeaponType::Pistol,
+                    ..
                 }
             )
         })

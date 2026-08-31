@@ -374,31 +374,6 @@ pub fn gated_player_input(
     }
 }
 
-/// Human-readable name for a weapon type
-pub fn weapon_name(weapon_type: WeaponType) -> &'static str {
-    match weapon_type {
-        WeaponType::Pistol => "Pistol",
-        WeaponType::Shotgun => "Shotgun",
-        WeaponType::MachineGun => "Machine Gun",
-        WeaponType::Melee => "Melee",
-    }
-}
-
-/// HUD label for the held weapon: `SHOTGUN 3/6`, `MELEE` (infinite), or
-/// `UNARMED` when the player holds nothing.
-pub fn weapon_hud_label(weapon: Option<WeaponType>, ammo: i32) -> String {
-    match weapon {
-        None => "UNARMED".to_string(),
-        Some(t) if t.is_melee() => weapon_name(t).to_uppercase(),
-        Some(t) => format!(
-            "{} {}/{}",
-            weapon_name(t).to_uppercase(),
-            ammo,
-            t.magazine()
-        ),
-    }
-}
-
 /// Get player position
 pub fn get_player_position(world: &World) -> Option<Vec2> {
     let players: Vec<Entity> = world.query::<Player>();
@@ -618,7 +593,8 @@ mod tests {
             vec![
                 GameEvent::PlayerFired(WeaponType::Melee),
                 GameEvent::EnemyHit {
-                    by: WeaponType::Melee
+                    by: WeaponType::Melee,
+                    at: Vec2::new(30.0, 0.0),
                 },
                 GameEvent::PunchLanded,
             ]
@@ -676,20 +652,6 @@ mod tests {
             world.drain_events(),
             vec![GameEvent::PlayerFired(WeaponType::Melee)]
         );
-    }
-
-    #[test]
-    fn test_weapon_hud_label() {
-        assert_eq!(weapon_hud_label(None, 0), "UNARMED");
-        assert_eq!(
-            weapon_hud_label(Some(WeaponType::Shotgun), 3),
-            "SHOTGUN 3/6"
-        );
-        assert_eq!(
-            weapon_hud_label(Some(WeaponType::MachineGun), 30),
-            "MACHINE GUN 30/30"
-        );
-        assert_eq!(weapon_hud_label(Some(WeaponType::Melee), 999), "MELEE");
     }
 
     #[test]

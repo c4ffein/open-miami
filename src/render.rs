@@ -99,8 +99,26 @@ fn render_bosses(world: &World, graphics: &Graphics, now: f32, cull: &crate::cam
     }
 }
 
-/// Render walls from the world
+/// How far the baseboard strip extends past each wall rect (world units;
+/// >= 3 so it survives `?pixel=3` art-res rasterization).
+const WALL_BASEBOARD_EXTEND: f32 = 4.0;
+
+/// Render walls from the world.
+///
+/// Two passes: first every wall's BASEBOARD (a dark strip extending
+/// [`WALL_BASEBOARD_EXTEND`] units around the rect, so walls seat into the
+/// floor instead of floating), then every wall slab — so where two wall rects
+/// abut, a neighbour's baseboard never draws over a wall fill.
 pub fn render_walls(world: &World, graphics: &Graphics, show_infos: bool) {
+    let e = WALL_BASEBOARD_EXTEND;
+    for wall in world.walls() {
+        graphics.draw_rectangle(
+            Vec2::new(wall.x - e, wall.y - e),
+            wall.width + e * 2.0,
+            wall.height + e * 2.0,
+            crate::palette::WALL_BASEBOARD,
+        );
+    }
     for wall in world.walls() {
         // Draw inflated wall boundaries (debug visualization)
         if show_infos {
@@ -119,22 +137,12 @@ pub fn render_walls(world: &World, graphics: &Graphics, show_infos: bool) {
 }
 
 /// Draw one wall rectangle the way the game does (dark purple slab with a
-/// lighter border) — shared with the native level editor.
+/// lighter border) — shared with the native level editor. Colours live in
+/// `src/palette.rs`.
 pub fn draw_wall(graphics: &Graphics, x: f32, y: f32, w: f32, h: f32) {
-    graphics.draw_rectangle(
-        Vec2::new(x, y),
-        w,
-        h,
-        Color::new(80.0 / 255.0, 60.0 / 255.0, 70.0 / 255.0, 1.0),
-    );
-    // Border for visual depth
-    graphics.draw_rectangle_lines(
-        Vec2::new(x, y),
-        w,
-        h,
-        2.0,
-        Color::new(100.0 / 255.0, 80.0 / 255.0, 90.0 / 255.0, 1.0),
-    );
+    graphics.draw_rectangle(Vec2::new(x, y), w, h, crate::palette::WALL_FILL);
+    // Border for visual depth (3 units thick: stays visible at `?pixel=3`).
+    graphics.draw_rectangle_lines(Vec2::new(x, y), w, h, 3.0, crate::palette::WALL_EDGE);
 }
 
 /// Render debug pathfinding visualization
@@ -481,14 +489,17 @@ fn render_player(world: &World, graphics: &Graphics) {
     }
 }
 
-/// Render UI (health, the held weapon and its ammo, etc.). `weapon` is the
-/// held weapon type (`None` = unarmed) and `ammo` the rounds left in it.
+/// Render UI (health, rogue count, the sliding ammo box, etc.). `weapon` is
+/// the held weapon type (`None` = unarmed), `ammo` the rounds left in it and
+/// `ammo_slide` the eased slide offset of the ammo box (`AmmoSlide::eased`:
+/// 0 = in place, 1 = fully below the screen edge).
 #[allow(clippy::too_many_arguments)]
 pub fn render_ui(
     graphics: &Graphics,
     health: i32,
     ammo: i32,
     weapon: Option<WeaponType>,
+    ammo_slide: f32,
     enemies_alive: usize,
     player_alive: bool,
     death_time: f32,
@@ -507,30 +518,17 @@ pub fn render_ui(
             Color::WHITE,
         );
 
-        // The one weapon in hand and what's left in it: `WEAPON: SHOTGUN 3/6`
-        // (`MELEE` never runs dry; `UNARMED` after a throw). An empty gun is
-        // flagged red — throw it, take another.
-        graphics.draw_text("Weapon:", Vec2::new(10.0, 60.0), 20.0, Color::WHITE);
-        let label = crate::game::weapon_hud_label(weapon, ammo);
-        let label_color = match weapon {
-            Some(t) if !t.is_melee() && ammo <= 0 => Color::RED,
-            Some(t) => weapon_color(t),
-            None => Color::GRAY,
-        };
-        graphics.draw_text(&label, Vec2::new(100.0, 60.0), 20.0, label_color);
-        if let Some(t) = weapon {
-            if !t.is_melee() && ammo <= 0 {
-                graphics.draw_text("EMPTY - throw it", Vec2::new(10.0, 82.0), 14.0, Color::RED);
-            }
-        }
-
-        graphics.draw_text("Rogues:", Vec2::new(10.0, 120.0), 20.0, Color::WHITE);
+        // The held gun's rounds live in the sliding bottom-left AMMO BOX
+        // (`render_ammo_box`), not up here — so ROGUES moves up under HEALTH.
+        graphics.draw_text("Rogues:", Vec2::new(10.0, 60.0), 20.0, Color::WHITE);
         graphics.draw_text(
             &format!("{}", enemies_alive),
-            Vec2::new(120.0, 120.0),
+            Vec2::new(120.0, 60.0),
             20.0,
             Color::WHITE,
         );
+
+        render_ammo_box(graphics, weapon, ammo, ammo_slide);
     } else if !player_alive {
         // Death screen with animations
 
@@ -604,5 +602,48 @@ pub fn render_ui(
         Vec2::new(10.0, screen_height - 20.0),
         16.0,
         Color::GRAY,
+    );
+}
+
+/// VT323 average advance per character at font size 1 (the approximation the
+/// other panels use — editor_ui / render_dialogue / ending agree on 0.42).
+const AMMO_CHAR_W: f32 = 0.42;
+/// HUD font size inside the box (same as the HEALTH / ROGUES lines).
+const AMMO_FS: f32 = 20.0;
+/// Box height: the 20 px text plus comfortable inner padding.
+const AMMO_BOX_H: f32 = 34.0;
+/// Horizontal inner padding (the box hugs the LEFT screen border; this pads
+/// the text on both sides inside it).
+const AMMO_PAD_X: f32 = 14.0;
+/// Resting gap between the box's bottom edge and the bottom screen border.
+/// The bottom-left controls hint line sits in that band (baseline at
+/// `screen_height - 20`), so the box floats ABOVE it with clear separation
+/// instead of the bare ~16 px edge padding.
+const AMMO_BOTTOM_GAP: f32 = 44.0;
+
+/// The sliding bottom-left AMMO BOX: a pure black rectangle flush with the
+/// left screen border showing only `12/12 RNDS` (or `NO GUN` as it slides
+/// away). `slide` is `AmmoSlide::eased` — 0 draws the box in place, 1 puts
+/// it fully below the bottom screen edge (then nothing is drawn at all).
+pub fn render_ammo_box(graphics: &Graphics, weapon: Option<WeaponType>, ammo: i32, slide: f32) {
+    if slide >= 1.0 {
+        return; // fully slid out
+    }
+    let text = crate::hud_ammo::ammo_box_text(weapon, ammo);
+    let text_w = text.chars().count() as f32 * AMMO_FS * AMMO_CHAR_W;
+    let box_w = text_w + 2.0 * AMMO_PAD_X;
+
+    let screen_height = graphics.height();
+    let shown_y = screen_height - AMMO_BOTTOM_GAP - AMMO_BOX_H;
+    // Slide travel: from resting place to fully under the bottom border.
+    let y = shown_y + slide * (AMMO_BOX_H + AMMO_BOTTOM_GAP);
+
+    graphics.draw_rectangle(Vec2::new(0.0, y), box_w, AMMO_BOX_H, Color::BLACK);
+    // Baseline sits so the 20 px caps centre in the 34 px box.
+    graphics.draw_text(
+        &text,
+        Vec2::new(AMMO_PAD_X, y + AMMO_BOX_H - 10.0),
+        AMMO_FS,
+        Color::WHITE,
     );
 }

@@ -1,5 +1,6 @@
 // Core modules
 pub mod math;
+pub mod palette;
 
 // WASM-only modules for browser integration
 #[cfg(target_arch = "wasm32")]
@@ -17,6 +18,7 @@ pub mod ecs;
 pub mod editor;
 pub mod ending;
 pub mod game;
+pub mod hud_ammo;
 pub mod levels;
 #[rustfmt::skip]
 pub mod levels_data;
@@ -32,6 +34,7 @@ pub mod render_comms;
 pub mod render_dialogue;
 pub mod scenario;
 pub mod sim;
+pub mod sparks;
 pub mod static_geo;
 pub mod systems;
 
@@ -229,6 +232,10 @@ mod wasm_entry {
     /// the primitive did.
     const ROBOT_TILE_PX: f32 = 60.0;
 
+    /// Art-pixel size of the neon-wave void backdrop (`Graphics::backdrop`),
+    /// in CSS px — chunky and cheap (~1/36th of a native-res shader pass).
+    const BACKDROP_ART_PX: f32 = 6.0;
+
     /// Kill flash: total duration and number of red/blue strobes.
     const KILL_FLASH_SECS: f32 = 0.34;
     const KILL_FLASH_STROBES: u32 = 4;
@@ -247,6 +254,18 @@ mod wasm_entry {
     #[allow(dead_code)]
     const ROBOT_POSE_HIT: u32 = 3;
     const ROBOT_POSE_DOWNED: u32 = 4;
+    /// The downed pose with the head cubes skipped (a KICK finisher victim).
+    const ROBOT_POSE_DOWNED_HEADLESS: u32 = 5;
+    /// The head-kick finisher: support leg planted, kicking leg sweeping
+    /// through, body leaning back. `time` = seconds into the finisher.
+    const ROBOT_POSE_KICK: u32 = 6;
+    /// The two-hit quick stomp finisher. `time` = seconds into the finisher.
+    const ROBOT_POSE_STOMP: u32 = 7;
+
+    /// Screen size (px) of a detached head's sprite quad — the 16-texel art
+    /// upscaled to a bit over its physical share of a 60 px robot tile so
+    /// the little trophy stays readable.
+    const HEAD_TILE_PX: f32 = 26.0;
 
     /// Map a held weapon to the robot-core weapon model index
     /// (0 fist, 1 pistol, 2 machinegun, 3 shotgun).
@@ -636,9 +655,60 @@ mod wasm_entry {
     ) {
         use crate::components::{AIState, EnemyType};
         use crate::components::{
-            Boss, Enemy, Finisher, FinisherKind, Health, Player, Position, Rotation, Stunned,
-            Velocity, Weapon, AI,
+            Boss, DetachedHead, Enemy, Finisher, FinisherKind, Headless, Health, Player, Position,
+            Rotation, Stunned, Velocity, Weapon, AI,
         };
+
+        // --- Detached heads (prone pass: corpse details on the floor) ---
+        // Kicked-off heads draw with the sprawled bodies: over the scenery,
+        // under the ground weapons and everyone still standing. Each is a
+        // baked pixel sprite on a quad spun smoothly by its physics, plus a
+        // small dark oil splat where it detached.
+        if prone_pass {
+            for entity in world.query::<DetachedHead>() {
+                let (Some(d), Some(pos)) = (
+                    world.get_component::<DetachedHead>(entity),
+                    world.get_component::<Position>(entity),
+                ) else {
+                    continue;
+                };
+                // The splat: a dark oil puddle at the detach point with a
+                // few blots thrown clear of the corpse's silhouette, all
+                // deterministic per head (hashed off its seq).
+                if cull.visible(d.origin_x, d.origin_y, 60.0) {
+                    let oil = Color::new(0.03, 0.02, 0.05, 0.9);
+                    let s = d.seq.wrapping_mul(0x27D4_EB2F);
+                    graphics.draw_circle(Vec2::new(d.origin_x, d.origin_y), 9.0, oil);
+                    for i in 0..4u32 {
+                        let a = crate::drive::hash01(s, i * 2) * std::f32::consts::TAU;
+                        let r = 10.0 + crate::drive::hash01(s, i * 2 + 1) * 14.0;
+                        graphics.draw_circle(
+                            Vec2::new(d.origin_x + a.cos() * r, d.origin_y + a.sin() * r),
+                            2.5 + crate::drive::hash01(s, i + 40) * 3.0,
+                            oil,
+                        );
+                    }
+                    // Drip trail along the head's slide: a few dots between
+                    // the neck and wherever the head is (settles with it).
+                    for i in 1..4u32 {
+                        let f = i as f32 / 4.0;
+                        let jx = (crate::drive::hash01(s, 60 + i) - 0.5) * 6.0;
+                        let jy = (crate::drive::hash01(s, 70 + i) - 0.5) * 6.0;
+                        graphics.draw_circle(
+                            Vec2::new(
+                                d.origin_x + (pos.x - d.origin_x) * f + jx,
+                                d.origin_y + (pos.y - d.origin_y) * f + jy,
+                            ),
+                            1.8,
+                            Color::new(0.03, 0.02, 0.05, 0.7),
+                        );
+                    }
+                }
+                if cull.visible(pos.x, pos.y, HEAD_TILE_PX) {
+                    graphics.draw_head(d.color_idx, Vec2::new(pos.x, pos.y), d.spin, HEAD_TILE_PX);
+                }
+            }
+        }
 
         // Determines a standing pose index from motion / combat state.
         fn pose_for(speed: f32, attacking: bool) -> u32 {
@@ -685,7 +755,12 @@ mod wasm_entry {
                 .unwrap_or(0.0);
             let attacking = ai.state == AIState::SurePlayerSeen && ai.attack_timer > 0.0;
             let pose_idx = if prone {
-                ROBOT_POSE_DOWNED
+                // A kick-finished corpse lost its head: same sprawl, no head.
+                if world.has_component::<Headless>(entity) {
+                    ROBOT_POSE_DOWNED_HEADLESS
+                } else {
+                    ROBOT_POSE_DOWNED
+                }
             } else {
                 pose_for(speed, attacking)
             };
@@ -752,18 +827,35 @@ mod wasm_entry {
                         crate::input::is_mouse_button_down(crate::input::mouse_buttons::LEFT);
                     let mut pose_idx = pose_for(speed, firing);
                     let mut draw_pos = Vec2::new(pos.x, pos.y);
+                    let mut draw_time = now;
                     // Mid-finisher: locked over the victim in the strike pose,
                     // lunging into each blow (one surge for the bar / the
-                    // point-blank shot, a pulse per pound when unarmed).
+                    // point-blank shot, a pulse per pound when unarmed). The
+                    // kick and the stomp run their own dedicated poses, whose
+                    // clock is the finisher's own timer (the animation is
+                    // choreographed to the impact schedule, not free-running).
                     if let Some(fin) = world.get_component::<Finisher>(player) {
                         let progress = (fin.timer / fin.kind.duration()).clamp(0.0, 1.0);
                         let lunge = match fin.kind {
                             FinisherKind::Pound => {
                                 8.0 * (progress * 3.0 * std::f32::consts::PI).sin().abs()
                             }
+                            FinisherKind::Stomp => {
+                                6.0 * (progress * 2.0 * std::f32::consts::PI).sin().abs()
+                            }
                             _ => 10.0 * (progress * std::f32::consts::PI).sin(),
                         };
-                        pose_idx = ROBOT_POSE_SHOOT;
+                        pose_idx = match fin.kind {
+                            FinisherKind::Kick => {
+                                draw_time = fin.timer;
+                                ROBOT_POSE_KICK
+                            }
+                            FinisherKind::Stomp => {
+                                draw_time = fin.timer;
+                                ROBOT_POSE_STOMP
+                            }
+                            _ => ROBOT_POSE_SHOOT,
+                        };
                         angle = fin.dir_y.atan2(fin.dir_x);
                         draw_pos = Vec2::new(pos.x + fin.dir_x * lunge, pos.y + fin.dir_y * lunge);
                     }
@@ -777,7 +869,7 @@ mod wasm_entry {
                         draw_pos,
                         angle + ROBOT_ANGLE_OFFSET,
                         ROBOT_TILE_PX,
-                        now,
+                        draw_time,
                     );
                 }
             }
@@ -1075,6 +1167,7 @@ mod wasm_entry {
         projectile_system: ProjectileTrailSystem,
         pickup_system: PickupSystem,
         thrown_system: ThrownWeaponSystem,
+        head_system: HeadSystem,
         finisher_system: FinisherSystem,
         stun_system: StunSystem,
         boss_system: BossSystem,
@@ -1145,6 +1238,8 @@ mod wasm_entry {
         viz_selected: i32,
         /// SPRITES tab sub-page: false = characters, true = the prop library.
         viz_props_page: bool,
+        /// MUSICS tab sub-page: false = the tracker, true = the SFX board.
+        viz_sounds_page: bool,
         /// Selected prop in the PROPS gallery (big live preview on the right).
         viz_prop_selected: usize,
         /// PROPS gallery page: the prop FAMILY shown in the tile grid (an
@@ -1176,6 +1271,14 @@ mod wasm_entry {
         prev_enemies_alive: usize,
         /// Seconds left on the kill flash (background strobes red/blue).
         kill_flash: f32,
+        /// Electric spark bursts popping where player attacks land on bots
+        /// (fixed-capacity ring, spawned from `EnemyHit` events, drawn in the
+        /// actors layer of `render_world`).
+        sparks: crate::sparks::SparkPool,
+        /// The sliding bottom-left ammo box: slide offset / target / armed
+        /// flag (`hud_ammo::AmmoSlide`; the box itself is drawn by
+        /// `render::render_ammo_box` on the HUD layer).
+        ammo_hud: crate::hud_ammo::AmmoSlide,
         /// Key of the static geometry cache (floor tiles + walls baked into a
         /// persistent renderer-side VBO, `Graphics::static_layer`). Bumped by
         /// every `load_floor` so a floor change re-records; a checkpoint
@@ -1207,6 +1310,7 @@ mod wasm_entry {
                 projectile_system: ProjectileTrailSystem,
                 pickup_system: PickupSystem,
                 thrown_system: ThrownWeaponSystem,
+                head_system: HeadSystem,
                 finisher_system: FinisherSystem,
                 stun_system: StunSystem,
                 boss_system: BossSystem,
@@ -1251,6 +1355,7 @@ mod wasm_entry {
                 viz_tab: VizTab::Sprites,
                 viz_selected: -1,
                 viz_props_page: false,
+                viz_sounds_page: false,
                 viz_prop_selected: 0,
                 viz_prop_family: 0,
                 viz_props: (0..PROP_COUNT)
@@ -1276,6 +1381,8 @@ mod wasm_entry {
                 mg_sfx_cooldown: 0.0,
                 prev_enemies_alive: 0,
                 kill_flash: 0.0,
+                sparks: crate::sparks::SparkPool::new(),
+                ammo_hud: crate::hud_ammo::AmmoSlide::new(),
                 floor_static_key: 0,
                 prev_level_complete: false,
                 prev_boss_enraged: false,
@@ -1323,8 +1430,12 @@ mod wasm_entry {
             initialize_game(&mut self.world, self.selected_level);
             self.scenario = Some(ScenarioState::new(floor_def(self.selected_level)));
             self.checkpoint = None;
-            self.level
-                .set_surface(floor_def(self.selected_level).surface);
+            let def = floor_def(self.selected_level);
+            self.level.set_surface(def.surface);
+            // Clip the tile field to the floor's playable rect: outside it
+            // the neon-wave void backdrop shows (render_world draws it
+            // first, the tiles cover it inside the level).
+            self.level.set_size(def.width, def.height);
             self.reset_run_state();
         }
 
@@ -1351,6 +1462,11 @@ mod wasm_entry {
             self.death_time = 0.0;
             self.level_complete_time = 0.0;
             self.kill_flash = 0.0;
+            self.sparks.clear();
+            // The ammo box snaps to the fresh world's held weapon: no slide
+            // animation on a floor load / checkpoint restore.
+            self.ammo_hud
+                .snap(crate::hud_ammo::gun_held(get_player_weapon(&self.world)));
             self.prev_player_alive = is_player_alive(&self.world);
             self.mg_sfx_cooldown = 0.0;
             self.prev_enemies_alive = count_alive_enemies(&self.world);
@@ -1491,6 +1607,24 @@ mod wasm_entry {
                         Color::new(0.3, 1.0, 0.5, 0.9),
                     );
                 }
+            }
+
+            // The title-screen car idles under the menu: the baked
+            // engine-idle loop starts once audio is unlocked (the same
+            // first key/click gesture that lets the context run at all — a
+            // browser would ignore anything earlier), keeps looping under
+            // the SETTINGS / ABOUT modals over the title, and stops the
+            // moment any other screen takes over (game start, ?viz, the
+            // credits). Until its bake lands the start call is a silent
+            // no-op and simply retries next frame; stop is idempotent.
+            let on_title = matches!(
+                self.screen,
+                GameScreen::LevelSelect | GameScreen::Settings | GameScreen::About
+            );
+            if on_title && self.audio_unlocked {
+                self.audio.start_engine_idle();
+            } else if !on_title {
+                self.audio.stop_engine_idle();
             }
 
             // Keep the music scheduler fed regardless of screen. (`music`
@@ -2061,28 +2195,56 @@ mod wasm_entry {
             }
         }
 
-        /// MUSICS tab: a step-sequencer *tracker* for the live audio engine. A
-        /// SECTIONS strip of clickable miniatures (one per arrangement section,
-        /// shaded by note density, current section highlighted) sits above the
-        /// PATTERN grid of the currently-playing section (five channels; filled
-        /// cells are notes; playhead column; click a column to seek; M/S mute/
-        /// solo per row). Song-select buttons above; per-weapon SFX below.
+        /// MUSICS tab: two sub-pages — the TRACKER (songs + the live
+        /// step-sequencer view) and the SOUNDS board (every one-shot SFX).
         fn draw_viz_musics(&mut self, graphics: &Graphics, mouse: Vec2, click: bool) {
+            let pages = [(false, "TRACKER"), (true, "SOUNDS")];
+            for (i, &(page, name)) in pages.iter().enumerate() {
+                let x = 40.0 + i as f32 * 168.0;
+                let over = viz_button(
+                    graphics,
+                    mouse,
+                    x,
+                    76.0,
+                    158.0,
+                    38.0,
+                    name,
+                    self.viz_sounds_page == page,
+                );
+                if over && click && self.viz_sounds_page != page {
+                    self.viz_sounds_page = page;
+                }
+            }
+            if self.viz_sounds_page {
+                self.draw_viz_sounds(graphics, mouse, click);
+            } else {
+                self.draw_viz_tracker(graphics, mouse, click);
+            }
+        }
+
+        /// The TRACKER page of the MUSICS tab: a step-sequencer *tracker* for
+        /// the live audio engine. A SECTIONS strip of clickable miniatures (one
+        /// per arrangement section, shaded by note density, current section
+        /// highlighted) sits above the PATTERN grid of the currently-playing
+        /// section (five channels; filled cells are notes; playhead column;
+        /// click a column to seek; M/S mute/solo per row). Song-select buttons
+        /// above.
+        fn draw_viz_tracker(&mut self, graphics: &Graphics, mouse: Vec2, click: bool) {
             let coral = Color::from_rgba(217, 119, 87, 255);
             graphics.draw_text(
                 "TRACKER — click a song, a section miniature, or a grid column.",
-                Vec2::new(40.0, 84.0),
+                Vec2::new(40.0, 138.0),
                 18.0,
                 Color::GRAY,
             );
 
             // --- song select -----------------------------------------------
-            graphics.draw_text("SONGS", Vec2::new(40.0, 108.0), 16.0, coral);
+            graphics.draw_text("SONGS", Vec2::new(40.0, 162.0), 16.0, coral);
             let cur_name = self.audio.current_song().name;
             let songs = crate::audio::SONGS;
             for (i, song) in songs.iter().enumerate() {
                 let x = 40.0 + (i % 4) as f32 * 168.0;
-                let y = 118.0 + (i / 4) as f32 * 46.0;
+                let y = 172.0 + (i / 4) as f32 * 46.0;
                 let active = song.name == cur_name && self.audio.is_playing();
                 if viz_button(graphics, mouse, x, y, 158.0, 40.0, song.name, active) && click {
                     self.audio.resume();
@@ -2090,7 +2252,7 @@ mod wasm_entry {
                 }
             }
             let song_rows = songs.len().div_ceil(4) as f32;
-            let mut y = 118.0 + song_rows * 46.0 + 4.0;
+            let mut y = 172.0 + song_rows * 46.0 + 4.0;
             if viz_button(graphics, mouse, 40.0, y, 158.0, 40.0, "STOP", false) && click {
                 self.audio.stop_music();
             }
@@ -2272,12 +2434,22 @@ mod wasm_entry {
                 let s = ((mouse.x - gx) / cw) as usize;
                 self.audio.seek(s.min(steps - 1));
             }
+        }
 
-            // --- SFX: the full per-weapon taxonomy ---------------------------
-            // Row 1: attack (the weapon firing/swinging).
-            // Row 2: hit (that weapon's impact on a metal bot).
-            // Row 3: the rest of the one-shot game sounds.
-            let mut sy = grid_bottom + 18.0;
+        /// The SOUNDS page of the MUSICS tab: the full per-weapon SFX
+        /// taxonomy, one button per one-shot.
+        /// Row 1: attack (the weapon firing/swinging).
+        /// Row 2: hit (that weapon's impact on a metal bot).
+        /// Rows 3+: the rest of the one-shot game sounds.
+        fn draw_viz_sounds(&mut self, graphics: &Graphics, mouse: Vec2, click: bool) {
+            let coral = Color::from_rgba(217, 119, 87, 255);
+            graphics.draw_text(
+                "SFX — click a sound to play it.",
+                Vec2::new(40.0, 138.0),
+                18.0,
+                Color::GRAY,
+            );
+            let mut sy = 162.0;
             graphics.draw_text("SFX", Vec2::new(40.0, sy), 16.0, coral);
             sy += 12.0;
             let bw_s = 158.0f32;
@@ -2928,6 +3100,20 @@ mod wasm_entry {
             // (inside the group a walking robot hops world-texel by
             // world-texel — the whole scene then FEELS snapped even though
             // the backdrop glides). The HUD stays crisp outside everything.
+            // The NEON-WAVE VOID (opcode 24) under everything: drawn FIRST,
+            // full-screen in SCREEN space (the transform here is identity —
+            // before the camera / the `?pixel=N` scenery group), so it is
+            // normal frame content in both flat and pixel modes and behind
+            // the kill-flash bypass frames alike. The floor tiles + walls
+            // paint over it; only the outside-the-level area keeps it.
+            // ~6 CSS px per art pixel: chunky, and ~1/36th the fragment work
+            // of a native-res pass (DRIVE economics — one upscaled quad).
+            graphics.backdrop(
+                graphics.width(),
+                graphics.height(),
+                self.last_time as f32 / 1000.0,
+                BACKDROP_ART_PX,
+            );
             let (mut view_min, mut view_max) = self
                 .camera
                 .visible_bounds(graphics.width(), graphics.height());
@@ -3083,6 +3269,17 @@ mod wasm_entry {
                 false,
                 &cull,
             );
+
+            // Electric spark bursts where attacks landed on bots: ACTORS
+            // layer content (after the `?pixel=N` scenery group closed, over
+            // the robots) — each burst is its own small snapped pixel group,
+            // so it stays chunky in flat mode too. Expiry mutates the pool
+            // in place; nothing allocates.
+            {
+                let now = self.last_time as f32 / 1000.0;
+                self.sparks.expire(now);
+                crate::sparks::render_sparks(&self.sparks, graphics, now, &cull);
+            }
 
             // A pixelated arrow slowly floating over the active tutorial
             // gate's target, so "swing the bar" always has an obvious victim.
@@ -3281,6 +3478,7 @@ mod wasm_entry {
                 self.combat_system.run(&mut self.world, dt);
                 self.bullet_system.run(&mut self.world, dt);
                 self.thrown_system.run(&mut self.world, dt);
+                self.head_system.run(&mut self.world, dt);
                 self.projectile_system.run(&mut self.world, dt);
                 // Drop weapons from downed enemies (player collects via the E key)
                 self.pickup_system.run(&mut self.world, dt);
@@ -3303,6 +3501,9 @@ mod wasm_entry {
                         "pickup" => self.audio.play_pickup(),
                         "throw" => self.audio.play_throw(),
                         "enemy_down" => self.audio.play_enemy_down(),
+                        "tire_screech" => self.audio.play_tire_screech(),
+                        "car_door_open" => self.audio.play_car_door_open(),
+                        "car_door_close" => self.audio.play_car_door_close(),
                         _ => {}
                     }
                 }
@@ -3337,6 +3538,10 @@ mod wasm_entry {
             let ammo = get_player_ammo(&self.world);
             let weapon = get_player_weapon(&self.world);
             let enemies_alive = count_alive_enemies(&self.world);
+
+            // Advance the ammo box slide (down when the gun leaves the hand,
+            // back up on a pickup; the text itself is always current).
+            self.ammo_hud.update(dt, crate::hud_ammo::gun_held(weapon));
 
             // Track death time and level complete time
             if !player_alive {
@@ -3426,7 +3631,10 @@ mod wasm_entry {
                             }
                         }
                     }
-                    GameEvent::EnemyHit { by } => {
+                    GameEvent::EnemyHit { by, at } => {
+                        // Electric spark burst at the impact point (renders
+                        // from the next frame — well inside its lifetime).
+                        self.sparks.spawn(at, self.last_time as f32 / 1000.0);
                         let s = slot(by);
                         if hits[s] < MAX_SFX_PER_KIND {
                             hits[s] += 1;
@@ -3512,6 +3720,7 @@ mod wasm_entry {
                     health,
                     ammo,
                     weapon,
+                    self.ammo_hud.eased(),
                     enemies_alive,
                     player_alive,
                     self.death_time,

@@ -44,6 +44,8 @@ mod op {
     pub const GUN_PICKUP: f32 = 18.0; // weaponIdx x y angle sizePx  (3D weapon lying flat, pixel-art)
     pub const PIX_BLIT: f32 = 19.0; // sx sy sw sh x y  (re-draw a rect of the LAST-closed pixel group at (x, y))
     pub const DRIVE: f32 = 20.0; // w h t glitch split px dim o0..o8  (the synthwave drive backdrop, one full-shader pass)
+    pub const BACKDROP: f32 = 24.0; // w h t px  (the neon-wave void behind/outside the level, one full-shader pass)
+    pub const HEAD: f32 = 25.0; // colorIdx x y angle sizePx  (detached robot head lying face-up, pixel-art)
 }
 
 // 21 STATIC_BEGIN key / 22 STATIC_END / 23 STATIC_REF key — the STATIC
@@ -414,6 +416,26 @@ impl Graphics {
         ]);
     }
 
+    /// Draw a DETACHED ROBOT HEAD lying face-up on the floor (the KICK
+    /// finisher's trophy): the head + visor cubes of the robot model, seen
+    /// by the true top-down camera, rasterized ONCE per `color_idx` at a
+    /// tiny art resolution into the renderer's persistent sprite cache
+    /// (like the gun pickups) and drawn as that rigid pixel image on a quad
+    /// rotated in 2D by `angle` — so a tumbling head spins smoothly at
+    /// native resolution while its pixels stay chunky. World space (through
+    /// the current transform); a square quad of `size_px` px on `center`.
+    /// `color_idx` follows the [`draw_robot`](Self::draw_robot) table.
+    pub fn draw_head(&self, color_idx: u32, center: Vec2, angle: f32, size_px: f32) {
+        self.push(&[
+            op::HEAD,
+            color_idx as f32,
+            center.x,
+            center.y,
+            angle,
+            size_px,
+        ]);
+    }
+
     /// Draw the LIVE 3D shoggoth boss. The JS renderer runs the shoggoth-core
     /// 3D->2D pipeline (mass, smiley mask, tentacles + dot eyes) at continuous
     /// time `time` — every frame, no caching — into a scratch tile and draws it
@@ -620,6 +642,24 @@ impl Graphics {
             offs[7],
             offs[8],
         ]);
+    }
+
+    /// The NEON-WAVE VOID backdrop (opcode 24): what shows OUTSIDE the
+    /// level's floor bounds — slow interference waves of heavily-darkened
+    /// hot pink / cyan / violet over near-black. Same economics as
+    /// [`drive`](Self::drive): renderer.js computes every ART pixel in a
+    /// dedicated fragment shader into a tiny `ceil(w/px) x ceil(h/px)`
+    /// NEAREST target and draws ONE upscaled opaque quad at the current
+    /// transform's origin — so the fill cost is one texture fetch per screen
+    /// pixel plus ~(w/px)*(h/px) fragment evaluations, whatever the DPR.
+    /// Drawn FIRST in the world layer, full-screen in SCREEN space (before
+    /// the camera transform / the `?pixel=N` scenery group): the floor tiles
+    /// and walls paint over it, so it only survives where the level is not.
+    /// `px` is in CSS px (~6: chunky and cheap); `t` animates the waves
+    /// (periods 10 s+ — a void, not a light show; peak brightness stays well
+    /// below every floor tone in src/palette.rs).
+    pub fn backdrop(&self, w: f32, h: f32, t: f32, px: f32) {
+        self.push(&[op::BACKDROP, w, h, t, px]);
     }
 
     /// Draw a STATIC GEOMETRY LAYER — frame-invariant world geometry (the

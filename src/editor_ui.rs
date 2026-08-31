@@ -837,14 +837,16 @@ impl Editor {
                 f.surface,
             )
         };
-        // The floor's ground (asphalt / marble / …) as the game draws it.
+        // The floor's ground (asphalt / marble / …) as the game draws it,
+        // clipped to the floor rect like in-game (`Level::set_size`).
         self.tiles.set_surface(surface);
+        self.tiles.set_size(fw, fh);
         g.save();
         g.translate(pan.x, pan.y);
         g.scale(zoom, zoom);
 
-        // Floor tiles, clipped to the floor rect (the tile renderer covers a
-        // 2000x2000 area; only the floor's part is a floor).
+        // Floor tiles, culled to the visible part of the floor rect (the
+        // Level itself also clips to the floor's size now).
         let vmin = self.to_world(Vec2::new(vp.x, vp.y));
         let vmax = self.to_world(Vec2::new(vp.x + vp.w, vp.y + vp.h));
         let view_min = Vec2::new(vmin.x.max(0.0), vmin.y.max(0.0));

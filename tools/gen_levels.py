@@ -38,7 +38,8 @@ ACTIONS = {"say", "talk", "spawn", "open_exit", "close_exit", "objective", "sfx"
 # Tutorial `gate` inputs (mirrors scenario.rs `GateInput::parse`).
 GATE_INPUTS = {"punch": "Punch", "finish": "Finish", "pickup": "Pickup", "strike": "Strike",
                "fire": "Fire", "throw": "Throw"}
-SFX = {"elevator", "mask_crack", "level_clear", "pickup", "throw", "enemy_down"}
+SFX = {"elevator", "mask_crack", "level_clear", "pickup", "throw", "enemy_down",
+       "tire_screech", "car_door_open", "car_door_close"}
 # Portal (entry / exit) rendering kinds and floor ground surfaces.
 PORTAL_KINDS = {"lift": "Lift", "door": "Door", "gate": "Gate"}
 SURFACES = {"checker": "Checker", "asphalt": "Asphalt", "marble": "Marble", "concrete": "Concrete",

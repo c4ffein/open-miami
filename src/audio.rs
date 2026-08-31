@@ -1134,8 +1134,306 @@ const MASK_OF_DREAD: SongSpec = SongSpec {
     intensity: 1.15,
 };
 
+// ---------------------------------------------------------------------------
+// SONG 9 — "Razor Circuit" (AGGRESSIVE, audition candidate): driving darksynth
+// combat. E natural minor, 126 BPM. Four-on-the-floor kick against pure
+// offbeat square bass (the classic synthwave pump), a relentless 16th arp
+// cycling the chord tones, and a hook lead that only arrives once the groove
+// has earned it. One chord per bar, i - VI - III - VII (Em - C - G - D).
+// Form: intro x2 (8 bars, arp teases in) -> groove x2 -> hook x2 ->
+// breakdown -> groove -> hook x2. Sections are 4 bars (64 steps).
+// ---------------------------------------------------------------------------
+
+/// Chord bed shared by intro / groove / hook: one low triad on beats 1 and 3
+/// of each bar, walking Em / C / G / D (pad degrees 0 / 5 / 2 / 6).
+const RAZOR_PAD: &[i32] = &[
+    0, REST, REST, REST, REST, REST, REST, REST, 0, REST, REST, REST, REST, REST, REST, REST, 5,
+    REST, REST, REST, REST, REST, REST, REST, 5, REST, REST, REST, REST, REST, REST, REST, 2, REST,
+    REST, REST, REST, REST, REST, REST, 2, REST, REST, REST, REST, REST, REST, REST, 6, REST, REST,
+    REST, REST, REST, REST, REST, 6, REST, REST, REST, REST, REST, REST, REST,
+];
+
+/// The groove/hook bass: quarter-note OFFBEATS only (steps 2/6/10/14 of each
+/// bar) so the four-on-the-floor kick and the bass alternate — the pump.
+/// Roots follow the chords an octave down: E1 / C1 / G1 / D1 (0 / -2 / 2 /
+/// -1), with a doubled 16th turnaround at the end of bar 4.
+const RAZOR_BASS_GROOVE: &[i32] = &[
+    REST, REST, 0, REST, REST, REST, 0, REST, REST, REST, 0, REST, REST, REST, 0, REST, REST, REST,
+    -2, REST, REST, REST, -2, REST, REST, REST, -2, REST, REST, REST, -2, REST, REST, REST, 2,
+    REST, REST, REST, 2, REST, REST, REST, 2, REST, REST, REST, 2, REST, REST, REST, -1, REST,
+    REST, REST, -1, REST, REST, REST, -1, REST, -1, REST, -1, -1,
+];
+
+/// The 16th-note arp: an up-down cycle of each bar's chord tones one to two
+/// octaves up (Em 7-9-11-14, C 12-14-16-19, G 9-11-13-16, D 13-15-17-20).
+const RAZOR_ARP: &[i32] = &[
+    7, 9, 11, 14, 11, 9, 7, 9, 7, 9, 11, 14, 11, 9, 7, 9, 12, 14, 16, 19, 16, 14, 12, 14, 12, 14,
+    16, 19, 16, 14, 12, 14, 9, 11, 13, 16, 13, 11, 9, 11, 9, 11, 13, 16, 13, 11, 9, 11, 13, 15, 17,
+    20, 17, 15, 13, 15, 13, 15, 17, 20, 17, 15, 13, 15,
+];
+
+const RAZOR_INTRO: Section = Section {
+    label: "intro",
+    bass: &[
+        0, REST, REST, REST, REST, REST, REST, REST, 0, REST, REST, REST, REST, REST, REST, REST,
+        -2, REST, REST, REST, REST, REST, REST, REST, -2, REST, REST, REST, REST, REST, REST, REST,
+        2, REST, REST, REST, REST, REST, REST, REST, 2, REST, REST, REST, REST, REST, REST, REST,
+        -1, REST, REST, REST, REST, REST, REST, REST, -1, REST, REST, REST, REST, REST, REST, REST,
+    ],
+    lead: &[REST],
+    pad: RAZOR_PAD,
+    arp: &[
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, 9, 11, 13, 16, 13, 11, 9, 11, 9, 11, 13, 16, 13, 11, 9, 11, 13, 15, 17, 20, 17,
+        15, 13, 15, 13, 15, 17, 20, 17, 15, 13, 15,
+    ],
+    drums: &[
+        Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent,
+        Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent,
+        Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick,
+        Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick, Silent,
+        Hat, Silent, Kick, Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick, Silent, Hat, Hat,
+    ],
+};
+
+const RAZOR_GROOVE: Section = Section {
+    label: "groove",
+    bass: RAZOR_BASS_GROOVE,
+    lead: &[REST],
+    pad: RAZOR_PAD,
+    arp: RAZOR_ARP,
+    drums: &[
+        Kick, Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick,
+        Silent, Hat, Hat,
+    ],
+};
+
+const RAZOR_HOOK: Section = Section {
+    label: "hook",
+    bass: RAZOR_BASS_GROOVE,
+    lead: &[
+        18, REST, REST, 18, REST, 16, REST, 14, REST, REST, 16, REST, 14, REST, REST, REST, 19,
+        REST, REST, 19, REST, 16, REST, 14, REST, REST, 16, REST, 14, REST, REST, REST, 20, REST,
+        REST, 20, REST, 18, REST, 16, REST, REST, 18, REST, 16, REST, REST, REST, 21, REST, REST,
+        20, REST, 18, REST, 17, REST, 15, REST, 17, REST, 18, REST, REST,
+    ],
+    pad: RAZOR_PAD,
+    arp: RAZOR_ARP,
+    drums: &[
+        Kick, Silent, Hat, Silent, Kick, Silent, Snare, Silent, Kick, Silent, Hat, Silent, Kick,
+        Silent, Snare, Silent, Kick, Silent, Hat, Silent, Kick, Silent, Snare, Silent, Kick,
+        Silent, Hat, Silent, Kick, Silent, Snare, Silent, Kick, Silent, Hat, Silent, Kick, Silent,
+        Snare, Silent, Kick, Silent, Hat, Silent, Kick, Silent, Snare, Silent, Kick, Silent, Hat,
+        Silent, Kick, Silent, Snare, Silent, Kick, Silent, Snare, Silent, Kick, Snare, Snare,
+        Snare,
+    ],
+};
+
+const RAZOR_BREAK: Section = Section {
+    label: "breakdown",
+    bass: &[
+        0, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, 0, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, -2, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST, -1, REST, REST, REST, REST, REST, REST, REST, -1, REST, REST, REST, -1,
+        REST, -1, -1,
+    ],
+    lead: &[
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, 18, REST, REST, 16, REST, 14, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, 14, REST, 16, REST, 18, REST,
+        21, REST,
+    ],
+    pad: &[
+        0, REST, REST, REST, REST, REST, REST, REST, 0, REST, REST, REST, REST, REST, REST, REST,
+        0, REST, REST, REST, REST, REST, REST, REST, 0, REST, REST, REST, REST, REST, REST, REST,
+        5, REST, REST, REST, REST, REST, REST, REST, 5, REST, REST, REST, REST, REST, REST, REST,
+        6, REST, REST, REST, REST, REST, REST, REST, 6, REST, REST, REST, REST, REST, REST, REST,
+    ],
+    arp: &[
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, 12, 14, 16, 19, 16, 14, 12, 14, 12, 14, 16, 19, 16, 14, 12, 14, 13, 15, 17, 20,
+        17, 15, 13, 15, 13, 15, 17, 20, 17, 15, 13, 15,
+    ],
+    drums: &[
+        Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent,
+        Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent,
+        Silent, Silent, Hat, Silent, Silent, Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick,
+        Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick, Silent, Hat, Silent, Kick, Silent,
+        Hat, Silent, Kick, Silent, Snare, Silent, Kick, Silent, Snare, Silent, Kick, Snare, Snare,
+        Snare,
+    ],
+};
+
+const RAZOR_CIRCUIT: SongSpec = SongSpec {
+    name: "Razor Circuit",
+    root: 41.20, // E1
+    scale: MINOR,
+    bpm: 126.0,
+    steps_per_beat: 4,
+    bass_wave: OscillatorType::Square,
+    lead_wave: OscillatorType::Sawtooth,
+    pad_wave: OscillatorType::Sawtooth,
+    arp_wave: OscillatorType::Square,
+    sections: &[
+        RAZOR_INTRO,
+        RAZOR_INTRO,
+        RAZOR_GROOVE,
+        RAZOR_GROOVE,
+        RAZOR_HOOK,
+        RAZOR_HOOK,
+        RAZOR_BREAK,
+        RAZOR_GROOVE,
+        RAZOR_HOOK,
+        RAZOR_HOOK,
+    ],
+    intensity: 0.9,
+};
+
+// ---------------------------------------------------------------------------
+// SONG 10 — "Cold Storage" (WAVY, audition candidate): slow cold menace for
+// tense floors. C# natural minor, 78 BPM. A pedal-tone saw bass and a
+// retriggered low pad drone hold the root while a 12-step (dotted-8th) sine
+// motif — C#, G#, D# (the major 9th) — phases 3-against-4 over the bar,
+// realigning every 3 bars. The "veil" sections shift the pad up one scale
+// step (degree 1: D#-F#-A# over the C# pedal = the m9/m11 wash); "sink"
+// finally moves the harmony i - i - VI - VII. Long arcs, sparse drums.
+// ---------------------------------------------------------------------------
+
+/// The 3-against-4 motif: a 12-step lane (3 beats) looping inside 64-step
+/// (4-bar) sections — it drifts across the barline and realigns every 3 bars.
+/// Pitches C#3 / G#3 / D#3: degree 8 is the major 9th, the color note.
+const COLD_MOTIF: &[i32] = &[7, REST, REST, 11, REST, REST, 8, REST, REST, 11, REST, REST];
+
+/// Heartbeat pedal on the tonic: beat 1, the "and" of 2, and beat 3.
+const COLD_BASS_PEDAL: &[i32] = &[
+    0, REST, REST, REST, REST, REST, 0, REST, 0, REST, REST, REST, REST, REST, REST, REST,
+];
+
+/// The drone bed: the i triad retriggered every beat so the slow pad attacks
+/// overlap into a continuous low wash.
+const COLD_PAD_DRONE: &[i32] = &[
+    0, REST, REST, REST, 0, REST, REST, REST, 0, REST, REST, REST, 0, REST, REST, REST,
+];
+
+const COLD_DRIFT: Section = Section {
+    label: "drift",
+    bass: &[
+        0, REST, REST, REST, REST, REST, REST, REST, 0, REST, REST, REST, REST, REST, REST, REST,
+    ],
+    lead: &[
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, 9, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, 8, REST, REST, REST, REST, REST, REST, REST, 7, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST,
+    ],
+    pad: &[
+        0, REST, REST, REST, REST, REST, REST, REST, 0, REST, REST, REST, REST, REST, REST, REST,
+    ],
+    arp: &[REST],
+    drums: &[
+        Kick, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent,
+        Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent,
+        Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Silent,
+    ],
+};
+
+const COLD_PULSE: Section = Section {
+    label: "pulse",
+    bass: COLD_BASS_PEDAL,
+    lead: &[REST],
+    pad: COLD_PAD_DRONE,
+    arp: COLD_MOTIF,
+    drums: &[
+        Kick, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Kick, Silent, Silent, Silent,
+        Silent, Silent, Hat, Silent, Kick, Silent, Silent, Silent, Silent, Silent, Silent, Silent,
+        Kick, Silent, Silent, Silent, Silent, Silent, Hat, Silent, Kick, Silent, Silent, Silent,
+        Silent, Silent, Silent, Silent, Kick, Silent, Silent, Silent, Silent, Silent, Hat, Silent,
+        Kick, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Kick, Silent, Silent, Silent,
+        Snare, Silent, Hat, Silent,
+    ],
+};
+
+const COLD_VEIL: Section = Section {
+    label: "veil",
+    bass: COLD_BASS_PEDAL,
+    lead: &[
+        9, REST, REST, REST, REST, REST, REST, REST, 8, REST, REST, REST, REST, REST, REST, REST,
+        7, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, 10, REST, REST, REST, REST, REST, REST, REST, 9, REST, REST,
+        REST, 8, REST, REST, REST, REST, REST, REST, REST, 7, REST, REST, REST, REST, REST, REST,
+        REST,
+    ],
+    pad: &[
+        0, REST, REST, REST, 0, REST, REST, REST, 0, REST, REST, REST, 0, REST, REST, REST, 0,
+        REST, REST, REST, 0, REST, REST, REST, 0, REST, REST, REST, 0, REST, REST, REST, 1, REST,
+        REST, REST, 1, REST, REST, REST, 1, REST, REST, REST, 1, REST, REST, REST, 1, REST, REST,
+        REST, 1, REST, REST, REST, 1, REST, REST, REST, 1, REST, REST, REST,
+    ],
+    arp: COLD_MOTIF,
+    drums: &[
+        Kick, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Kick, Silent, Silent, Silent,
+        Snare, Silent, Hat, Silent,
+    ],
+};
+
+const COLD_SINK: Section = Section {
+    label: "sink",
+    bass: &[
+        0, REST, REST, REST, REST, REST, 0, REST, 0, REST, REST, REST, REST, REST, REST, REST, 0,
+        REST, REST, REST, REST, REST, 0, REST, 0, REST, REST, REST, REST, REST, REST, REST, 5,
+        REST, REST, REST, REST, REST, 5, REST, 5, REST, REST, REST, REST, REST, REST, REST, 6,
+        REST, REST, REST, REST, REST, 6, REST, 6, REST, REST, REST, REST, REST, REST, REST,
+    ],
+    lead: &[
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST, REST,
+        REST, REST, REST, REST, REST, REST, REST, REST, REST, 9, REST, REST, REST, 8, REST, REST,
+        REST, 12, REST, REST, REST, REST, REST, REST, REST, 11, REST, REST, REST, REST, REST, REST,
+        REST, 13, REST, REST, REST, REST, REST, REST, REST, 14, REST, REST, REST, REST, REST, REST,
+        REST,
+    ],
+    pad: &[
+        0, REST, REST, REST, REST, REST, REST, REST, 0, REST, REST, REST, REST, REST, REST, REST,
+        0, REST, REST, REST, REST, REST, REST, REST, 0, REST, REST, REST, REST, REST, REST, REST,
+        5, REST, REST, REST, REST, REST, REST, REST, 5, REST, REST, REST, REST, REST, REST, REST,
+        6, REST, REST, REST, REST, REST, REST, REST, 6, REST, REST, REST, REST, REST, REST, REST,
+    ],
+    arp: COLD_MOTIF,
+    drums: &[
+        Kick, Silent, Silent, Silent, Silent, Silent, Silent, Silent, Kick, Silent, Silent, Silent,
+        Snare, Silent, Silent, Silent, Kick, Silent, Silent, Silent, Silent, Silent, Silent,
+        Silent, Kick, Silent, Silent, Silent, Snare, Silent, Silent, Silent, Kick, Silent, Silent,
+        Silent, Silent, Silent, Silent, Silent, Kick, Silent, Silent, Silent, Snare, Silent,
+        Silent, Silent, Kick, Silent, Silent, Silent, Silent, Silent, Snare, Silent, Kick, Silent,
+        Kick, Silent, Snare, Silent, Snare, Silent,
+    ],
+};
+
+const COLD_STORAGE: SongSpec = SongSpec {
+    name: "Cold Storage",
+    root: 34.65, // C#1
+    scale: MINOR,
+    bpm: 78.0,
+    steps_per_beat: 4,
+    bass_wave: OscillatorType::Sawtooth,
+    lead_wave: OscillatorType::Triangle,
+    pad_wave: OscillatorType::Sawtooth,
+    arp_wave: OscillatorType::Sine,
+    sections: &[
+        COLD_DRIFT, COLD_PULSE, COLD_VEIL, COLD_PULSE, COLD_SINK, COLD_VEIL, COLD_SINK, COLD_DRIFT,
+    ],
+    intensity: 0.7,
+};
+
 /// All songs, in ascending darkness (intro first). Index into this with
-/// `play_song`, or map a floor number through `song_for_floor`.
+/// `play_song`, or map a floor number through `song_for_floor`. The two
+/// trailing entries ("Razor Circuit", "Cold Storage") are AUDITION CANDIDATES:
+/// listed here so the `?viz` tracker can play them, but mapped to no floor —
+/// promote one by referencing it from [`song_for_floor`].
 pub const SONGS: &[SongSpec] = &[
     INSERT_COIN,
     NEON_LOUNGE,
@@ -1145,6 +1443,8 @@ pub const SONGS: &[SongSpec] = &[
     DEEP_STATIC,
     STATIC_PRAYER,
     MASK_OF_DREAD,
+    RAZOR_CIRCUIT,
+    COLD_STORAGE,
 ];
 
 /// Resolve a scale-degree (root = 0, +1 = next scale note up, +scale.len() = an
@@ -1695,6 +1995,43 @@ mod sms_tables {
 /// `playback_rate` jitter, so repeated shots never sound stamped.
 const SFX_VARIANTS: usize = 3;
 
+// --- car SFX tunables ----------------------------------------------------
+//
+// The title-screen ENGINE IDLE is baked as ONE seamless loop. The buffer is
+// a warm-up head (the lowpass ring-in settles into its periodic steady
+// state) followed by the loop region; playback uses `loop_start`/`loop_end`
+// so the wrap always lands steady-state → steady-state. Every periodic
+// component — oscillators, the pitch LFO, the amp LFO, the detune beat —
+// completes a WHOLE number of cycles over [`ENGINE_LOOP_SECONDS`], so the
+// waveform phase at `loop_end` equals the phase at `loop_start` and the
+// loop point is inaudible by construction (unit-tested below).
+
+/// Warm-up head (seconds) rendered before the loop region: long enough for
+/// the shared lowpass to settle onto the periodic steady state.
+const ENGINE_LOOP_WARMUP: f64 = 0.5;
+/// Loop region length (seconds). All [`ENGINE_LOOP_LOCKED_HZ`] frequencies
+/// complete whole cycles in this span.
+const ENGINE_LOOP_SECONDS: f64 = 4.0;
+/// Engine fundamental: the main sawtooth "motor buzz" (180 cycles/loop).
+const ENGINE_F0: f64 = 45.0;
+/// Detuned partner saw: exactly ONE extra cycle per loop = a 0.25 Hz beat
+/// against [`ENGINE_F0`] that makes the idle breathe and still wraps.
+const ENGINE_F0_DETUNED: f64 = 45.25;
+/// Pulse layer an octave up — firing-order character (360 cycles/loop).
+const ENGINE_PULSE_F: f64 = 90.0;
+/// Subharmonic sine under-thump at half the fundamental (90 cycles/loop).
+const ENGINE_SUB_F: f64 = 22.5;
+/// Slow pitch wobble on the saws (3 cycles/loop; a zero-mean sine over
+/// whole cycles adds zero net phase, so the oscillators still wrap).
+const ENGINE_PITCH_LFO_HZ: f64 = 0.75;
+/// Pitch wobble depth in Hz.
+const ENGINE_PITCH_LFO_DEPTH: f64 = 0.9;
+/// Slow amplitude swell on the master gain (2 cycles/loop).
+const ENGINE_AMP_LFO_HZ: f64 = 0.5;
+/// Playback gain of the idle loop under the title menu — a low underlay
+/// beneath the music, never a lead.
+const ENGINE_IDLE_GAIN: f64 = 0.055;
+
 /// Every pre-renderable one-shot SFX voice. The discriminant indexes
 /// [`BakedSfx::bufs`].
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1715,11 +2052,20 @@ enum SfxKind {
     LevelClear,
     MaskCrack,
     Elevator,
+    /// The looping title-screen car idle (see the car SFX tunables above).
+    /// Not a one-shot: played via [`AudioEngine::start_engine_idle`] /
+    /// [`AudioEngine::stop_engine_idle`] only — never through `play_baked`
+    /// — and it has NO live fallback (skipped silently until baked).
+    EngineIdle,
+    TireScreech,
+    CarDoorOpen,
+    CarDoorClose,
 }
 
 /// All kinds, in pre-render order (the combat sounds first — they are the
-/// expensive ones and the ones a firefight needs early).
-const SFX_KINDS: [SfxKind; 16] = [
+/// expensive ones and the ones a firefight needs early; the car sounds
+/// last — menu / rare-scenario sounds, the lowest priority tier).
+const SFX_KINDS: [SfxKind; 20] = [
     SfxKind::AttackGun,
     SfxKind::AttackMachinegun,
     SfxKind::AttackShotgun,
@@ -1736,6 +2082,10 @@ const SFX_KINDS: [SfxKind; 16] = [
     SfxKind::LevelClear,
     SfxKind::MaskCrack,
     SfxKind::Elevator,
+    SfxKind::EngineIdle,
+    SfxKind::TireScreech,
+    SfxKind::CarDoorOpen,
+    SfxKind::CarDoorClose,
 ];
 
 /// Where a pre-rendered voice plugs back into the live bus at play time: the
@@ -1787,6 +2137,17 @@ impl SfxKind {
             SfxKind::LevelClear => (SfxRoute::Room, 0.6, 0.0),
             SfxKind::MaskCrack => (SfxRoute::Room, 0.55, 0.0),
             SfxKind::Elevator => (SfxRoute::Room, 1.5, 0.0),
+            // Warm-up head + loop region; rate jitter would be harmless
+            // (a pure transposition keeps the wrap seamless) but the loop's
+            // per-start jitter is applied by `start_engine_idle` instead.
+            SfxKind::EngineIdle => (
+                SfxRoute::Room,
+                ENGINE_LOOP_WARMUP + ENGINE_LOOP_SECONDS,
+                0.0,
+            ),
+            SfxKind::TireScreech => (SfxRoute::Melee(0.25), 1.1, 0.06),
+            SfxKind::CarDoorOpen => (SfxRoute::Room, 0.55, 0.06),
+            SfxKind::CarDoorClose => (SfxRoute::Melee(0.22), 0.7, 0.05),
         };
         SfxSpec {
             route,
@@ -1969,6 +2330,9 @@ pub struct AudioEngine {
     /// `Some` only while an offline pre-render is being built: the voice
     /// builders then target this context/sink instead of the live bus.
     render: RefCell<Option<OfflineRender>>,
+    /// The running title-screen engine-idle loop (source + its gain),
+    /// `None` while stopped. See [`Self::start_engine_idle`].
+    engine_idle: RefCell<Option<(web_sys::AudioBufferSourceNode, GainNode)>>,
 }
 
 impl AudioEngine {
@@ -2012,6 +2376,7 @@ impl AudioEngine {
             pump_budget: Cell::new(1),
             render_dead: Cell::new(false),
             render: RefCell::new(None),
+            engine_idle: RefCell::new(None),
         };
         engine.rebuild_music_bake();
         engine
@@ -2932,6 +3297,394 @@ impl AudioEngine {
         self.tone(1318.5, 1318.5, t + 0.78, 0.45, 0.11, OscillatorType::Sine);
     }
 
+    // --- car SFX -----------------------------------------------------------
+
+    /// The offline build of the ENGINE IDLE loop buffer (never played as a
+    /// one-shot — see [`Self::start_engine_idle`]). A smooth low motor:
+    /// two barely-detuned sawtooths (their 0.25 Hz beat is the breathing)
+    /// and a quiet pulse an octave up, all through one dark lowpass; a sine
+    /// subharmonic under-thump; a slow sine LFO wobbling the saws' pitch
+    /// and another breathing the master gain. Everything starts at t = 0
+    /// with constant levels (no envelopes — a loop must not pump) and every
+    /// periodic component completes whole cycles over the loop region, so
+    /// the buffer wraps seamlessly (see the car SFX tunables).
+    ///
+    /// Variants differ only in layer BALANCE and wobble depth (loop-safe);
+    /// the locked frequencies are never jittered — that would break the
+    /// whole-cycle wrap.
+    fn synth_engine_idle(&self) {
+        let ctx = match self.bctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let out = match self.sfx_out() {
+            Some(o) => o,
+            None => return,
+        };
+        let t = self.now(); // 0.0 offline: the warm-up head starts the buffer
+        let len = ENGINE_LOOP_WARMUP + ENGINE_LOOP_SECONDS;
+        // Master gain (breathed by the amp LFO) into the sink.
+        let master = match ctx.create_gain() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let _ = master.gain().set_value_at_time(1.0, t);
+        let _ = master.connect_with_audio_node(&out);
+        let mout: &web_sys::AudioNode = master.as_ref();
+        // The shared dark lowpass for the buzzy layers.
+        let lp = match ctx.create_biquad_filter() {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        lp.set_type(BiquadFilterType::Lowpass);
+        let _ = lp.frequency().set_value_at_time(230.0, t);
+        let _ = lp.q().set_value_at_time(0.9, t);
+        let _ = lp.connect_with_audio_node(mout);
+        let lout: &web_sys::AudioNode = lp.as_ref();
+        // One flat-gain oscillator layer; returns the oscillator so the
+        // LFOs can be wired to the pitched ones.
+        let layer = |wave: OscillatorType, f: f64, level: f64, dest: &web_sys::AudioNode| {
+            let (osc, g) = match (ctx.create_oscillator(), ctx.create_gain()) {
+                (Ok(o), Ok(g)) => (o, g),
+                _ => return None,
+            };
+            osc.set_type(wave);
+            let _ = osc.frequency().set_value_at_time(f as f32, t);
+            let _ = g.gain().set_value_at_time(level as f32, t);
+            let _ = osc.connect_with_audio_node(&g);
+            let _ = g.connect_with_audio_node(dest);
+            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let _ = sched.start_with_when(t);
+            let _ = sched.stop_with_when(t + len);
+            Some(osc)
+        };
+        let saw1 = layer(
+            OscillatorType::Sawtooth,
+            ENGINE_F0,
+            0.50 * self.jit(0.15),
+            lout,
+        );
+        let saw2 = layer(
+            OscillatorType::Sawtooth,
+            ENGINE_F0_DETUNED,
+            0.34 * self.jit(0.15),
+            lout,
+        );
+        let _ = layer(
+            OscillatorType::Square,
+            ENGINE_PULSE_F,
+            0.11 * self.jit(0.2),
+            lout,
+        );
+        // The subharmonic sine bypasses the filter (already pure).
+        let _ = layer(
+            OscillatorType::Sine,
+            ENGINE_SUB_F,
+            0.55 * self.jit(0.1),
+            mout,
+        );
+        // Pitch LFO → the saws' frequency params (whole cycles per loop:
+        // zero net phase added, the wrap stays exact).
+        if let (Ok(lfo), Ok(depth)) = (ctx.create_oscillator(), ctx.create_gain()) {
+            lfo.set_type(OscillatorType::Sine);
+            let _ = lfo
+                .frequency()
+                .set_value_at_time(ENGINE_PITCH_LFO_HZ as f32, t);
+            let _ = depth
+                .gain()
+                .set_value_at_time((ENGINE_PITCH_LFO_DEPTH * self.jit(0.3)) as f32, t);
+            let _ = lfo.connect_with_audio_node(&depth);
+            for o in [&saw1, &saw2].into_iter().flatten() {
+                let _ = depth.connect_with_audio_param(&o.frequency());
+            }
+            let sched: &web_sys::AudioScheduledSourceNode = lfo.as_ref();
+            let _ = sched.start_with_when(t);
+            let _ = sched.stop_with_when(t + len);
+        }
+        // Amp LFO → the master gain param (base 1.0 ± depth).
+        if let (Ok(lfo), Ok(depth)) = (ctx.create_oscillator(), ctx.create_gain()) {
+            lfo.set_type(OscillatorType::Sine);
+            let _ = lfo
+                .frequency()
+                .set_value_at_time(ENGINE_AMP_LFO_HZ as f32, t);
+            let _ = depth
+                .gain()
+                .set_value_at_time((0.12 * self.jit(0.3)) as f32, t);
+            let _ = lfo.connect_with_audio_node(&depth);
+            let _ = depth.connect_with_audio_param(&master.gain());
+            let sched: &web_sys::AudioScheduledSourceNode = lfo.as_ref();
+            let _ = sched.start_with_when(t);
+            let _ = sched.stop_with_when(t + len);
+        }
+    }
+
+    /// Start the looping ENGINE IDLE under the title menu. Baked-only:
+    /// until its variants are rendered this is a silent no-op (a per-frame
+    /// caller simply retries — the loop has no live fallback, per-frame
+    /// graph construction being exactly what the bake system avoids).
+    /// Idempotent while running. Plays the loop region (`loop_start` =
+    /// after the warm-up head) through a low gain into the room voice,
+    /// eased in so returning to the title never bumps.
+    pub fn start_engine_idle(&self) {
+        if !self.enabled.get() || self.engine_idle.borrow().is_some() {
+            return;
+        }
+        let ctx = match &self.ctx {
+            Some(c) => c,
+            None => return,
+        };
+        let bufs = self.baked.bufs.borrow();
+        let set = &bufs[SfxKind::EngineIdle as usize];
+        if set.len() < SFX_VARIANTS {
+            return; // bake not ready: skip silently (same bar as play_baked)
+        }
+        let out = match self.sfx_out() {
+            Some(o) => o,
+            None => return,
+        };
+        let (src, gain) = match (ctx.create_buffer_source(), ctx.create_gain()) {
+            (Ok(s), Ok(g)) => (s, g),
+            _ => return,
+        };
+        let variant = ((self.rand() * SFX_VARIANTS as f64) as usize).min(SFX_VARIANTS - 1);
+        src.set_buffer(Some(&set[variant]));
+        src.set_loop(true);
+        src.set_loop_start(ENGINE_LOOP_WARMUP);
+        src.set_loop_end(ENGINE_LOOP_WARMUP + ENGINE_LOOP_SECONDS);
+        // A tiny per-start transposition (pure rate change: the wrap stays
+        // seamless) so the idle never sits on the exact same pitch twice.
+        let _ = src
+            .playback_rate()
+            .set_value_at_time(self.jit(0.03) as f32, 0.0);
+        let now = self.now();
+        let g = gain.gain();
+        let _ = g.set_value_at_time(0.0001, now);
+        let _ = g.linear_ramp_to_value_at_time(ENGINE_IDLE_GAIN as f32, now + 0.6);
+        let _ = src.connect_with_audio_node(AsRef::<web_sys::AudioNode>::as_ref(&gain));
+        let _ = gain.connect_with_audio_node(&out);
+        // Start inside the loop region, skipping the warm-up head.
+        let _ = src.start_with_when_and_grain_offset(now, ENGINE_LOOP_WARMUP);
+        *self.engine_idle.borrow_mut() = Some((src, gain));
+    }
+
+    /// Stop the engine idle with a short fade (no-op when not running).
+    /// No `enabled` guard: a stop must always land, even with sound off.
+    pub fn stop_engine_idle(&self) {
+        let Some((src, gain)) = self.engine_idle.borrow_mut().take() else {
+            return;
+        };
+        let now = self.now();
+        let g = gain.gain();
+        let _ = g.cancel_scheduled_values(now);
+        let _ = g.set_value_at_time(g.value(), now);
+        let _ = g.linear_ramp_to_value_at_time(0.0001, now + 0.15);
+        let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
+        let _ = sched.stop_with_when(now + 0.2);
+    }
+
+    /// TIRE SCREECH — a locked-wheel skid, ~0.9 s.
+    pub fn play_tire_screech(&self) {
+        if !self.enabled.get() {
+            return; // sound off: build NO nodes (the context is suspended anyway)
+        }
+        if self.play_baked(SfxKind::TireScreech) {
+            return;
+        }
+        self.synth_tire_screech();
+    }
+
+    /// Live synthesis of [`Self::play_tire_screech`] (also pre-rendered):
+    /// a high-Q bandpass noise squeal whining DOWN as the car scrubs
+    /// speed, a weaker inharmonic upper squeal mode, a rubber-on-asphalt
+    /// rumble underneath and a faint bright broadband grit layer.
+    fn synth_tire_screech(&self) {
+        let t = self.t0();
+        let out = match self.voice(0.25, 1.4) {
+            Some(v) => v,
+            None => return,
+        };
+        let j = self.jit(0.06);
+        // The main squeal: resonant bandpass noise gliding ~2.1k → 850 Hz.
+        self.noise_full(
+            &out,
+            t,
+            0.03,
+            0.9,
+            0.9,
+            0.55,
+            BiquadFilterType::Bandpass,
+            2100.0 * j,
+            850.0 * j,
+            14.0,
+        );
+        // A weaker upper mode, out of tune with the first (a real screech
+        // carries several inharmonic squeal resonances).
+        self.noise_full(
+            &out,
+            t + 0.02,
+            0.02,
+            0.7,
+            0.7,
+            0.30,
+            BiquadFilterType::Bandpass,
+            3150.0 * j,
+            1300.0 * j,
+            9.0,
+        );
+        // Rubber-on-asphalt rumble under it.
+        self.noise_env(
+            &out,
+            t,
+            0.01,
+            0.75,
+            0.22,
+            BiquadFilterType::Lowpass,
+            520.0,
+            240.0,
+            1.0,
+        );
+        // Slight grit: a faint bright broadband layer over the squeal.
+        self.noise_env(
+            &out,
+            t,
+            0.0,
+            0.45,
+            0.10,
+            BiquadFilterType::Highpass,
+            3800.0,
+            2600.0,
+            0.7,
+        );
+    }
+
+    /// CAR DOOR OPEN — latch click + brief hinge creak, short.
+    pub fn play_car_door_open(&self) {
+        if !self.enabled.get() {
+            return; // sound off: build NO nodes (the context is suspended anyway)
+        }
+        if self.play_baked(SfxKind::CarDoorOpen) {
+            return;
+        }
+        self.synth_car_door_open();
+    }
+
+    /// Live synthesis of [`Self::play_car_door_open`] (also pre-rendered):
+    /// the latch release (click + two metallic ticks), then two stick-slip
+    /// hinge creak segments — narrow resonant noise sweeping UP — and a
+    /// whiff of cabin air.
+    fn synth_car_door_open(&self) {
+        let t = self.t0();
+        let out = match self.sfx_out() {
+            Some(o) => o,
+            None => return,
+        };
+        let j = self.jit(0.06);
+        // Latch: the release click, then the handle springing back.
+        self.click(&out, t, 0.7);
+        self.tick(&out, t + 0.004, 1750.0 * j, 0.22);
+        self.tick(&out, t + 0.052, 1150.0 * j, 0.13);
+        // Hinge creak: two stick-slip squeaks sweeping up.
+        self.noise_full(
+            &out,
+            t + 0.07,
+            0.02,
+            0.16,
+            0.16,
+            0.16,
+            BiquadFilterType::Bandpass,
+            640.0 * j,
+            1350.0 * j,
+            10.0,
+        );
+        self.noise_full(
+            &out,
+            t + 0.19,
+            0.015,
+            0.12,
+            0.12,
+            0.11,
+            BiquadFilterType::Bandpass,
+            900.0 * j,
+            1700.0 * j,
+            10.0,
+        );
+        // A whiff of cabin air as the seal breaks.
+        self.noise_env(
+            &out,
+            t + 0.06,
+            0.03,
+            0.22,
+            0.05,
+            BiquadFilterType::Highpass,
+            1800.0,
+            2600.0,
+            0.7,
+        );
+    }
+
+    /// CAR DOOR CLOSE — the classic thunk, short.
+    pub fn play_car_door_close(&self) {
+        if !self.enabled.get() {
+            return; // sound off: build NO nodes (the context is suspended anyway)
+        }
+        if self.play_baked(SfxKind::CarDoorClose) {
+            return;
+        }
+        self.synth_car_door_close();
+    }
+
+    /// Live synthesis of [`Self::play_car_door_close`] (also pre-rendered):
+    /// a click + low-passed slap front, the latch snapping shut, a low
+    /// sine drop and the multi-partial `wham` body, then a quick hollow
+    /// body-shell resonance tail — all glued by the voice's soft clip.
+    fn synth_car_door_close(&self) {
+        let t = self.t0();
+        let out = match self.voice(0.22, 2.2) {
+            Some(v) => v,
+            None => return,
+        };
+        let j = self.jit(0.05);
+        // The slam front: pressure click + a dark slap.
+        self.click(&out, t, 0.9);
+        self.noise_env(
+            &out,
+            t,
+            0.0,
+            0.06,
+            0.8,
+            BiquadFilterType::Lowpass,
+            2200.0,
+            350.0,
+            0.8,
+        );
+        // The latch snapping shut on top.
+        self.tick(&out, t + 0.010, 2300.0 * j, 0.14);
+        // The body: a low sine/triangle-ish drop plus the heavy wham.
+        self.tone_out(
+            &out,
+            95.0 * j,
+            52.0,
+            t + 0.004,
+            0.16,
+            0.55,
+            0.003,
+            OscillatorType::Sine,
+        );
+        self.wham(&out, t + 0.002, 0.5);
+        // Quick hollow body-resonance tail (the door panel ringing out).
+        self.noise_env(
+            &out,
+            t + 0.02,
+            0.0,
+            0.28,
+            0.22,
+            BiquadFilterType::Bandpass,
+            190.0 * j,
+            130.0,
+            3.0,
+        );
+    }
+
     // --- pre-rendered voices -----------------------------------------------
     //
     // Building a fresh Web Audio graph per shot (oscillators + envelopes +
@@ -3009,6 +3762,10 @@ impl AudioEngine {
             SfxKind::LevelClear => self.synth_level_clear(),
             SfxKind::MaskCrack => self.synth_mask_crack(),
             SfxKind::Elevator => self.synth_elevator(),
+            SfxKind::EngineIdle => self.synth_engine_idle(),
+            SfxKind::TireScreech => self.synth_tire_screech(),
+            SfxKind::CarDoorOpen => self.synth_car_door_open(),
+            SfxKind::CarDoorClose => self.synth_car_door_close(),
         }
     }
 
@@ -5141,6 +5898,57 @@ mod tests {
         }
     }
 
+    /// Every section of every song must be whole bars long (its longest lane a
+    /// multiple of 16 steps at 4 steps/beat, 4 beats/bar): `advance_section`
+    /// fires when the LONGEST lane ends, so a ragged longest lane would shift
+    /// every later section off the beat grid. Short lanes may still be any
+    /// length — they loop inside the section (that is how Cold Storage's
+    /// 12-step motif phases 3-against-4) — and every arrangement is non-empty.
+    #[test]
+    fn sections_are_bar_aligned() {
+        for song in SONGS {
+            assert!(
+                !song.sections.is_empty(),
+                "{}: empty arrangement",
+                song.name
+            );
+            let bar = (song.steps_per_beat.max(1) as usize) * 4;
+            for sec in song.sections {
+                let len = section_len(sec);
+                assert!(
+                    len >= bar && len.is_multiple_of(bar),
+                    "{}: section '{}' is {} steps — not whole bars of {}",
+                    song.name,
+                    sec.label,
+                    len,
+                    bar
+                );
+            }
+        }
+    }
+
+    /// The audition candidates are appended, unmapped extras: they must be in
+    /// [`SONGS`] (so the `?viz` tracker lists them) but no floor may pick them
+    /// yet, and the ending's calmest-track pick must not drift onto them.
+    #[test]
+    fn audition_candidates_are_listed_but_unmapped() {
+        for name in ["Razor Circuit", "Cold Storage"] {
+            assert!(SONGS.iter().any(|s| s.name == name), "{name} not in SONGS");
+            for floor in 0..32 {
+                assert_ne!(
+                    song_for_floor(floor).name,
+                    name,
+                    "floor {floor} maps to audition candidate {name}"
+                );
+            }
+        }
+        let calmest = SONGS
+            .iter()
+            .min_by(|a, b| a.intensity.total_cmp(&b.intensity))
+            .unwrap();
+        assert_eq!(calmest.name, "Insert Coin");
+    }
+
     /// The bake-priority split must keep every attack and hit kind in the
     /// combat prefix that renders before the music voices.
     #[test]
@@ -5149,7 +5957,14 @@ mod tests {
         for kind in &SFX_KINDS[..SFX_COMBAT_KINDS] {
             assert!(!matches!(
                 kind,
-                SfxKind::Death | SfxKind::LevelClear | SfxKind::MaskCrack | SfxKind::Elevator
+                SfxKind::Death
+                    | SfxKind::LevelClear
+                    | SfxKind::MaskCrack
+                    | SfxKind::Elevator
+                    | SfxKind::EngineIdle
+                    | SfxKind::TireScreech
+                    | SfxKind::CarDoorOpen
+                    | SfxKind::CarDoorClose
             ));
         }
         for combat in [
@@ -5165,5 +5980,61 @@ mod tests {
             let pos = SFX_KINDS.iter().position(|k| *k == combat).unwrap();
             assert!(pos < SFX_COMBAT_KINDS);
         }
+    }
+
+    /// The engine idle bakes as a seamless loop by construction: every
+    /// periodic component must complete a WHOLE number of cycles over the
+    /// loop region, so the waveform phase at `loop_end` equals the phase at
+    /// `loop_start` (a zero-mean pitch LFO over whole cycles adds zero net
+    /// phase to the oscillators it modulates).
+    #[test]
+    fn engine_idle_loop_wraps_seamlessly() {
+        // Every frequency the idle's synthesis locks to the loop grid.
+        for f in [
+            ENGINE_F0,
+            ENGINE_F0_DETUNED,
+            ENGINE_PULSE_F,
+            ENGINE_SUB_F,
+            ENGINE_PITCH_LFO_HZ,
+            ENGINE_AMP_LFO_HZ,
+        ] {
+            let cycles = f * ENGINE_LOOP_SECONDS;
+            assert!(
+                (cycles - cycles.round()).abs() < 1e-9,
+                "{f} Hz: {cycles} cycles per loop is not whole"
+            );
+        }
+        // The detune beat between the saw pair wraps too: exactly one
+        // extra cycle per loop (a 1/ENGINE_LOOP_SECONDS Hz breathing beat).
+        let beat_cycles = (ENGINE_F0_DETUNED - ENGINE_F0) * ENGINE_LOOP_SECONDS;
+        assert!((beat_cycles - 1.0).abs() < 1e-9);
+        // A real warm-up head exists so the lowpass settles onto its
+        // periodic steady state before the loop region starts, and the
+        // baked buffer covers warm-up + loop exactly.
+        let spec = SfxKind::EngineIdle.spec();
+        assert!(spec.len - ENGINE_LOOP_SECONDS >= 0.25, "no warm-up head");
+        assert_eq!(spec.len, ENGINE_LOOP_WARMUP + ENGINE_LOOP_SECONDS);
+        // The loop is transposed per start, never rate-jittered per play
+        // through the one-shot path.
+        assert_eq!(spec.rate_jitter, 0.0);
+    }
+
+    /// The car sounds are menu / rare-scenario sounds: they must sit at the
+    /// very tail of the bake queue (after even the other rare one-shots),
+    /// and each kind appears exactly once.
+    #[test]
+    fn car_sfx_bake_last() {
+        let pos = |k: SfxKind| SFX_KINDS.iter().position(|x| *x == k).unwrap();
+        let tail = [
+            SfxKind::EngineIdle,
+            SfxKind::TireScreech,
+            SfxKind::CarDoorOpen,
+            SfxKind::CarDoorClose,
+        ];
+        for k in tail {
+            assert!(pos(k) >= SFX_KINDS.len() - tail.len());
+            assert_eq!(SFX_KINDS.iter().filter(|x| **x == k).count(), 1);
+        }
+        assert!(pos(SfxKind::Elevator) < pos(SfxKind::EngineIdle));
     }
 }

@@ -31,8 +31,8 @@ use crate::math::Vec2;
 use crate::pathfinding::NavigationGrid;
 use crate::scenario::ScenarioState;
 use crate::systems::{
-    AISystem, BossSystem, BulletSystem, CombatSystem, FinisherSystem, MovementSystem, PickupSystem,
-    ProjectileTrailSystem, StunSystem, ThrownWeaponSystem, WeaponUpdateSystem,
+    AISystem, BossSystem, BulletSystem, CombatSystem, FinisherSystem, HeadSystem, MovementSystem,
+    PickupSystem, ProjectileTrailSystem, StunSystem, ThrownWeaponSystem, WeaponUpdateSystem,
 };
 
 /// While a tutorial gate freezes the world, knockdown clocks tick for the
@@ -63,6 +63,7 @@ pub fn gate_frozen_step(world: &mut World, dt: f32) {
     MovementSystem.run(world, dt);
     BulletSystem.run(world, dt);
     ThrownWeaponSystem.run(world, dt);
+    HeadSystem.run(world, dt); // kicked-off heads keep sliding under a freeze
     ProjectileTrailSystem.run(world, dt);
     PickupSystem.run(world, dt);
     // Knockdowns: the fall animation plays (age advances) but the timer is
@@ -86,6 +87,7 @@ pub struct Simulation {
     combat: CombatSystem,
     bullet: BulletSystem,
     thrown: ThrownWeaponSystem,
+    head: HeadSystem,
     projectile: ProjectileTrailSystem,
     pickup: PickupSystem,
     /// Bot navigation state: the player position at the previous `bot_step`,
@@ -275,6 +277,7 @@ impl Simulation {
             combat: CombatSystem,
             bullet: BulletSystem,
             thrown: ThrownWeaponSystem,
+            head: HeadSystem,
             projectile: ProjectileTrailSystem,
             pickup: PickupSystem,
             bot_prev_pos: None,
@@ -298,6 +301,7 @@ impl Simulation {
         self.combat.run(&mut self.world, dt);
         self.bullet.run(&mut self.world, dt);
         self.thrown.run(&mut self.world, dt);
+        self.head.run(&mut self.world, dt);
         self.projectile.run(&mut self.world, dt);
         self.pickup.run(&mut self.world, dt);
     }
