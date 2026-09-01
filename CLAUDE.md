@@ -51,7 +51,13 @@
   via a lazily-built glyph atlas, robots rendered LIVE every frame through the
   robot-core.js 3D->2D pipeline (`createRobotPipeline(gl)` on the same GL
   context, into a per-frame scratch tile atlas — continuous animation time, no
-  cache/quantization); the boss the same way through shoggoth-core.js
+  cache/quantization — as ONE BATCH per flush: `batchBegin` / `batchDraw` /
+  `batchEnd` draw every queued robot into its own 128-texel tile viewport of
+  one shared 1024² pass-1 target (one clear) and run ONE tile-aware inked
+  post draw over all the tiles, written AT BLOCK RESOLUTION — `ROBOT_ART` =
+  ceil(128 / 3) = 43 texels per robot, one per pixelate block — into the
+  NEAREST-sampled robot atlas (the same image a 1:1 tile gives; the quad
+  covers 128/3 of those texels)); the boss the same way through shoggoth-core.js
   (`createShoggothPipeline(gl)`, a bigger 256px scratch tile, opcode SHOGGOTH
   = 13: `x y sizePx heading reveal time`)
 - shoggoth-core.js extends robot-core's exported `SpritePipeline` (shared
@@ -262,7 +268,8 @@
 - `tools/`: the `?viz` panels — `inspector.html` (character inspector: `?kind=robot&color=…` / `?kind=shoggoth&phase=masked|enraged`, `&embed=1` for the SPRITES tab; 3D orbit + 2D top-down views), `levels.html` + `levels-editor*.js` (level + scenario editor, LEVELS tab) — and `gen_levels.py`, `gen_props.py`
 - `levels/`: `floor_00.json` (the ground-level cold open: gate / parking lot, passive crowd), `floor_01..13.json`, `floor_13h.json`, `index.json` — the floors' single source of truth (format: `docs/SCENARIO_FORMAT.md`). Level *index* = position in `index.json` (sorted by id: index 0 = floor 0); `?floor=N` takes the floor **id** A floor may carry `"props": [{ "kind", "x", "y", "rot" (deg, cw), "size" (world units, default 100) }]` = placed set dressing (`kind` = a `PROP_NAMES` snake_case id, validated by `gen_levels.py` → `FloorDef.props: &[PropPlacement]`); DECORATION ONLY — drawn in-game by `src/floor_props.rs` (`render_floor_props`, called in `update_game` after the walls and before the actors, inside the `?pixel=N` world group), no collision
 - `src/levels_data.rs` is GENERATED from `levels/*.json` by `make gen-levels`; `make check-levels` validates + checks it is current. Never hand-edit it.
-- Cold-open engine bits (floor 0): `src/systems/passive.rs` — passive civilians (`"type": "passive"` spawns → `AIState::Passive`, brief in `AI.passive: PassiveAI`; the AI system delegates to `passive::update_passive`; `alert_passives` / any damage flips them hostile); scenario actions `alert` / `hold` / `look_at` (`scenario.rs` `AlertTarget` / `HoldDef` / `LookAtDef`; `ScenarioState::hold_active/hold_caption/look_at`; lib.rs `update_game` skips player input + `stop_player` while held, `render_hold_caption`, `Camera::set_cinematic`); `FloorDef.surface` (`src/level.rs` renders checker|asphalt|marble|concrete|grating); `ElevatorKind` lift|door|gate on entry/exits (`render_comms.rs` `draw_doorway` / `draw_gateway`); `"to": "surface"` → `scenario::SURFACE_EXIT` (floor id 0 is real now)
+- `songs/`: the tracker SONGS — one `songs/<name>.json` per song (format: `docs/SONGS_FORMAT.md`: key / tempo / waves + sections as token-string lanes, `.` = rest) + `songs/index.json` (the `SONGS` order); `make gen-songs` compiles them via `tools/gen_songs.py` (stdlib only) into `src/audio/songs_data.rs` (GENERATED — never hand-edit), `make check-songs` (in `make verify`) validates + checks it is current. The audio module tree: `src/audio.rs` (root) → `audio/songs.rs` (the song types, `Wave`, in-key pitch math, the pure `Playhead` sequencer + `music_keys` voice-set enumeration, `song_for_floor`; host-tested), `audio/sfx.rs` (the SFX kind catalogue + bake specs, host-tested), `audio/engine.rs` (the WebAudio `AudioEngine`, wasm-only)
+- Cold-open engine bits (floor 0): `src/systems/passive.rs` — passive civilians (`"type": "passive"` spawns → `AIState::Passive`, brief in `AI.passive: PassiveAI`; the AI system delegates to `passive::update_passive`; `alert_passives` / any damage flips them hostile; un-alerted passives are BYSTANDERS, not rogues: `scenario::count_rogues` / `game::count_alive_enemies` skip them, so the HUD count and `kills` ignore them and `all_dead` — which also needs at least one kill — cannot fire on an un-alerted crowd); scenario actions `alert` / `hold` / `look_at` (`scenario.rs` `AlertTarget` / `HoldDef` / `LookAtDef`; `ScenarioState::hold_active/hold_caption/look_at`; lib.rs `update_game` skips player input + `stop_player` while held, `render_hold_caption`, `Camera::set_cinematic`); `FloorDef.surface` (`src/level.rs` renders checker|asphalt|marble|concrete|grating); `ElevatorKind` lift|door|gate on entry/exits (`render_comms.rs` `draw_doorway` / `draw_gateway`); `"to": "surface"` → `scenario::SURFACE_EXIT` (floor id 0 is real now)
 - `src/props.rs`: the PROP library, 60 props in three FAMILIES (`PROP_FAMILIES` = contiguous id ranges: DATACENTER 0–23 the server-floor set, OUTDOOR 24–41 the gate / parking lot for the planned floor 00 — cars, charge pad, main gate with its swing arm, guard booth, bollards, planter, lamp post, road decals, drone pad, scooter rack, drain, holo billboard, dumpster —, LOBBY 42–59 the welcome hall — reception desk, turnstiles, scanner arch, benches, plant, lobby holo, directory totem, vending, coffee corner, charge lockers, floor logo, call panel, velvet rope, extinguisher, credit kiosk, holo clock, welcome mat; `family_range` / `prop_family`; new props are APPENDED, ids are persisted in props/props.json) drawn imperatively from primitives as LAYERS (`PROP_LAYERS`: `LayerDef { name, pivot, bounds, rot: LayerRot::{None, Static(deg), Spin{hz}, Sway{deg,hz}, Anim(fn)}, pixel: PixelMode::{Before, After} }`; `draw_prop_layer(g, kind, layer, t)` draws one layer in its own frame; `draw_prop_ex(g, kind, center, size, t, px, &PropDrawOpts{visible, modes})` is the driver — per layer `translate(pivot)` then, with `px >= 2` (design units of the 100-box), a pixel group per layer either BEFORE its rotation (rotate, then group: the pixel image turns as a whole) or AFTER (group in the parent frame, rotate inside: re-rasterized on the parent grid); `px <= 1` = plain drawing, identical to the pre-layer look; `draw_prop` = `draw_prop_ex` with the saved settings — what a floor renderer should call). Nothing draws props on floors yet
 - `props/props.json` = the SAVED per-prop `px` + per-layer before/after (format: `docs/PROPS_FORMAT.md`), written by the `?viz` PROPS page SAVE (`PUT /props/props.json`, serve.py, same token as levels) and compiled by `make gen-props` into `src/props_data.rs` (`PROP_SETTINGS`; GENERATED — never hand-edit); `make check-props` (in `make verify`) validates + checks it is current. `tools/gen_props.py` reads `PROP_NAMES` from props.rs for the order / kind ids (`snake_case` of the display name); layer names are checked by a props.rs unit test
 
@@ -296,25 +303,43 @@
 
 ## Verification Requirements
 - ALWAYS run `make verify` before declaring any task complete or saying "we're done"
-- The `make verify` command runs core CI pipeline checks locally:
+- The `make verify` command runs the core CI pipeline checks locally
+  (`CORE_CHECKS` in the Makefile — CI's `.github/workflows/ci.yml` runs
+  exactly these Makefile targets, one job each):
   - Code formatting (rustfmt) - `make check-fmt`
-  - Linting (clippy) - `make check-clippy`
+  - Linting (clippy, native + wasm32) - `make check-clippy`
   - Test suite (all tests including doc tests) - `make check-test`
   - Release build - `make check-build`
+  - wasm32 compile check - `make check-wasm-build`
+  - Generated data current - `make check-levels`, `make check-props`
 - ALL checks must pass before completing a task
 - If any check fails, fix the issues and re-run `make verify`
+- `[profile.release]` in Cargo.toml is `lto` + `codegen-units = 1` +
+  `panic = "abort"` + `strip` — release only; `cargo test` keeps unwinding
 
-### Note on E2E Tests
-- E2E tests (`make check-e2e`) require wasm-bindgen-cli build tool to be installed
+### Note on the browser suites (E2E + render tests)
+- Two browser suites, both excluded from `make verify` and run by
+  `make verify-all` (= `verify` + `check-e2e` + `check-render`) and by
+  `.github/workflows/e2e-tests.yml` (one matrix job each):
+  - `make check-e2e` — the Playwright specs (`tests/e2e/specs`)
+  - `make check-render` — the standalone renderer acceptance scripts
+    `tests/e2e/composite-coherence.js` (~7 s) + `props-stability.js` (~60 s,
+    fixed-sleep bound), in parallel against a `serve.py` the target starts on
+    `RENDER_PORT` (a free ephemeral port by default) and kills; logs in `tests/e2e/test-results/render-*.log`
+- Both depend on `make e2e-prep`: `make build-wasm` (installs the wasm32
+  target and `wasm-bindgen-cli` pinned to the `wasm-bindgen` version in
+  Cargo.lock when missing or mismatched — `build-wasm.sh` is gone), `bun
+  install`, the Chromium install (+ rootless system-libs fallback)
 - wasm-bindgen and web-sys are already in Cargo.toml as dependencies (no new dependencies needed)
-- E2E tests are excluded from `make verify` but can be run separately with `make verify-all`
-- The `make check-e2e` target will automatically install wasm-bindgen-cli if not present
-- E2E tests require the wasm32-unknown-unknown Rust target and Playwright dependencies
+- The e2e toolchain runs on **Bun** (`bun install` / `bunx playwright ...`), not npm/node
 
 #### **E2E Test Timeout Enforcement**
-- Prefer running E2E tests via `make check-e2e` — it wires up the toolchain and the timeout for you
-- The e2e toolchain runs on **Bun** (`bun install` / `bunx playwright ...`), not npm/node
-- Both the Makefile and the Playwright config enforce a 60-second timeout so a run cannot hang indefinitely
+- Prefer running the suites via `make check-e2e` / `make check-render` — they
+  wire up the toolchain, `ulimit -c 0` (no GB-sized Chromium core dumps in
+  tests/e2e/) and the timeouts for you
+- Both the Makefile and the Playwright config enforce a 60-second timeout so
+  a run cannot hang indefinitely; the render scripts get `timeout
+  $(RENDER_TIMEOUT)` (180 s) each
 
 ## Perf Tracing (`?perf`)
 - Opt-in per-frame trace across engine / boundary / renderer: add `perf` to
@@ -331,7 +356,8 @@
   disabled run never crosses the boundary), and renderer.js sub-spans
   (`walk`, `sprites`, `submit`, `postfx` — they nest inside `flush` on the
   timeline) + counters (`cmds`, `draws` via a gl.drawArrays shim installed
-  only when tracing, `robots`). Skipped FPS-cap frames never open a frame
+  only when tracing, `fbos` = render-target switches via a gl.bindFramebuffer
+  shim likewise, `robots`). Skipped FPS-cap frames never open a frame
 
 ## Debug Mode
 - The game has a built-in debug mode that can be toggled by pressing **I** during gameplay
