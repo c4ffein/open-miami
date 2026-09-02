@@ -76,11 +76,16 @@
 
    Robots: true live 3D->2D, every frame, at continuous animation time. Each
    ROBOT command reserves a tile in a per-frame scratch atlas and queues a
-   robot-core render (pass 1: lit boxes -> small scene FBO; pass 2: edge-ink /
-   posterize / pixelate, transparent background -> that atlas tile). The
-   queued renders run inside this same GL context right before the batch that
-   samples them is drawn, so a robot costs two tiny passes plus one textured
-   quad, with no tile cache, no quantization and no CPU readback.
+   robot-core render. The queued robots run as ONE BATCH inside this same GL
+   context right before the batch that samples them is drawn (robot-core's
+   batchBegin / batchDraw / batchEnd): pass 1 draws every robot's lit boxes
+   into its own tile viewport of a single 1024² scene target (one clear), and
+   pass 2 is ONE tile-aware edge-ink / posterize / pixelate draw over all the
+   tiles into the atlas, AT BLOCK RESOLUTION (ROBOT_ART = ceil(128 / 3) = 43
+   NEAREST texels per robot — one per pixelate block, the exact image a 1:1
+   post pass gives, without the 9 redundant copies of each block). So N robots
+   cost N tiny scene draws + one post draw + N textured quads, with no tile
+   cache, no quantization of the animation and no CPU readback.
 
    Shoggoth (the boss): the same mechanism through shoggoth-core.js — a SHOGGOTH
    command reserves a bigger tile in its own scratch atlas and queues a live
@@ -154,9 +159,14 @@ const ROBOT_COLORS = ["coral", "red", "violet", "magenta"];
 const ROBOT_POSES = ["idle", "walk", "shoot", "hit", "downed",
   "downed_headless", "kick", "stomp"];
 const ROBOT_WEAPONS = ["fist", "pistol", "machinegun", "shotgun"];
-const ROBOT_TILE = 128; // per-robot tile resolution (px) in the scratch atlas
+const ROBOT_TILE = 128; // per-robot pass-1 scene resolution (texels)
 const ROBOT_PX = 3; // robot-core pixelation block size at this tile size
-const ROBOT_ATLAS_SIZE = 1024; // 8x8 = 64 robots per batch; more just flush early
+// Atlas tile side: one NEAREST texel per pixelate block (the post pass writes
+// the batch at block resolution; the quad shows ROBOT_TILE / ROBOT_PX = 42.67
+// of them — the last block is a partial one, exactly as at 1:1).
+const ROBOT_ART = Math.ceil(ROBOT_TILE / ROBOT_PX); // 43
+const ROBOT_COLS = 8; // batch layout: 8x8 = 64 robots per batch; more just flush early
+const ROBOT_ATLAS_SIZE = 512; // >= ROBOT_COLS * ROBOT_ART (344) texels
 
 /* ---- shoggoth (boss) scratch tiles ---- */
 const SHOG_TILE = 384; // the boss is large (and drawn ~1:1 at the camera zoom)
@@ -164,10 +174,10 @@ const SHOG_PX = 4; // shoggoth-core pixelation block size at this tile size
 const SHOG_ATLAS_SIZE = 768; // 2x2 = 4 bosses per batch (one is the norm)
 
 /* ---- pixel-sprite tiles (PORTRAIT + GUNPICKUP) ----
-   Unlike the robot atlas (rendered ~1:1 and LINEAR-sampled), these tiles are
-   NEAREST-filtered and rendered AT THE ART RESOLUTION, then upscaled by the
-   quad that samples them — true pixel art, never smoothed. One 64px tile per
-   sprite; a ground gun uses a GUN_ART-texel corner of its tile. */
+   Like the robot atlas, these tiles are NEAREST-filtered and rendered AT THE
+   ART RESOLUTION, then upscaled by the quad that samples them — true pixel
+   art, never smoothed. One 64px tile per sprite; a ground gun uses a
+   GUN_ART-texel corner of its tile. */
 const FX_TILE = 64; // tile side = the portrait's art resolution (texels)
 const GUN_ART = 32; // ground-gun art resolution (texels) within a tile
 // (32 divides ROBOT_TILE exactly: renderGun's pixelate block is a clean
@@ -256,8 +266,14 @@ void main(){
 // Full-screen post pass. One shader, one uniform selecting the look — the
 // kinds are all cheap single-pass tricks (a few extra taps at most), kept
 // deliberately dependency-free. See the header table for the kind list.
+// highp (when available): screen-pixel arithmetic in the 1000s that fp16
+// cannot represent (the same guard as robot-core's post pass).
 const POST_FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 varying vec2 vUv;
 uniform sampler2D uScene;
 uniform vec2 uRes;
@@ -546,7 +562,11 @@ void main(){
 //   mode 1 (present, drawn to the canvas): the crisp scene screen-blended
 //     with the freshly written trails.
 const WARP_FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 varying vec2 vUv;
 uniform sampler2D uScene;
 uniform sampler2D uPrev;
@@ -636,6 +656,14 @@ export function initRenderer(canvas) {
     gl.drawArrays = function (mode, first, count) {
       PERF._draws++;
       return rawDrawArrays(mode, first, count);
+    };
+    // ... and every render-target switch (the `fbos` counter: sprite passes,
+    // pixel groups, post passes).
+    PERF._fbos = 0;
+    const rawBindFramebuffer = gl.bindFramebuffer.bind(gl);
+    gl.bindFramebuffer = function (target, fbo) {
+      PERF._fbos++;
+      return rawBindFramebuffer(target, fbo);
     };
   }
   // Per-frame accumulators (renderQueuedSprites runs a variable number of
@@ -752,12 +780,14 @@ export function initRenderer(canvas) {
     gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
-  /* ---- robot scratch atlas: a render target the robot passes draw into ---- */
+  /* ---- robot scratch atlas: the render target the batched post pass fills ---- */
   // Tiles are handed out per frame in stream order and recycled after every
   // flush (once the quads that sample them have been drawn), so the atlas
-  // only ever needs to hold the robots of one batch.
-  const robotTex = makeTexture(ROBOT_ATLAS_SIZE);
-  const robotCols = Math.floor(ROBOT_ATLAS_SIZE / ROBOT_TILE);
+  // only ever needs to hold the robots of one batch. NEAREST, per the art
+  // direction: no sampling-side smoothing anywhere (the rotated quad keeps
+  // hard block edges).
+  const robotTex = makeTexture(ROBOT_ATLAS_SIZE, true);
+  const robotCols = ROBOT_COLS;
   const robotSlots = robotCols * robotCols;
   const robotFbo = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, robotFbo);
@@ -773,10 +803,10 @@ export function initRenderer(canvas) {
   let robotUsed = 0;
   // Reused per render so the per-frame robot path never allocates.
   const robotOpts = {
-    pose: "idle", color: "coral", weapon: "fist", time: 0,
-    facingDeg: 0, px: ROBOT_PX, transparent: true,
+    pose: "idle", color: "coral", weapon: "fist", time: 0, facingDeg: 0,
   };
-  const robotTarget = { fbo: robotFbo, x: 0, y: 0, w: ROBOT_TILE, h: ROBOT_TILE };
+  // The batch lays its tiles out from the atlas origin (robotCols per row).
+  const robotTarget = { fbo: robotFbo, x: 0, y: 0 };
 
   /* ---- shoggoth scratch atlas: same scheme, bigger tiles, its own pipeline ---- */
   const shogTex = makeTexture(SHOG_ATLAS_SIZE);
@@ -1507,7 +1537,11 @@ void main() {
      below every floor base tone in src/palette.rs (a void, not a light
      show). Periods 10 s+ (angular speeds <= ~0.5 rad/s). */
   const BACKDROP_FS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 uniform vec2 uSize;   // rect size, CSS px
 uniform float uTexH;  // render-target height, texels (for the y flip)
 uniform float uT;     // clock, seconds
@@ -1823,15 +1857,21 @@ void main() {
     gl.disableVertexAttribArray(loc.aPos);
     gl.disableVertexAttribArray(loc.aUv);
     gl.disableVertexAttribArray(loc.aColor);
-    for (let i = 0; i < robotUsed; i++) {
-      const q = i * 4;
-      robotOpts.color = ROBOT_COLORS[robotQueue[q] | 0] || ROBOT_COLORS[0];
-      robotOpts.pose = ROBOT_POSES[robotQueue[q + 1] | 0] || ROBOT_POSES[0];
-      robotOpts.weapon = ROBOT_WEAPONS[robotQueue[q + 2] | 0] || ROBOT_WEAPONS[0];
-      robotOpts.time = robotQueue[q + 3];
-      robotTarget.x = (i % robotCols) * ROBOT_TILE;
-      robotTarget.y = Math.floor(i / robotCols) * ROBOT_TILE;
-      robotPipe.render(robotOpts, robotTarget);
+    // Robots: ONE batch — every robot into its own tile viewport of the
+    // pipeline's shared scene target, then one post draw over all of them
+    // into the atlas at block resolution (tile i at column i % robotCols,
+    // row floor(i / robotCols), ROBOT_ART texels each — what drawRobot samples).
+    if (robotUsed > 0) {
+      robotPipe.batchBegin(robotCols, robotUsed);
+      for (let i = 0; i < robotUsed; i++) {
+        const q = i * 4;
+        robotOpts.color = ROBOT_COLORS[robotQueue[q] | 0] || ROBOT_COLORS[0];
+        robotOpts.pose = ROBOT_POSES[robotQueue[q + 1] | 0] || ROBOT_POSES[0];
+        robotOpts.weapon = ROBOT_WEAPONS[robotQueue[q + 2] | 0] || ROBOT_WEAPONS[0];
+        robotOpts.time = robotQueue[q + 3];
+        robotPipe.batchDraw(i, robotOpts);
+      }
+      robotPipe.batchEnd(robotTarget, robotCols, robotUsed, ROBOT_PX, true);
     }
     for (let i = 0; i < shogUsed; i++) {
       const q = i * 3;
@@ -2302,14 +2342,19 @@ void main() {
     robotQueue[q + 1] = poseIdx;
     robotQueue[q + 2] = weaponIdx;
     robotQueue[q + 3] = time;
-    const inset = 0.5; // half-texel inset against neighbor-tile bleed
-    const tx = (slot % robotCols) * ROBOT_TILE;
-    const ty = Math.floor(slot / robotCols) * ROBOT_TILE;
+    // The tile holds one atlas texel per pixelate block; the quad covers the
+    // tile's 128 scene texels = 128 / 3 blocks (the last one partial), inset
+    // by half a scene texel on each side (against neighbor-tile bleed — the
+    // same mapping as sampling a 1:1 tile, so the on-screen size is unchanged).
+    const span = ROBOT_TILE / ROBOT_PX;
+    const inset = 0.5 / ROBOT_PX;
+    const tx = (slot % robotCols) * ROBOT_ART;
+    const ty = Math.floor(slot / robotCols) * ROBOT_ART;
     // Pass 2 draws with GL's bottom-up viewport, so the tile's first row is
     // the robot's bottom: flip v so the quad reads it top-down like the canvas.
     const u0 = (tx + inset) / ROBOT_ATLAS_SIZE;
-    const v0 = (ty + ROBOT_TILE - inset) / ROBOT_ATLAS_SIZE;
-    const u1 = (tx + ROBOT_TILE - inset) / ROBOT_ATLAS_SIZE;
+    const v0 = (ty + span - inset) / ROBOT_ATLAS_SIZE;
+    const u1 = (tx + span - inset) / ROBOT_ATLAS_SIZE;
     const v1 = (ty + inset) / ROBOT_ATLAS_SIZE;
     const h = sizePx / 2;
     const c = Math.cos(angle), s = Math.sin(angle);
@@ -2459,10 +2504,11 @@ void main() {
     // (including the intermediate flushes it triggers); `sprites` is the
     // accumulated live robot/boss passes, `submit` the final upload + draw,
     // `postfx` the post pass. All nest inside the wasm side's `flush` span.
-    let perfT0 = 0, perfD0 = 0;
+    let perfT0 = 0, perfD0 = 0, perfF0 = 0;
     if (PERF) {
       perfT0 = performance.now();
       perfD0 = PERF._draws;
+      perfF0 = PERF._fbos;
       perfSpriteMs = 0;
       perfSpriteT0 = 0;
       perfRobotN = 0;
@@ -2677,6 +2723,7 @@ void main() {
       if (perfSpriteMs > 0) window.perfSpan("sprites", perfSpriteT0, perfSpriteMs);
       window.perfCount("cmds", cmds.length);
       window.perfCount("draws", PERF._draws - perfD0);
+      window.perfCount("fbos", PERF._fbos - perfF0);
       window.perfCount("robots", perfRobotN);
     }
   }

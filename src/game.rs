@@ -137,7 +137,7 @@ pub fn initialize_game(world: &mut World, level: usize) {
 /// Zero the player's velocity (a scenario `hold` locks movement: the input
 /// system is skipped, so the last frame's velocity must not linger).
 pub fn stop_player(world: &mut World) {
-    if let Some(&p) = world.query::<Player>().first() {
+    if let Some(p) = world.first::<Player>() {
         if let Some(v) = world.get_component_mut::<Velocity>(p) {
             v.x = 0.0;
             v.y = 0.0;
@@ -157,30 +157,27 @@ pub fn purge_all_enemies(world: &mut World) {
 
 /// Check if player is alive
 pub fn is_player_alive(world: &World) -> bool {
-    let players: Vec<Entity> = world.query::<Player>();
-    players
-        .first()
-        .and_then(|&e| world.get_component::<Health>(e))
+    world
+        .first::<Player>()
+        .and_then(|e| world.get_component::<Health>(e))
         .map(|h| h.is_alive())
         .unwrap_or(false)
 }
 
 /// Get player health for UI
 pub fn get_player_health(world: &World) -> i32 {
-    let players: Vec<Entity> = world.query::<Player>();
-    players
-        .first()
-        .and_then(|&e| world.get_component::<Health>(e))
+    world
+        .first::<Player>()
+        .and_then(|e| world.get_component::<Health>(e))
         .map(|h| h.current)
         .unwrap_or(0)
 }
 
 /// Get player ammo for UI
 pub fn get_player_ammo(world: &World) -> i32 {
-    let players: Vec<Entity> = world.query::<Player>();
-    players
-        .first()
-        .and_then(|&e| world.get_component::<Weapon>(e))
+    world
+        .first::<Player>()
+        .and_then(|e| world.get_component::<Weapon>(e))
         .map(|w| w.ammo)
         .unwrap_or(0)
 }
@@ -233,8 +230,8 @@ fn punch_from_player(
 /// This is the input-independent core of shooting so it can be driven both by
 /// the browser input layer and by the headless [`crate::sim::Simulation`].
 pub fn fire_player_weapon(world: &mut World, target_world_pos: Vec2) -> bool {
-    let player = match world.query::<Player>().first() {
-        Some(&e) => e,
+    let player = match world.first::<Player>() {
+        Some(e) => e,
         None => return false,
     };
     let player_pos = match world.get_component::<Position>(player) {
@@ -303,10 +300,9 @@ pub fn fire_player_weapon(world: &mut World, target_world_pos: Vec2) -> bool {
 
 /// Get the player's current weapon type (for the HUD); `None` when unarmed.
 pub fn get_player_weapon(world: &World) -> Option<WeaponType> {
-    let players: Vec<Entity> = world.query::<Player>();
-    players
-        .first()
-        .and_then(|&e| world.get_component::<Weapon>(e))
+    world
+        .first::<Player>()
+        .and_then(|e| world.get_component::<Weapon>(e))
         .map(|w| w.weapon_type)
 }
 
@@ -348,7 +344,7 @@ pub fn gated_player_input(
     use crate::systems::{FinisherSystem, PickupSystem, ThrownWeaponSystem};
 
     // Aim: the player keeps turning to the mouse under the freeze.
-    if let Some(&player) = world.query::<Player>().first() {
+    if let Some(player) = world.first::<Player>() {
         if let Some(pos) = world.get_component::<Position>(player).map(|p| p.to_vec2()) {
             let d = intents.mouse_world - pos;
             if let Some(rot) = world.get_component_mut::<Rotation>(player) {
@@ -376,10 +372,9 @@ pub fn gated_player_input(
 
 /// Get player position
 pub fn get_player_position(world: &World) -> Option<Vec2> {
-    let players: Vec<Entity> = world.query::<Player>();
-    players
-        .first()
-        .and_then(|&e| world.get_component::<Position>(e))
+    world
+        .first::<Player>()
+        .and_then(|e| world.get_component::<Position>(e))
         .map(|p| p.to_vec2())
 }
 
@@ -393,11 +388,13 @@ pub fn total_enemy_health(world: &World) -> i32 {
         .sum()
 }
 
-/// Count alive enemies
+/// Count alive enemies. Un-alerted civilians (`AIState::Passive`) are not
+/// enemies yet: they are skipped, like in `scenario::count_rogues`.
 pub fn count_alive_enemies(world: &World) -> usize {
     let enemies: Vec<Entity> = world.query::<Enemy>();
     enemies
         .iter()
+        .filter(|&&e| !crate::systems::passive::is_passive(world, e))
         .filter(|&&e| {
             world
                 .get_component::<Health>(e)
@@ -505,6 +502,9 @@ mod tests {
         let mut world = World::new();
         initialize_game(&mut world, 1);
 
+        // Floor 1 opens on a passive lobby crowd: bystanders, not enemies.
+        assert_eq!(count_alive_enemies(&world), 0);
+        crate::systems::passive::alert_passives(&mut world, crate::scenario::AlertTarget::All);
         assert_eq!(count_alive_enemies(&world), 4);
 
         // Kill one enemy

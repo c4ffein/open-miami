@@ -1,3 +1,9 @@
+# Every job here is ONE `make` target (the Makefile is the single source of
+# truth for what a check means — `make verify` runs the same set locally).
+# The coverage / tarpaulin job was removed: it compiled cargo-tarpaulin from
+# source on every run (uncached, ~5+ min) and uploaded with
+# fail_ci_if_error: false, i.e. it could never fail and never cached.
+# `make check-coverage` still exists for local use.
 name: CI
 
 on:
@@ -11,137 +17,117 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: Test Suite
+  fmt:
+    name: Rustfmt (make check-fmt)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: make check-fmt
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+  data:
+    name: Levels + props data (make check-levels check-props)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make check-levels
+      - run: make check-props
 
-      - name: Cache cargo registry
+  test:
+    name: Test Suite (make check-test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry + git
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry/index
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-index-
-
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-deps-
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-build-
-
-      - name: Run tests
-        run: cargo test --verbose --all-features
-
-      - name: Run doc tests
-        run: cargo test --doc --verbose
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-test-
+      - run: make check-test
 
   clippy:
-    name: Clippy (Linting)
+    name: Clippy (make check-clippy)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-
-      - name: Cache cargo registry
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo registry + git
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry/index
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-index-
-
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-deps-
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-clippy-
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Add wasm32 target
-        run: rustup target add wasm32-unknown-unknown
-
-      - name: Run clippy (wasm32 target — audio/graphics/input/render/camera/lib are wasm-only)
-        run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
-
-      - name: Check levels data is valid and up to date
-        run: python3 tools/gen_levels.py --check
-
-      - name: Check props settings are valid and up to date
-        run: python3 tools/gen_props.py --check
-
-  fmt:
-    name: Rustfmt (Code Formatting)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
+      - run: make check-clippy
 
   build:
-    name: Build (Release)
+    name: Build (make check-build)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo registry
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry + git
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry/index
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-index-
-
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-deps-
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-release-
+      - run: make check-build
 
-      - name: Build release
-        run: cargo build --release --verbose
-
-  coverage:
-    name: Code Coverage
+  wasm-check:
+    name: WASM compile check (make check-wasm-build)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin
-
-      - name: Generate coverage
-        run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out xml
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          file: ./cobertura.xml
-          fail_ci_if_error: false
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo registry + git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-deps-
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-wasm-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-check-
+      - run: make check-wasm-build

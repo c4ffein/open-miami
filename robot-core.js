@@ -20,7 +20,10 @@
                                       RobotPipeline (here) and ShoggothPipeline
                                       (shoggoth-core.js) extend: it owns the shared
                                       "inked" post-process, the FBO and the compile
-                                      helpers, so no scene duplicates them
+                                      helpers, so no scene duplicates them;
+                                      plus the BATCH path (one pass-1 target
+                                      tiled per sprite, ONE post pass) the
+                                      game's renderer uses for its robots
      createRobotPipeline(gl, {rt})  - the two-pass pipeline on an EXISTING WebGL
                                       context: .render(opts, target) draws one
                                       robot into a caller-provided framebuffer
@@ -269,48 +272,77 @@ attribute vec2 aPos;
 varying vec2 vUv;
 void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }
 `;
+/* Pass 2 is TILE-AWARE so one draw can post-process a whole batch: the
+   viewport is `uBlocks` output blocks wide/high (one fragment per block when
+   the target is at block resolution; several when it is 1:1 — both quantize
+   identically), every `uTileBlocks` blocks start a new pass-1 tile of
+   `uTile` texels, and the block's pass-1 sample sits at the block's centre
+   within ITS tile. Neighbour taps are clamped to the tile — exactly what
+   CLAMP_TO_EDGE did when every sprite had a texture of its own — so tiles
+   never ink each other's silhouettes. A single render() is the one-tile
+   case (uTile = uSize, uBlocks = uTileBlocks = uSize/uPx), which reproduces
+   the original `floor(vUv*uSize/uPx)*uPx + uPx/2` block grid exactly.
+   highp: block centres are pass-1 texel coordinates (up to 1024) that a
+   16-bit float would round onto texel boundaries. */
 const postFS = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
 precision mediump float;
+#endif
 varying vec2 vUv;
 uniform sampler2D uTex;
 uniform vec2 uTexel;   // 1/size
-uniform float uPx;     // pixel block size in px
-uniform vec2 uSize;    // texture size
+uniform float uPx;     // pixel block size in pass-1 texels
+uniform vec2 uSize;    // pass-1 texture size (texels)
+uniform vec2 uTile;    // pass-1 tile size (texels): = uSize for a single render
+uniform vec2 uBlocks;  // viewport size in blocks
+uniform float uTileBlocks; // blocks per tile side (ceil(tile/px) in a batch)
 uniform float uTransparent; // 1.0 -> background blocks output alpha 0
 uniform float uEdge;   // luma-gradient threshold that inks an edge
 uniform float uAiInk;  // 1.0 = ink part-id boundaries (0 for tiny art, where
                        //  every texel borders one and would come out black)
 float luma(vec3 c){ return dot(c, vec3(0.299,0.587,0.114)); }
-vec4 samp(vec2 uv){ return texture2D(uTex, uv); }
+// This block's sample point + its tile's texel-centre bounds, in UV. The
+// arithmetic mirrors the legacy single-tile shader operation for operation
+// (block = floor(...)*px + px/2 texels, uv = block/size, taps at uv +
+// uTexel*px) so a single render() stays bit-identical to what it was.
+vec2 gUv, gLo, gHi;
+vec4 samp(vec2 off){ return texture2D(uTex, clamp(gUv + uTexel*off, gLo, gHi)); }
 void main(){
-  vec2 px = uSize;
-  vec2 block = floor(vUv*px/uPx)*uPx + uPx*0.5;
-  vec2 uv = block/px;
+  vec2 o = vUv * uBlocks;                      // position in blocks
+  vec2 tileIdx = floor(o / uTileBlocks);
+  vec2 tile0 = tileIdx * uTile;                // the tile's origin, pass-1 texels
+  vec2 local = o - tileIdx * uTileBlocks;      // block within the tile
+  vec2 block = tile0 + floor(local)*uPx + uPx*0.5; // the block's sample point, pass-1 texels
+  gUv = block / uSize;
+  gLo = (tile0 + 0.5) / uSize;
+  gHi = (tile0 + uTile - 0.5) / uSize;
 
-  vec4 c = samp(uv);
+  vec4 c = samp(vec2(0.0));
   vec3 col = c.rgb;
 
-  vec2 t = uTexel*uPx;
-  float l00=luma(samp(uv+vec2(-t.x,-t.y)).rgb);
-  float l10=luma(samp(uv+vec2( 0.0,-t.y)).rgb);
-  float l20=luma(samp(uv+vec2( t.x,-t.y)).rgb);
-  float l01=luma(samp(uv+vec2(-t.x, 0.0)).rgb);
-  float l21=luma(samp(uv+vec2( t.x, 0.0)).rgb);
-  float l02=luma(samp(uv+vec2(-t.x, t.y)).rgb);
-  float l12=luma(samp(uv+vec2( 0.0, t.y)).rgb);
-  float l22=luma(samp(uv+vec2( t.x, t.y)).rgb);
+  vec2 t = vec2(uPx);
+  float l00=luma(samp(vec2(-t.x,-t.y)).rgb);
+  float l10=luma(samp(vec2( 0.0,-t.y)).rgb);
+  float l20=luma(samp(vec2( t.x,-t.y)).rgb);
+  float l01=luma(samp(vec2(-t.x, 0.0)).rgb);
+  float l21=luma(samp(vec2( t.x, 0.0)).rgb);
+  float l02=luma(samp(vec2(-t.x, t.y)).rgb);
+  float l12=luma(samp(vec2( 0.0, t.y)).rgb);
+  float l22=luma(samp(vec2( t.x, t.y)).rgb);
   float gx = -l00 -2.0*l01 -l02 + l20 + 2.0*l21 + l22;
   float gy = -l00 -2.0*l10 -l20 + l02 + 2.0*l12 + l22;
   float lumEdge = sqrt(gx*gx+gy*gy);
 
   float a = c.a;
-  float ai = max(max(abs(a-samp(uv+vec2(t.x,0.0)).a),abs(a-samp(uv+vec2(-t.x,0.0)).a)),
-                 max(abs(a-samp(uv+vec2(0.0,t.y)).a),abs(a-samp(uv+vec2(0.0,-t.y)).a)));
+  float ai = max(max(abs(a-samp(vec2(t.x,0.0)).a),abs(a-samp(vec2(-t.x,0.0)).a)),
+                 max(abs(a-samp(vec2(0.0,t.y)).a),abs(a-samp(vec2(0.0,-t.y)).a)));
 
   float silh = 0.0;
   if(a < 0.02){
-    float near = max(max(samp(uv+vec2(t.x,0.0)).a,samp(uv+vec2(-t.x,0.0)).a),
-                     max(samp(uv+vec2(0.0,t.y)).a,samp(uv+vec2(0.0,-t.y)).a));
+    float near = max(max(samp(vec2(t.x,0.0)).a,samp(vec2(-t.x,0.0)).a),
+                     max(samp(vec2(0.0,t.y)).a,samp(vec2(0.0,-t.y)).a));
     silh = near>0.02 ? 1.0 : 0.0;
   }
 
@@ -626,6 +658,9 @@ export class SpritePipeline {
       uTexel: gl.getUniformLocation(this.postProg,"uTexel"),
       uPx: gl.getUniformLocation(this.postProg,"uPx"),
       uSize: gl.getUniformLocation(this.postProg,"uSize"),
+      uTile: gl.getUniformLocation(this.postProg,"uTile"),
+      uBlocks: gl.getUniformLocation(this.postProg,"uBlocks"),
+      uTileBlocks: gl.getUniformLocation(this.postProg,"uTileBlocks"),
       uTransparent: gl.getUniformLocation(this.postProg,"uTransparent"),
       uEdge: gl.getUniformLocation(this.postProg,"uEdge"),
       uAiInk: gl.getUniformLocation(this.postProg,"uAiInk"),
@@ -720,17 +755,108 @@ export class SpritePipeline {
       if(transparent){ gl.clearColor(0,0,0,0); } else { gl.clearColor(0.03,0.04,0.05,1); }
       gl.clear(gl.COLOR_BUFFER_BIT);
     }
+    px = Math.max(1, px || 5);
+    // one tile = the whole scene texture: the viewport spans RT/px blocks
+    this._runPost(this.rtTex, this.RT, this.RT, px, this.RT/px, this.RT/px, this.RT/px, transparent, aiInk);
+  }
+
+  // The post draw itself, over whatever viewport is bound: `tex` (texSize²)
+  // holds tiles of `tile` texels, the viewport spans blocksW x blocksH
+  // blocks of `px` texels, `tileBlocks` blocks per tile (see postFS).
+  _runPost(tex, texSize, tile, px, blocksW, blocksH, tileBlocks, transparent, aiInk){
+    const gl=this.gl;
     gl.useProgram(this.postProg);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.rtTex);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.uniform1i(this.pLoc.uTex,0);
-    gl.uniform2f(this.pLoc.uTexel, 1/this.RT, 1/this.RT);
-    gl.uniform2f(this.pLoc.uSize, this.RT, this.RT);
-    gl.uniform1f(this.pLoc.uPx, Math.max(1, px || 5));
+    gl.uniform2f(this.pLoc.uTexel, 1/texSize, 1/texSize);
+    gl.uniform2f(this.pLoc.uSize, texSize, texSize);
+    gl.uniform2f(this.pLoc.uTile, tile, tile);
+    gl.uniform2f(this.pLoc.uBlocks, blocksW, blocksH);
+    gl.uniform1f(this.pLoc.uTileBlocks, tileBlocks);
+    gl.uniform1f(this.pLoc.uPx, px);
     gl.uniform1f(this.pLoc.uTransparent, transparent ? 1.0 : 0.0);
     gl.uniform1f(this.pLoc.uEdge, this.edge);
     gl.uniform1f(this.pLoc.uAiInk, aiInk === undefined ? 1.0 : aiInk);
     gl.bindBuffer(gl.ARRAY_BUFFER,this.quadBuf); gl.enableVertexAttribArray(this.pLoc.aPos); gl.vertexAttribPointer(this.pLoc.aPos,2,gl.FLOAT,false,0,0);
     gl.drawArrays(gl.TRIANGLES,0,6);
+  }
+
+  /* ---- BATCH rendering: many sprites, one pass-1 target, ONE post pass ----
+     Rendering N sprites one by one costs each of them two framebuffer
+     switches, a clear and a post pass. A batch instead tiles ONE pass-1
+     target (cols x cols tiles of rt texels, one depth renderbuffer, built
+     lazily, scissor-cleared ONCE over the rows in use), draws every sprite
+     into its own tile viewport (+ scissor, so nothing spills), and then
+     resamples all the tiles with ONE tile-aware post draw into the caller's
+     atlas AT BLOCK RESOLUTION: tile i lands at
+       (target.x + (i % cols) * B, target.y + floor(i / cols) * B),
+     B = ceil(rt / px) texels, one texel per pixelate block — the same image
+     a 1:1 post pass produces, minus the px² redundant copies of each block.
+     The atlas must be NEAREST-sampled; the caller's quad covers rt/px of
+     those texels (the last block is partial when px does not divide rt).
+       _batchBegin(cols, n)   bind + clear; pass-1 state as _beginScene
+       _batchTile(i)          viewport + scissor = tile i, matrix pool reset
+       _batchEnd(target, cols, n, px, transparent, aiInk)   the post draw
+     Same exit-state contract as render() (see the class comment). */
+  _batchTarget(cols){
+    const gl=this.gl;
+    if(this.batch && this.batch.cols === cols) return this.batch;
+    if(this.batch){
+      gl.deleteFramebuffer(this.batch.fbo); gl.deleteRenderbuffer(this.batch.depthRB);
+      gl.deleteTexture(this.batch.tex);
+    }
+    const size = cols*this.RT;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size,size,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    const depthRB = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depthRB);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, size, size);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRB);
+    if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE) console.warn("batch FBO incomplete");
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.batch = {cols, size, tex, depthRB, fbo};
+    return this.batch;
+  }
+  _batchBegin(cols, n){
+    const gl=this.gl;
+    const b=this._batchTarget(cols);
+    M4.reset();
+    gl.disable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, b.fbo);
+    // only the rows this batch uses need clearing (colour + depth)
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(0, 0, b.size, Math.ceil(n/cols)*this.RT);
+    gl.clearColor(0,0,0,0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+  }
+  _batchTile(i){
+    const gl=this.gl, b=this.batch, RT=this.RT;
+    const x=(i % b.cols)*RT, y=Math.floor(i / b.cols)*RT;
+    gl.viewport(x,y,RT,RT);
+    gl.scissor(x,y,RT,RT);
+    M4.reset(); // each sprite gets the whole scratch matrix pool
+  }
+  _batchEnd(target, cols, n, px, transparent, aiInk){
+    const gl=this.gl, b=this.batch;
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.DEPTH_TEST);
+    px = Math.max(1, px || 5);
+    const B = Math.ceil(this.RT/px), rows = Math.ceil(n/cols);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.fbo || null);
+    gl.viewport(target.x|0, target.y|0, cols*B, rows*B);
+    this._runPost(b.tex, b.size, this.RT, px, cols*B, rows*B, B, transparent, aiInk);
   }
 }
 
@@ -899,18 +1025,44 @@ class RobotPipeline extends SpritePipeline {
 
     // pass 1: scene -> FBO
     this._beginScene();
+    gl.useProgram(this.sceneProg);
+    this._bindMesh();
+    this._drawRobotScene(opts, pose, pal, time, weapon, facingRad);
+    this._unbindMesh();
+
+    // pass 2: post -> target rect (or the whole canvas)
+    this._postPass(target, opts.px, !!opts.transparent);
+  }
+  // One robot into the bound scene target (program + mesh already bound).
+  _drawRobotScene(opts, pose, pal, time, weapon, facingRad){
     const VP = opts.orbit
       ? orbitVP(opts.orbit.yaw||0, opts.orbit.pitch||0, opts.orbit.halfV, opts.orbit.center)
       : topDownVP(opts.halfV);
     // Unarmed robots stand / walk at ease rather than in the combat rig.
     const plan = posePlan(pose, time, weapon === "fist");
-    gl.useProgram(this.sceneProg);
-    this._bindMesh();
     this._renderRobot(VP, pal, plan, facingRad, weapon);
-    this._unbindMesh();
+  }
 
-    // pass 2: post -> target rect (or the whole canvas)
-    this._postPass(target, opts.px, !!opts.transparent);
+  /* BATCH: n robots in one go (see SpritePipeline's batch section) —
+       batchBegin(cols, n); for i in 0..n: batchDraw(i, opts); batchEnd(...)
+     batchEnd(target, cols, n, px, transparent): ONE post pass lays tile i
+     out at (target.x + (i % cols) * B, target.y + floor(i / cols) * B) of
+     target.fbo, B = ceil(rt / px) texels (block resolution). */
+  batchBegin(cols, n){
+    this._batchBegin(cols, n);
+    this.gl.useProgram(this.sceneProg);
+    this._bindMesh();
+  }
+  batchDraw(i, opts){
+    this._batchTile(i);
+    const pose = (opts.pose || "idle");
+    const pal  = opts.pal || PALETTES[(opts.color||"coral")] || PALETTES.coral;
+    const weapon = (opts.weapon in WEAPON_MODELS) ? opts.weapon : "fist";
+    this._drawRobotScene(opts, pose, pal, opts.time || 0, weapon, (opts.facingDeg || 0) * Math.PI/180);
+  }
+  batchEnd(target, cols, n, px, transparent){
+    this._unbindMesh();
+    this._batchEnd(target, cols, n, px, !!transparent);
   }
 
   /* render one WEAPON lying flat on the ground (a pickup, or a thrown weapon

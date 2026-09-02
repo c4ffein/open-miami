@@ -1,4 +1,6 @@
-use crate::collision::{circle_rect_collision, has_line_of_sight_with_padding};
+use crate::collision::{
+    circle_rect_collision, has_line_of_sight_with_padding, line_segment_intersection,
+};
 use crate::ecs::world::Wall;
 use crate::math::Vec2;
 use std::cmp::Ordering;
@@ -31,16 +33,6 @@ fn line_intersects_rect(
         || line_segment_intersection(line_start, line_end, top_right, bottom_right)
         || line_segment_intersection(line_start, line_end, bottom_right, bottom_left)
         || line_segment_intersection(line_start, line_end, bottom_left, top_left)
-}
-
-/// Check if two line segments intersect
-fn line_segment_intersection(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> bool {
-    let d1 = (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
-    let d2 = (p2.x - p1.x) * (p4.y - p1.y) - (p2.y - p1.y) * (p4.x - p1.x);
-    let d3 = (p4.x - p3.x) * (p1.y - p3.y) - (p4.y - p3.y) * (p1.x - p3.x);
-    let d4 = (p4.x - p3.x) * (p2.y - p3.y) - (p4.y - p3.y) * (p2.x - p3.x);
-
-    d1 * d2 <= 0.0 && d3 * d4 <= 0.0
 }
 
 /// Size of each grid cell in world units
@@ -107,12 +99,22 @@ impl GridCoord {
     }
 }
 
-/// Node in the A* search with priority based on f-score
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Node in the A* search with priority based on f-score. Equality follows
+/// the ordering (f-score only, the `Ord` contract) — two nodes with the same
+/// priority are interchangeable in the open set whatever their coord.
+#[derive(Debug, Clone, Copy)]
 struct AStarNode {
     coord: GridCoord,
     f_score: i32, // g_score + h_score (priority)
 }
+
+impl PartialEq for AStarNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.f_score == other.f_score
+    }
+}
+
+impl Eq for AStarNode {}
 
 impl Ord for AStarNode {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -657,13 +659,14 @@ mod tests {
         let start = Vec2::new(100.0, 100.0);
         let goal = Vec2::new(400.0, 400.0); // Surrounded by walls
 
-        let path = grid.find_path(start, goal);
-        // Depending on wall thickness, might not be able to reach
-        // This test verifies the algorithm handles unreachable goals
-        if let Some(path) = path {
-            // If path found, it should be valid
-            assert!(!path.is_empty());
-        }
+        // The goal cell itself is walkable (the 10 u walls only block the
+        // ring of cells they cross), so the snap keeps it — and A* must then
+        // exhaust the sealed 2x2 interior and report no path rather than
+        // hand back a route through a wall.
+        assert!(grid.is_walkable(&GridCoord::from_world_pos(goal.x, goal.y)));
+        assert!(grid.find_path(start, goal).is_none());
+        // A goal in the open, next to the enclosure, is still reachable.
+        assert!(grid.find_path(start, Vec2::new(550.0, 400.0)).is_some());
     }
 
     #[test]
@@ -739,6 +742,17 @@ mod tests {
 
         // Lower f_score should have higher priority (come first in max heap)
         assert!(node2 > node1);
+        assert!(node1 < node2);
+        assert_ne!(node1, node2);
+
+        // `Eq` agrees with `Ord`: same priority = equal, whatever the coord.
+        let node3 = AStarNode {
+            coord: GridCoord::new(7, 3),
+            f_score: 10,
+        };
+        assert_eq!(node1, node3);
+        assert_eq!(node1.cmp(&node3), Ordering::Equal);
+        assert_eq!(node1.partial_cmp(&node3), Some(Ordering::Equal));
     }
 
     #[test]
@@ -767,12 +781,24 @@ mod tests {
         let start = Vec2::new(100.0, 100.0);
         let goal = Vec2::new(600.0, 600.0);
 
-        let path1 = grid.find_path(start, goal);
-        let path2 = grid.find_path(start, goal);
+        let path1 = grid
+            .find_path(start, goal)
+            .expect("open field: a path exists");
+        let path2 = grid
+            .find_path(start, goal)
+            .expect("open field: a path exists");
 
-        assert_eq!(path1.is_some(), path2.is_some());
-        if let (Some(p1), Some(p2)) = (path1, path2) {
-            assert_eq!(p1.len(), p2.len());
+        // Deterministic: the exact same waypoints both times.
+        assert!(!path1.is_empty());
+        assert_eq!(path1, path2);
+        // It ends at the goal and never steps into the wall.
+        let last = *path1.last().unwrap();
+        assert!(last.distance(goal) < GRID_CELL_SIZE);
+        for wp in &path1 {
+            assert!(
+                !crate::collision::point_in_rect(*wp, 250.0, 250.0, 100.0, 100.0),
+                "waypoint {wp:?} inside the wall"
+            );
         }
     }
 }

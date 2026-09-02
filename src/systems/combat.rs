@@ -319,8 +319,8 @@ impl CombatSystem {
     /// Process enemy attacks on player
     fn process_enemy_attacks(world: &mut World) {
         // Find player
-        let player_entity = match world.query::<Player>().first() {
-            Some(&e) => e,
+        let player_entity = match world.first::<Player>() {
+            Some(e) => e,
             None => return,
         };
 

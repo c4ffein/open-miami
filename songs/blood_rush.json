@@ -1,0 +1,69 @@
+{
+  "name": "Blood Rush",
+  "notes": [
+    "SONG 5 — \"Blood Rush\" (AGGRESSIVE): feverish, blood-in-the-eyes rush. F#",
+    "harmonic minor, jagged saw bass, wailing square lead over a stabbing arp."
+  ],
+  "root": 46.25,
+  "root_note": "F#1",
+  "scale": "harmonic_minor",
+  "bpm": 140.0,
+  "steps_per_beat": 4,
+  "waves": { "bass": "sawtooth", "lead": "square", "pad": "sawtooth", "arp": "sawtooth" },
+  "intensity": 0.95,
+  "sections": {
+    "intro": {
+      "bass": "0 . . . 0 . . . 0 . . . 4 . 6 .",
+      "lead": [
+        ". . . . . . 11 . . . . . . . 12 .",
+        ". . . . . . 14 . . . . . . . 11 ."
+      ],
+      "pad": "0 . . . . . . . 4 . . . . . . .",
+      "arp": [
+        "7 9 11 9 7 9 11 14 7 9 11 9 11 9 7 4",
+        "7 9 11 9 7 9 11 14 7 9 11 9 11 9 7 4"
+      ],
+      "drums": "khshk.shkhshk.sh"
+    },
+    "verse": {
+      "bass": "0 0 . 0 6 . 0 0 0 0 . 0 4 . 6 .",
+      "lead": [
+        "11 . 12 11 9 . 11 . 12 . 14 12 11 9 11 .",
+        "12 . 14 12 11 . 12 . 14 . 16 14 12 11 9 ."
+      ],
+      "pad": "0 . . . . . . . 4 . . . 6 . . .",
+      "arp": [
+        "7 9 11 9 7 9 11 14 7 9 11 9 11 9 7 4",
+        "9 11 14 11 9 11 14 16 9 11 14 11 14 11 9 7"
+      ],
+      "drums": "khshkkshkhshkssh"
+    },
+    "refrain": {
+      "bass": "0 0 0 0 6 6 0 0 0 0 0 0 4 4 6 6",
+      "lead": [
+        "14 . 16 14 12 . 14 . 16 . 18 16 14 12 11 .",
+        "16 . 18 16 14 . 16 . 18 . 19 18 16 14 12 ."
+      ],
+      "pad": "4 . . . . . . . 6 . . . . . . .",
+      "arp": [
+        "11 14 16 14 11 14 16 19 11 14 16 14 16 14 11 7",
+        "14 16 19 16 14 16 19 21 14 16 19 16 19 16 14 11"
+      ],
+      "drums": "kkshkkskkkshksss"
+    },
+    "bridge": {
+      "bass": "4 . . . 4 . . . 6 . . . 6 . . .",
+      "lead": [
+        ". . 12 11 9 . . . . . 11 9 7 . . .",
+        ". . 14 12 11 . . . . . 12 11 9 . . ."
+      ],
+      "pad": "4 . . . . . . . 6 . . . . . . .",
+      "arp": [
+        "7 9 11 9 7 9 11 14 7 9 11 9 11 9 7 4",
+        "11 9 7 9 11 14 11 9 7 9 11 9 7 4 2 0"
+      ],
+      "drums": "k.s.k.s.khshkhsh"
+    }
+  },
+  "order": ["intro", "verse", "verse", "refrain", "verse", "bridge", "refrain", "refrain"]
+}

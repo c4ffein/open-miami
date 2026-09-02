@@ -411,7 +411,5 @@ impl Level {
                 }
             }
         }
-
-        // Walls are now rendered from the World via render_walls()
     }
 }

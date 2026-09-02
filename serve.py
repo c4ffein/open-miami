@@ -21,7 +21,7 @@ Also exposes the level editor's persistence API (used by tools/levels.html):
     validates + writes it.
   * Response: 200 {"ok": true, "path": ..., "index": ...} or 4xx {"ok": false, "error": ...}
 """
-import http.server, socketserver, os, sys, json, re
+import http.server, socketserver, os, sys, json, re, posixpath
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
@@ -191,22 +191,43 @@ def write_index(idx_path, idx):
 PRIVATE_TOP = {"inspirations", ".audio-ref", "target", "shots", "node_modules"}
 
 
+def request_segments(url_path):
+    """The path segments SimpleHTTPRequestHandler.translate_path() will look
+    up for `url_path`: query / fragment dropped, percent-DECODED (exactly once,
+    like translate_path — so `/%2Eeditor-token` is seen as `/.editor-token`),
+    backslashes treated as separators (defensive), empty segments dropped.
+    `.` / `..` segments are KEPT so the caller can reject them (never
+    normalised away: a `..` that translate_path would drop is still a probe)."""
+    from urllib.parse import unquote
+    p = url_path.split("?", 1)[0].split("#", 1)[0]
+    p = unquote(p).replace("\\", "/")
+    return [s for s in p.split("/") if s]
+
+
 def is_private_path(url_path):
-    parts = [p for p in url_path.split("?", 1)[0].split("/") if p]
+    """True for anything that must 404: any DECODED segment starting with a
+    dot (dotfiles, `.` and `..` — before any normalisation can hide them) or
+    a top-level directory in PRIVATE_TOP. Checked on the decoded path so
+    percent-encoding cannot bypass it (`/%2Eeditor-token`, `/%74arget/`)."""
+    parts = request_segments(url_path)
     if any(p.startswith(".") for p in parts):
         return True
-    return bool(parts) and parts[0] in PRIVATE_TOP
+    norm = posixpath.normpath("/" + "/".join(parts))
+    top = [s for s in norm.split("/") if s]
+    return bool(top) and top[0] in PRIVATE_TOP
 
 
 def rewrite_path(url_path):
     """Pretty routes: /render-tests[/<name>] serves render-tests.html (the
     page reads the test name from location.pathname), and /docs serves the
     docs.html pipeline page (paths under /docs/ stay real files — the
-    markdown docs live there)."""
-    p = url_path.split("?", 1)[0]
-    if p == "/render-tests" or p.startswith("/render-tests/"):
+    markdown docs live there). Matched on the DECODED, normalised path;
+    anything else is returned untouched (still encoded — translate_path
+    decodes once, so we never hand it a pre-decoded string to decode again)."""
+    parts = request_segments(url_path)
+    if parts and parts[0] == "render-tests":
         return "/render-tests.html"
-    if p in ("/docs", "/docs/"):
+    if parts == ["docs"]:
         return "/docs.html"
     return url_path
 

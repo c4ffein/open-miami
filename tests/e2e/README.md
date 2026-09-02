@@ -14,20 +14,36 @@ generates the wasm-bindgen glue, installs the browser, and wraps the run in a
 make check-e2e
 ```
 
-That target does, in order:
+That target does, in order (steps 1-4 are the shared `make e2e-prep`, also
+used by `make check-render`):
 
-1. `cargo build --release --target wasm32-unknown-unknown`
-2. `wasm-bindgen ... --target web` (installs `wasm-bindgen-cli` pinned to the
-   `wasm-bindgen` version in `Cargo.lock` if missing)
-3. `cd tests/e2e && bun install` — the toolchain is **Bun** (`bun` / `bunx`),
+1. `make build-wasm` — `cargo build --release --target wasm32-unknown-unknown`
+   + `wasm-bindgen ... --target web` (installs `wasm-bindgen-cli` pinned to
+   the `wasm-bindgen` version in `Cargo.lock` if missing or a different
+   version)
+2. `cd tests/e2e && bun install` — the toolchain is **Bun** (`bun` / `bunx`),
    not npm/npx
-4. `bunx playwright install --with-deps chromium` (falls back to a rootless
+3. `bunx playwright install --with-deps chromium` (falls back to a rootless
    install + `./setup-browser-deps.sh`, which extracts the browser's system
    libraries under the gitignored `tests/e2e/playwright-deps/` and exposes
    them via `LD_LIBRARY_PATH`)
-5. `timeout 60 bunx playwright test`
+4. `ulimit -c 0` (a crashing Chromium must not leave GB-sized `core.*` dumps
+   here) and `timeout 60 bunx playwright test`
 
-`make verify` does NOT include the e2e tests; `make verify-all` does.
+`make verify` does NOT include the browser suites; `make verify-all` runs
+`verify` + `check-e2e` + `check-render`.
+
+## Renderer acceptance scripts (`make check-render`)
+
+`composite-coherence.js` (the smooth pixel-group composite, numeric
+assertions at DPR 1 and 2, ~7 s) and `props-stability.js` (the `?viz` PROPS
+pixel-art stability, ~60 s — fixed-sleep bound) are standalone Bun scripts,
+not Playwright specs. `make check-render` runs them after the same
+`e2e-prep`, in parallel, against a `python3 serve.py 8098` it starts and
+kills itself (`RENDER_PORT` (a free ephemeral port by default) / `RENDER_TIMEOUT` (180 s each) override), and
+prints both logs (`test-results/render-*.log`) once both are done. By hand:
+`cd tests/e2e && bun composite-coherence.js [baseURL]` with a server at
+`http://localhost:8098` (each header documents its arguments).
 
 Running Playwright by hand (after `make build-wasm` or a previous
 `make check-e2e`), still from the repo root:
@@ -109,9 +125,10 @@ box; harmless on the CI ubuntu runners.
 
 ## CI
 
-`.github/workflows/e2e-tests.yml` runs `bunx playwright test` on every push /
-pull request (a failing spec fails the job), uploads `test-results/` +
-`playwright-report/` as artifacts and posts the pass/fail verdict on the PR.
+`.github/workflows/e2e-tests.yml` runs `make check-e2e` and `make check-render`
+(one matrix job each) on every push / pull request (a failing suite fails
+its job), uploads `test-results/` + `playwright-report/` as artifacts and
+posts the e2e pass/fail verdict on the PR.
 
 ## Adding a test
 

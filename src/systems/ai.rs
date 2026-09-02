@@ -1,7 +1,7 @@
 use crate::collision::{has_line_of_sight, has_line_of_sight_with_padding};
 use crate::components::{
     AIState, DebugPath, DebugTrail, Enemy, EnemyType, Health, NavPath, Player, Position, Rotation,
-    Speed, Stunned, Velocity, WanderState, AI,
+    Speed, Stunned, UnsurePhase, Velocity, WanderState, AI,
 };
 use crate::ecs::world::Wall;
 use crate::ecs::{Entity, System, World};
@@ -136,7 +136,14 @@ fn random_range(state: &mut u32, min: f32, max: f32) -> f32 {
 /// Random integer between min and max (inclusive).
 fn random_int_range(state: &mut u32, min: i32, max: i32) -> i32 {
     let range = (max - min + 1) as u32;
-    min + (next_random(state) % range) as i32
+    // High bits, like `World::random_int_range` (the LCG's low bits cycle
+    // with tiny periods).
+    min + ((next_random(state) >> 16) % range) as i32
+}
+
+/// A fair coin: the LCG's top bit (bit 0 strictly alternates).
+fn coin_flip(state: &mut u32) -> bool {
+    next_random(state) >> 31 == 1
 }
 
 // --- Feral (DRIFTER / `EnemyType::Wandering`) tuning -------------------------
@@ -175,10 +182,9 @@ pub struct AISystem {
 
 impl AISystem {
     fn find_player_position(world: &World) -> Option<Position> {
-        let players: Vec<Entity> = world.query::<Player>();
-        players
-            .first()
-            .and_then(|&entity| world.get_component::<Position>(entity))
+        world
+            .first::<Player>()
+            .and_then(|entity| world.get_component::<Position>(entity))
             .copied()
     }
 
@@ -268,7 +274,7 @@ impl AISystem {
         }
 
         // 50% chance: use best direction, 50% chance: random direction
-        if next_random(rng).is_multiple_of(2) {
+        if coin_flip(rng) {
             best_direction
         } else {
             (next_random(rng) as f32 / u32::MAX as f32) * PI * 2.0
@@ -394,6 +400,7 @@ impl System for AISystem {
                         if can_see_player {
                             ai.state_timer = ai.spot_duration;
                             ai.state = AIState::SpottedUnsure;
+                            ai.unsure_phase = UnsurePhase::Spotting;
                             ai.check_position = Some(enemy_pos);
                             ai.last_known_player_position = Some(player_pos);
                         } else {
@@ -420,21 +427,49 @@ impl System for AISystem {
                     AIState::SpottedUnsure => {
                         if can_see_player {
                             ai.last_known_player_position = Some(player_pos);
+                            if ai.unsure_phase != UnsurePhase::Spotting {
+                                // Caught sight again mid-investigation:
+                                // spot afresh.
+                                ai.unsure_phase = UnsurePhase::Spotting;
+                                ai.state_timer = ai.spot_duration;
+                            }
                             if ai.state_timer <= 0.0 {
                                 // Seen player long enough, transition to sure
                                 ai.state = AIState::SurePlayerSeen;
                                 Self::arm_feral_lunge(ai);
                             }
                         } else {
-                            // Lost sight, check the last known position
-                            if let Some(check_pos) = ai.check_position {
-                                if enemy_pos.distance_to(&check_pos) < 5.0 {
-                                    // Returned to check position, go back to unaware
-                                    ai.state = AIState::Unaware;
-                                    ai.check_position = None;
+                            match ai.unsure_phase {
+                                UnsurePhase::Spotting => {
+                                    // Lost sight: go and check where they were.
+                                    ai.unsure_phase = UnsurePhase::Investigating;
+                                    ai.state_timer = ai.unsure_check_duration;
                                 }
-                            } else {
-                                ai.state = AIState::Unaware;
+                                UnsurePhase::Investigating => {
+                                    // Reached the spot (or ran out of patience
+                                    // getting there): head back.
+                                    let reached = ai
+                                        .last_known_player_position
+                                        .is_none_or(|p| enemy_pos.distance_to(&p) < 5.0);
+                                    if reached || ai.state_timer <= 0.0 {
+                                        ai.unsure_phase = UnsurePhase::Returning;
+                                        ai.state_timer = ai.unsure_check_duration;
+                                    }
+                                }
+                                UnsurePhase::Returning => {
+                                    // Back at the post (or gave up on the way):
+                                    // nothing there, resume the routine.
+                                    let home = ai
+                                        .check_position
+                                        .is_none_or(|c| enemy_pos.distance_to(&c) < 5.0);
+                                    if home || ai.state_timer <= 0.0 {
+                                        ai.state = AIState::Unaware;
+                                        ai.unsure_phase = UnsurePhase::Spotting;
+                                        ai.check_position = None;
+                                        ai.wander_state = WanderState::Waiting;
+                                        ai.wander_timer = random_range(&mut rng, 1.0, 2.0);
+                                    }
+                                }
                             }
                         }
                     }
@@ -503,12 +538,12 @@ impl System for AISystem {
             let (new_vx, new_vy, new_rot) = match ai.state {
                 AIState::Unaware => {
                     match ai.initial_type {
-                        EnemyType::Idle => (0.0, 0.0, 0.0), // Keep current rotation
+                        EnemyType::Idle => (0.0, 0.0, None), // Keep current rotation
                         EnemyType::Wandering | EnemyType::Patrolling => match ai.wander_state {
                             WanderState::Moving => (
                                 ai.wander_direction.cos() * speed.value,
                                 ai.wander_direction.sin() * speed.value,
-                                ai.wander_direction,
+                                Some(ai.wander_direction),
                             ),
                             WanderState::LookingAround => {
                                 let look_progress = 1.5 - ai.wander_look_timer;
@@ -523,14 +558,23 @@ impl System for AISystem {
                                 } else {
                                     ai.wander_direction
                                 };
-                                (0.0, 0.0, rot)
+                                (0.0, 0.0, Some(rot))
                             }
-                            WanderState::Waiting => (0.0, 0.0, 0.0),
+                            WanderState::Waiting => (0.0, 0.0, None),
                         },
                     }
                 }
                 AIState::SpottedUnsure => {
-                    let target = ai.last_known_player_position.unwrap_or(player_pos);
+                    // Investigating: walk to where the player was last seen;
+                    // returning: back to where this bot stood when it spotted
+                    // them.
+                    let target = match ai.unsure_phase {
+                        UnsurePhase::Returning => ai
+                            .check_position
+                            .or(ai.last_known_player_position)
+                            .unwrap_or(player_pos),
+                        _ => ai.last_known_player_position.unwrap_or(player_pos),
+                    };
 
                     // Use inflated walls for pathfinding decision to prevent wall grinding
                     // If target is close to a wall, we'll use pathfinding instead of direct movement
@@ -566,10 +610,10 @@ impl System for AISystem {
                         (
                             (dx / dist) * speed.value,
                             (dy / dist) * speed.value,
-                            dy.atan2(dx),
+                            Some(dy.atan2(dx)),
                         )
                     } else {
-                        (0.0, 0.0, 0.0)
+                        (0.0, 0.0, None)
                     }
                 }
                 // Feral drifter: reckless straight-line lunge. It does NOT
@@ -583,7 +627,7 @@ impl System for AISystem {
                             (
                                 ai.wander_direction.cos() * s,
                                 ai.wander_direction.sin() * s,
-                                ai.wander_direction,
+                                Some(ai.wander_direction),
                             )
                         }
                         _ => {
@@ -593,9 +637,9 @@ impl System for AISystem {
                             let dist = (dx * dx + dy * dy).sqrt();
                             if dist > 0.0 {
                                 let s = speed.value * FERAL_RECOVER_SPEED_MULT;
-                                ((dx / dist) * s, (dy / dist) * s, dy.atan2(dx))
+                                ((dx / dist) * s, (dy / dist) * s, Some(dy.atan2(dx)))
                             } else {
-                                (0.0, 0.0, 0.0)
+                                (0.0, 0.0, None)
                             }
                         }
                     }
@@ -613,7 +657,7 @@ impl System for AISystem {
                         // Stop and face player when close enough and can see them
                         let dx = player_pos.x - enemy_pos.x;
                         let dy = player_pos.y - enemy_pos.y;
-                        (0.0, 0.0, dy.atan2(dx))
+                        (0.0, 0.0, Some(dy.atan2(dx)))
                     } else {
                         // Use inflated walls for pathfinding decision to prevent wall grinding
                         // If target is close to a wall, we'll use pathfinding instead of direct movement
@@ -649,25 +693,23 @@ impl System for AISystem {
                             (
                                 (dx / dist) * speed.value,
                                 (dy / dist) * speed.value,
-                                dy.atan2(dx),
+                                Some(dy.atan2(dx)),
                             )
                         } else {
-                            (0.0, 0.0, 0.0)
+                            (0.0, 0.0, None)
                         }
                     }
                 }
                 AIState::Confused => {
+                    // A fresh look picks a new heading; otherwise keep facing.
                     let rot = if ai.confusion_look_timer == ai.confusion_look_duration {
-                        random_range(&mut rng, 0.0, PI * 2.0)
+                        Some(random_range(&mut rng, 0.0, PI * 2.0))
                     } else {
-                        world
-                            .get_component::<Rotation>(entity)
-                            .map(|r| r.angle)
-                            .unwrap_or(0.0)
+                        None
                     };
                     (0.0, 0.0, rot)
                 }
-                _ => (0.0, 0.0, 0.0),
+                _ => (0.0, 0.0, None),
             };
 
             // Apply computed values
@@ -675,10 +717,10 @@ impl System for AISystem {
                 velocity.x = new_vx;
                 velocity.y = new_vy;
             }
-            if let Some(rotation) = world.get_component_mut::<Rotation>(entity) {
-                if new_rot != 0.0
-                    || !matches!(ai.state, AIState::Unaware if ai.initial_type == EnemyType::Idle)
-                {
+            // `None` = keep the current heading (a parked sentinel, a
+            // patroller pausing between legs, a bot standing on its target).
+            if let Some(new_rot) = new_rot {
+                if let Some(rotation) = world.get_component_mut::<Rotation>(entity) {
                     rotation.angle = new_rot;
                 }
             }
@@ -863,7 +905,165 @@ impl AISystem {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ai_coin_flip_has_entropy() {
+        let mut rng = 12345u32;
+        let flips: Vec<bool> = (0..2000).map(|_| super::coin_flip(&mut rng)).collect();
+        let same = flips.windows(2).filter(|p| p[0] == p[1]).count();
+        assert!(
+            (800..1200).contains(&same),
+            "consecutive equal flips: {same}"
+        );
+        let looks: Vec<i32> = (0..2000)
+            .map(|_| super::random_int_range(&mut rng, 2, 3))
+            .collect();
+        let same = looks.windows(2).filter(|p| p[0] == p[1]).count();
+        assert!(
+            (800..1200).contains(&same),
+            "consecutive equal looks: {same}"
+        );
+    }
+
     use super::*;
+
+    /// A bare enemy of `kind` at `at`, facing +x, plus the player at
+    /// `player_at`. Returns (player, enemy).
+    fn spot_world(kind: EnemyType, at: Position, player_at: Position) -> (World, Entity, Entity) {
+        let mut world = World::new();
+        let player = world.spawn();
+        world.add_component(player, Player);
+        world.add_component(player, player_at);
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, at);
+        world.add_component(enemy, AI::new_with_type(kind, at));
+        world.add_component(enemy, Velocity::zero());
+        world.add_component(enemy, Speed::new(200.0));
+        world.add_component(enemy, Health::new(100));
+        world.add_component(enemy, Rotation::new(0.0));
+        (world, player, enemy)
+    }
+
+    fn step(world: &mut World, ai: &mut AISystem, dt: f32) {
+        ai.run(world, dt);
+        crate::systems::MovementSystem.run(world, dt);
+    }
+
+    #[test]
+    fn spotted_unsure_investigates_then_returns_to_post() {
+        // Regression: losing sight used to leave the bot parked at the last
+        // known position in SpottedUnsure forever (its only exit was being
+        // back at `check_position`, which nothing ever walked it to).
+        let post = Position::new(0.0, 0.0);
+        let (mut world, player, enemy) =
+            spot_world(EnemyType::Idle, post, Position::new(200.0, 0.0));
+        let mut sys = AISystem::default();
+        let dt = 1.0 / 60.0;
+        // A glimpse shorter than `spot_duration`.
+        for _ in 0..5 {
+            step(&mut world, &mut sys, dt);
+        }
+        {
+            let ai = world.get_component::<AI>(enemy).unwrap();
+            assert_eq!(ai.state, AIState::SpottedUnsure);
+            assert_eq!(ai.unsure_phase, UnsurePhase::Spotting);
+            assert_eq!(ai.last_known_player_position.map(|p| p.x), Some(200.0));
+        }
+        // The player vanishes (out of detection range).
+        *world.get_component_mut::<Position>(player).unwrap() = Position::new(200.0, 5000.0);
+        step(&mut world, &mut sys, dt);
+        {
+            let ai = world.get_component::<AI>(enemy).unwrap();
+            assert_eq!(ai.state, AIState::SpottedUnsure);
+            assert_eq!(ai.unsure_phase, UnsurePhase::Investigating);
+        }
+        // It walks to where the player was last seen…
+        let mut reached = false;
+        for _ in 0..180 {
+            step(&mut world, &mut sys, dt);
+            let ai = world.get_component::<AI>(enemy).unwrap();
+            if ai.unsure_phase == UnsurePhase::Returning {
+                reached = true;
+                break;
+            }
+            let v = world.get_component::<Velocity>(enemy).unwrap();
+            assert!(
+                v.x > 0.0,
+                "investigating: heading toward the last known position"
+            );
+        }
+        assert!(reached, "reached the last known position within 3 s");
+        let x = world.get_component::<Position>(enemy).unwrap().x;
+        assert!(x > 150.0, "walked most of the way there (x = {x})");
+        // …then back to its post, and resumes its routine.
+        let mut home = false;
+        for _ in 0..180 {
+            step(&mut world, &mut sys, dt);
+            let ai = world.get_component::<AI>(enemy).unwrap();
+            if ai.state == AIState::Unaware {
+                home = true;
+                break;
+            }
+            let v = world.get_component::<Velocity>(enemy).unwrap();
+            assert!(v.x < 0.0, "returning: heading back to the post");
+        }
+        assert!(home, "back to Unaware within 3 s");
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert!(ai.check_position.is_none());
+        let x = world.get_component::<Position>(enemy).unwrap().x;
+        assert!(x < 10.0, "back at the post (x = {x})");
+    }
+
+    #[test]
+    fn spotted_unsure_gives_up_the_investigation_after_its_patience() {
+        // An unreachable last-known position must not trap the bot: the
+        // `unsure_check_duration` budget sends it home.
+        let post = Position::new(0.0, 0.0);
+        let (mut world, player, enemy) =
+            spot_world(EnemyType::Idle, post, Position::new(200.0, 0.0));
+        // Pin the bot: with no speed it can never reach the spot.
+        world.get_component_mut::<Speed>(enemy).unwrap().value = 0.0;
+        let mut sys = AISystem::default();
+        let dt = 1.0 / 60.0;
+        for _ in 0..5 {
+            step(&mut world, &mut sys, dt);
+        }
+        *world.get_component_mut::<Position>(player).unwrap() = Position::new(200.0, 5000.0);
+        // 2 s investigating + 2 s returning (both time out where it stands).
+        for _ in 0..260 {
+            step(&mut world, &mut sys, dt);
+        }
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert_eq!(
+            ai.state,
+            AIState::Unaware,
+            "gave up and resumed the routine"
+        );
+    }
+
+    #[test]
+    fn patroller_keeps_its_heading_while_pausing() {
+        // Regression: `0.0` doubled as "keep rotation" and as a real heading,
+        // so a HUNTER pausing between patrol legs snapped to face east.
+        let post = Position::new(0.0, 0.0);
+        let (mut world, _player, enemy) =
+            spot_world(EnemyType::Patrolling, post, Position::new(5000.0, 5000.0));
+        world.get_component_mut::<Rotation>(enemy).unwrap().angle = 1.0;
+        {
+            let ai = world.get_component_mut::<AI>(enemy).unwrap();
+            ai.wander_state = WanderState::Waiting;
+            ai.wander_timer = 5.0;
+        }
+        let mut sys = AISystem::default();
+        for _ in 0..10 {
+            step(&mut world, &mut sys, 1.0 / 60.0);
+        }
+        let ai = world.get_component::<AI>(enemy).unwrap();
+        assert_eq!(ai.state, AIState::Unaware);
+        assert_eq!(ai.wander_state, WanderState::Waiting);
+        let rot = world.get_component::<Rotation>(enemy).unwrap().angle;
+        assert_eq!(rot, 1.0, "a pausing patroller keeps facing where it looked");
+    }
 
     #[test]
     fn test_ai_system_chase_when_player_in_range() {

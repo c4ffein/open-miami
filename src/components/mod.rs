@@ -127,7 +127,10 @@ pub enum EnemyType {
 pub enum AIState {
     /// Never saw the player
     Unaware,
-    /// Has briefly seen the player, will go check then return to spot
+    /// Has briefly seen the player. Sub-phased by `AI::unsure_phase`: still
+    /// spotting (becomes `SurePlayerSeen` after `spot_duration`), or — sight
+    /// lost — investigating the last known position, then returning to
+    /// `check_position` and back to `Unaware`.
     SpottedUnsure,
     /// Sure that the player has been seen - chase and attack
     SurePlayerSeen,
@@ -137,15 +140,6 @@ pub enum AIState {
     /// strolls to its `walk_to` zone or idles. Flipped hostile by the
     /// scenario `alert` action (see `systems::passive`).
     Passive,
-    // Legacy states for compatibility (will be removed)
-    #[allow(dead_code)]
-    Idle,
-    #[allow(dead_code)]
-    Patrol,
-    #[allow(dead_code)]
-    Chase,
-    #[allow(dead_code)]
-    Attack,
 }
 
 /// AI component for enemies
@@ -164,9 +158,10 @@ pub struct AI {
     // State transition timers
     pub state_timer: f32,
     pub spot_duration: f32, // How long to see player before becoming unsure (0.3s)
-    pub unsure_check_duration: f32, // How long to check before returning (2.0s)
+    pub unsure_check_duration: f32, // Patience for each leg of the SpottedUnsure check (2.0s)
+    pub unsure_phase: UnsurePhase,
     pub lost_player_duration: f32, // How long at last known position before confused (3.0s)
-    pub confusion_duration: f32, // How long to look around (3.0s)
+    pub confusion_duration: f32,   // How long to look around (3.0s)
 
     // Confusion state
     pub confusion_look_timer: f32,
@@ -233,6 +228,19 @@ pub enum WanderState {
     Waiting,
 }
 
+/// Sub-phase of `AIState::SpottedUnsure` (see its doc).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UnsurePhase {
+    /// Player in sight, `state_timer` counting down `spot_duration`.
+    Spotting,
+    /// Sight lost: walking to `last_known_player_position`, `state_timer`
+    /// counting down `unsure_check_duration` as the patience budget.
+    Investigating,
+    /// Nothing there: walking back to `check_position` (same budget), then
+    /// `Unaware`.
+    Returning,
+}
+
 impl AI {
     pub fn new() -> Self {
         AI {
@@ -248,6 +256,7 @@ impl AI {
             state_timer: 0.0,
             spot_duration: 0.3,
             unsure_check_duration: 2.0,
+            unsure_phase: UnsurePhase::Spotting,
             lost_player_duration: 3.0,
             confusion_duration: 3.0,
             confusion_look_timer: 0.0,
@@ -647,7 +656,10 @@ impl Bullet {
         Bullet {
             weapon_type,
             damage,
-            speed: 800.0,  // pixels per second
+            // Pixels per second. (Historically 800 integrated twice per frame
+            // — by MovementSystem AND BulletSystem — so this is the speed the
+            // game was actually tuned at; now integrated once, by BulletSystem.)
+            speed: 1600.0,
             lifetime: 3.0, // 3 seconds max lifetime
             max_lifetime: 3.0,
         }
@@ -965,15 +977,6 @@ mod tests {
         let mut health = Health::new(50);
         health.take_damage(100);
         assert_eq!(health.current, 0);
-    }
-
-    #[test]
-    fn test_ai_state_transitions() {
-        let mut ai = AI::new();
-        assert_eq!(ai.state, AIState::Unaware);
-
-        ai.state = AIState::SurePlayerSeen;
-        assert_eq!(ai.state, AIState::SurePlayerSeen);
     }
 
     #[test]

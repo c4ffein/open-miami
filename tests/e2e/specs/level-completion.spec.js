@@ -26,7 +26,9 @@ test.describe('Open Miami - Level Completion', () => {
     // lives in the sliding bottom-left ammo box now, not a WEAPON: line.)
     expect(texts).toEqual(expect.arrayContaining(['HEALTH:', 'ROGUES:']));
     expect(Number(hudValue(texts, 'HEALTH:'))).toBeGreaterThan(0);
-    expect(Number(hudValue(texts, 'ROGUES:'))).toBeGreaterThan(0);
+    // Floor 1 opens on a passive lobby crowd: bystanders are not rogues
+    // until the scenario alerts them, so the count starts at 0.
+    expect(hudValue(texts, 'ROGUES:')).toBe('0');
     // Floor 1's objective names its exit.
     expect(texts.some((s) => s.includes('SERVICE LIFT'))).toBe(true);
 

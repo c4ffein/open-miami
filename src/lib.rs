@@ -3,7 +3,6 @@ pub mod math;
 pub mod palette;
 
 // WASM-only modules for browser integration
-#[cfg(target_arch = "wasm32")]
 pub mod audio;
 #[cfg(target_arch = "wasm32")]
 pub mod graphics;
@@ -251,8 +250,6 @@ mod wasm_entry {
     const ROBOT_POSE_IDLE: u32 = 0;
     const ROBOT_POSE_WALK: u32 = 1;
     const ROBOT_POSE_SHOOT: u32 = 2;
-    #[allow(dead_code)]
-    const ROBOT_POSE_HIT: u32 = 3;
     const ROBOT_POSE_DOWNED: u32 = 4;
     /// The downed pose with the head cubes skipped (a KICK finisher victim).
     const ROBOT_POSE_DOWNED_HEADLESS: u32 = 5;
@@ -284,11 +281,6 @@ mod wasm_entry {
     /// lie still, fully settled, from the first frame.
     const ROBOT_DOWNED_SETTLED: f32 = 2.0;
 
-    /// Draw the player and rogue enemies as baked 3D sprites on top of the
-    /// primitive draw. Must be called while the camera transform is applied so
-    /// that world coordinates land on screen (camera zoom is 1.0). Returns once
-    /// the atlas is ready; until then `draw_baked` no-ops and the primitives
-    /// (already drawn by `render_entities`) remain visible.
     /// One 12x16 pixel bitmap per title glyph ('#' = filled). The neon look
     /// comes from drawing only the BOUNDARY cells of these fat letterforms:
     /// that yields the outer contour and, where a glyph has a counter (O, P,
@@ -502,7 +494,7 @@ mod wasm_entry {
     /// The title: "OPEN" / "MIAMI" as huge hollow neon-pink pixel letters
     /// (outer + inner contours of the fat glyphs, with a two-ring pixel glow
     /// around them), rasterized in one pixel-art group opened UNDER a slow
-    /// rotation — the whole sign sways between -20 and -3 degrees.
+    /// rotation — the whole sign sways between -12 and -3 degrees.
     fn draw_neon_title(graphics: &Graphics, cx: f32, cy: f32, t: f32) {
         const UNIT: f32 = 8.0; // one art pixel = 8 screen px
         const GW: usize = 72;
@@ -632,7 +624,9 @@ mod wasm_entry {
 
     /// Draw the player and rogue enemies as live-rendered 3D robot sprites on
     /// top of the primitive draw. Must be called while the camera transform is
-    /// applied so that world coordinates land on screen (camera zoom is 1.0).
+    /// applied (incl. its zoom: `camera::DEFAULT_ZOOM` = 1.6 x the viewport scale)
+    /// so
+    /// that world coordinates land on screen.
     /// `now` is elapsed time in seconds and drives the pose animations; each
     /// entity's clock is offset by its id so the squad doesn't move in
     /// phase-locked unison, and knocked-down bots play the hit flinch synced
@@ -808,7 +802,7 @@ mod wasm_entry {
         if prone_pass {
             return;
         }
-        if let Some(&player) = world.query::<Player>().first() {
+        if let Some(player) = world.first::<Player>() {
             let pos = world.get_component::<Position>(player);
             let health = world.get_component::<Health>(player);
             if let (Some(pos), Some(health)) = (pos, health) {
@@ -953,18 +947,9 @@ mod wasm_entry {
     /// How long an EFFECTS-tab POSTFX preview plays (ramp in, hold, ramp out).
     const POSTFX_PREVIEW_MS: f64 = 4000.0;
 
-    /// Small deterministic hash -> pseudo-random, used for the glitch effect.
-    fn hash2(a: u32, b: u32) -> u32 {
-        let mut x = a
-            .wrapping_mul(374_761_393)
-            .wrapping_add(b.wrapping_mul(668_265_263));
-        x = (x ^ (x >> 13)).wrapping_mul(1_274_126_177);
-        x ^ (x >> 16)
-    }
-
-    fn rand01(a: u32, b: u32) -> f32 {
-        (hash2(a, b) & 0xff_ffff) as f32 / 0xff_ffff as f32
-    }
+    /// Deterministic (bucket, salt) -> 0..1 for the glitch effect: the same
+    /// hash the DRIVE's schedules use.
+    use crate::drive::hash01 as rand01;
 
     /// Full-screen "shoggoth" glitch: live-cell tissue rendered as a pixelated
     /// Voronoi field. The screen is scanned in chunky blocks; each block finds
@@ -1069,6 +1054,7 @@ mod wasm_entry {
 
     /// Draw a clickable button; returns true if the mouse is currently over it
     /// (the caller decides what a click does). `active` highlights it.
+    #[allow(clippy::too_many_arguments)]
     fn viz_button(
         g: &Graphics,
         mouse: Vec2,
@@ -1079,23 +1065,7 @@ mod wasm_entry {
         label: &str,
         active: bool,
     ) -> bool {
-        let over = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h;
-        let bg = if active {
-            Color::new(1.0, 0.09, 0.26, 0.85)
-        } else if over {
-            Color::new(0.28, 0.22, 0.33, 1.0)
-        } else {
-            Color::new(0.14, 0.10, 0.18, 1.0)
-        };
-        g.draw_rectangle(Vec2::new(x, y), w, h, bg);
-        g.draw_rectangle_lines(Vec2::new(x, y), w, h, 1.5, Color::new(0.45, 0.35, 0.5, 1.0));
-        g.draw_text(
-            label,
-            Vec2::new(x + 14.0, y + h / 2.0 + 6.0),
-            18.0,
-            Color::WHITE,
-        );
-        over
+        viz_button_styled(g, mouse, x, y, w, h, label, active, false)
     }
 
     /// A compact `viz_button` (13 px label, roughly centred) for dense rows.
@@ -1110,6 +1080,24 @@ mod wasm_entry {
         label: &str,
         active: bool,
     ) -> bool {
+        viz_button_styled(g, mouse, x, y, w, h, label, active, true)
+    }
+
+    /// The one button drawer behind `viz_button` / `viz_small_button`:
+    /// `small` = thin 1 px border and a 13 px label roughly centred (vs the
+    /// regular 1.5 px border and 18 px left-aligned label).
+    #[allow(clippy::too_many_arguments)]
+    fn viz_button_styled(
+        g: &Graphics,
+        mouse: Vec2,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        label: &str,
+        active: bool,
+        small: bool,
+    ) -> bool {
         let over = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h;
         let bg = if active {
             Color::new(1.0, 0.09, 0.26, 0.85)
@@ -1119,14 +1107,21 @@ mod wasm_entry {
             Color::new(0.14, 0.10, 0.18, 1.0)
         };
         g.draw_rectangle(Vec2::new(x, y), w, h, bg);
-        g.draw_rectangle_lines(Vec2::new(x, y), w, h, 1.0, Color::new(0.45, 0.35, 0.5, 1.0));
-        let tw = label.chars().count() as f32 * 6.0;
-        g.draw_text(
-            label,
-            Vec2::new(x + (w - tw).max(0.0) / 2.0, y + h / 2.0 + 5.0),
-            13.0,
-            Color::WHITE,
+        let border = if small { 1.0 } else { 1.5 };
+        g.draw_rectangle_lines(
+            Vec2::new(x, y),
+            w,
+            h,
+            border,
+            Color::new(0.45, 0.35, 0.5, 1.0),
         );
+        let (tx, ty, fs) = if small {
+            let tw = label.chars().count() as f32 * 6.0;
+            (x + (w - tw).max(0.0) / 2.0, y + h / 2.0 + 5.0, 13.0)
+        } else {
+            (x + 14.0, y + h / 2.0 + 6.0, 18.0)
+        };
+        g.draw_text(label, Vec2::new(tx, ty), fs, Color::WHITE);
         over
     }
 
@@ -1159,18 +1154,9 @@ mod wasm_entry {
         selected_menu_option: MenuOption,
         selected_pause_option: PauseOption,
         world: World,
-        movement_system: MovementSystem,
-        weapon_system: WeaponUpdateSystem,
-        ai_system: AISystem,
-        combat_system: CombatSystem,
-        bullet_system: BulletSystem,
-        projectile_system: ProjectileTrailSystem,
-        pickup_system: PickupSystem,
-        thrown_system: ThrownWeaponSystem,
-        head_system: HeadSystem,
-        finisher_system: FinisherSystem,
-        stun_system: StunSystem,
-        boss_system: BossSystem,
+        /// The gameplay systems in their one canonical order (shared with
+        /// the headless sim — see `sim::GameSystems`).
+        systems: crate::sim::GameSystems,
         elevator_system: ElevatorSystem,
         /// The running floor scenario (steps, comms feed, objective).
         scenario: Option<ScenarioState>,
@@ -1184,6 +1170,9 @@ mod wasm_entry {
         /// Seconds R has been held while alive: at [`RESTART_HOLD_SECS`] the
         /// floor restarts from scratch (a load bar fills at screen centre).
         restart_hold: f32,
+        /// The R that respawned the player (death → checkpoint) is still
+        /// held: the hold-to-restart stays disarmed until it is released.
+        restart_needs_release: bool,
         /// Whether the OS cursor is currently hidden over the canvas (the
         /// in-game pixel crosshair replaces it; menus keep the OS cursor).
         cursor_hidden: bool,
@@ -1268,7 +1257,6 @@ mod wasm_entry {
         /// Seconds until the machine-gun burst SFX may retrigger (see the
         /// event dispatch in `update_game`).
         mg_sfx_cooldown: f32,
-        prev_enemies_alive: usize,
         /// Seconds left on the kill flash (background strobes red/blue).
         kill_flash: f32,
         /// Electric spark bursts popping where player attacks land on bots
@@ -1284,7 +1272,6 @@ mod wasm_entry {
         /// every `load_floor` so a floor change re-records; a checkpoint
         /// restore keeps it (same floor — the tiles and walls are identical).
         floor_static_key: u32,
-        prev_level_complete: bool,
         prev_boss_enraged: bool,
         prev_all_dead: bool,
     }
@@ -1302,23 +1289,13 @@ mod wasm_entry {
                 selected_menu_option: MenuOption::Play,
                 selected_pause_option: PauseOption::Continue,
                 world: World::new(),
-                movement_system: MovementSystem,
-                weapon_system: WeaponUpdateSystem,
-                ai_system: AISystem::default(),
-                combat_system: CombatSystem,
-                bullet_system: BulletSystem,
-                projectile_system: ProjectileTrailSystem,
-                pickup_system: PickupSystem,
-                thrown_system: ThrownWeaponSystem,
-                head_system: HeadSystem,
-                finisher_system: FinisherSystem,
-                stun_system: StunSystem,
-                boss_system: BossSystem,
+                systems: crate::sim::GameSystems::default(),
                 elevator_system: ElevatorSystem,
                 scenario: None,
                 checkpoint: None,
                 extracting: None,
                 restart_hold: 0.0,
+                restart_needs_release: false,
                 cursor_hidden: false,
                 music_frozen: false,
                 pause_in_settings: false,
@@ -1379,12 +1356,10 @@ mod wasm_entry {
                 effect_start: 0.0,
                 prev_player_alive: true,
                 mg_sfx_cooldown: 0.0,
-                prev_enemies_alive: 0,
                 kill_flash: 0.0,
                 sparks: crate::sparks::SparkPool::new(),
                 ammo_hud: crate::hud_ammo::AmmoSlide::new(),
                 floor_static_key: 0,
-                prev_level_complete: false,
                 prev_boss_enraged: false,
                 prev_all_dead: false,
             };
@@ -1393,7 +1368,7 @@ mod wasm_entry {
             if !wants_visualizer() {
                 if url_flag("ending") {
                     // `?ending`: jump straight to the credits (dev shortcut,
-                    // same spirit as `?floor=N`; the DRIVE scene lives there).
+                    // same spirit as `?floor=N`; the ride home, `ending::render_ride`).
                     state.screen = GameScreen::Ending;
                 } else if let Some(level) = Self::url_start_floor() {
                     state.selected_level = level;
@@ -1407,16 +1382,8 @@ mod wasm_entry {
         /// open, 1..13, 14 = 13½): the level index to start on directly, if
         /// present and valid.
         fn url_start_floor() -> Option<usize> {
-            let q = url_query();
-            let q = q.trim_start_matches('?');
-            q.split('&').find_map(|kv| {
-                let (k, v) = kv.split_once('=')?;
-                if k != "floor" {
-                    return None;
-                }
-                let n: usize = v.parse().ok()?;
-                level_index_for_floor_id(n)
-            })
+            let n: usize = url_param("floor")?.parse().ok()?;
+            level_index_for_floor_id(n)
         }
 
         /// (Re)build the world for `selected_level` and start its scenario.
@@ -1469,10 +1436,8 @@ mod wasm_entry {
                 .snap(crate::hud_ammo::gun_held(get_player_weapon(&self.world)));
             self.prev_player_alive = is_player_alive(&self.world);
             self.mg_sfx_cooldown = 0.0;
-            self.prev_enemies_alive = count_alive_enemies(&self.world);
-            self.prev_level_complete = false;
             self.prev_boss_enraged = any_boss_enraged(&self.world);
-            self.prev_all_dead = self.prev_enemies_alive == 0;
+            self.prev_all_dead = count_alive_enemies(&self.world) == 0;
         }
 
         fn start_game(&mut self) {
@@ -1621,9 +1586,15 @@ mod wasm_entry {
                 self.screen,
                 GameScreen::LevelSelect | GameScreen::Settings | GameScreen::About
             );
-            if on_title && self.audio_unlocked {
-                self.audio.start_engine_idle();
-            } else if !on_title {
+            if on_title {
+                // The title has no song: whatever floor / credits track was
+                // playing when we got here (QUIT TO MENU, the end of the
+                // credits) stops — it used to keep looping under the idle.
+                self.audio.stop_music();
+                if self.audio_unlocked {
+                    self.audio.start_engine_idle();
+                }
+            } else {
                 self.audio.stop_engine_idle();
             }
 
@@ -1779,11 +1750,12 @@ mod wasm_entry {
                 self.effect_start = self.last_time;
             }
 
-            // DRIVE — the glitchy synthwave ride home that plays under the
-            // credits (src/drive.rs), previewed live at moderate glitch.
+            // DRIVE — the glitchy synthwave backdrop behind the title screen
+            // (src/drive.rs; the ending rides home in `ending::render_ride`),
+            // previewed live at moderate glitch.
             let (dx0, dy0, dw, dh) = (320.0, y2 + 12.0, 600.0, 300.0);
             graphics.draw_text(
-                "DRIVE (the ending scene, live, glitch 0.5)",
+                "DRIVE (the title backdrop, live, glitch 0.5)",
                 Vec2::new(dx0, y2),
                 16.0,
                 coral,
@@ -3254,7 +3226,6 @@ mod wasm_entry {
                 &self.world,
                 graphics,
                 self.show_infos,
-                false,
                 self.last_time as f32 / 1000.0,
                 &cull,
             );
@@ -3467,21 +3438,9 @@ mod wasm_entry {
                     );
                 }
             } else {
-                // Run game systems (the finisher goes first so it can keep its
-                // victim pinned before the stun tick).
-                self.finisher_system.run(&mut self.world, dt);
-                self.stun_system.run(&mut self.world, dt);
-                self.weapon_system.run(&mut self.world, dt);
-                self.ai_system.run(&mut self.world, dt);
-                self.boss_system.run(&mut self.world, dt);
-                self.movement_system.run(&mut self.world, dt);
-                self.combat_system.run(&mut self.world, dt);
-                self.bullet_system.run(&mut self.world, dt);
-                self.thrown_system.run(&mut self.world, dt);
-                self.head_system.run(&mut self.world, dt);
-                self.projectile_system.run(&mut self.world, dt);
-                // Drop weapons from downed enemies (player collects via the E key)
-                self.pickup_system.run(&mut self.world, dt);
+                // Run the gameplay systems (the one canonical order lives
+                // in `sim::GameSystems::step`, shared with the headless sim).
+                self.systems.step(&mut self.world, dt);
             }
             drop(sim_span);
 
@@ -3697,8 +3656,6 @@ mod wasm_entry {
             }
 
             self.prev_player_alive = player_alive_now;
-            self.prev_enemies_alive = enemies_alive;
-            self.prev_level_complete = level_complete;
             self.prev_boss_enraged = boss_enraged;
             self.prev_all_dead = all_dead;
 
@@ -3881,7 +3838,14 @@ mod wasm_entry {
             // bar fills at the centre of the screen (drawn above); releasing
             // R before it fills cancels. Deliberately a full restart — the
             // player is asking for a clean slate, not the checkpoint.
-            if player_alive && self.extracting.is_none() && input::is_key_down("r") {
+            if self.restart_needs_release {
+                // The R that respawned us is still held: it must not roll
+                // straight into the hold-to-restart (which would discard
+                // the checkpoint just restored).
+                if !input::is_key_down("r") {
+                    self.restart_needs_release = false;
+                }
+            } else if player_alive && self.extracting.is_none() && input::is_key_down("r") {
                 self.restart_hold += dt;
                 if self.restart_hold >= RESTART_HOLD_SECS {
                     self.restart_hold = 0.0;
@@ -3896,10 +3860,11 @@ mod wasm_entry {
             // snapshot when the floor set one, otherwise the floor restarts
             // from scratch (the death feedback — flash, sfx, WASTED card —
             // already played; R is the resume).
-            if !player_alive && input::is_key_down("r") {
+            if !player_alive && input::is_key_pressed("r") {
                 if !self.restore_checkpoint() {
                     self.load_floor();
                 }
+                self.restart_needs_release = true;
                 // Restart the music (it was stopped on death).
                 self.audio.start_music();
             }

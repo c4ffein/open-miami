@@ -685,6 +685,12 @@ struct GateState {
     /// pickup / the downed victim): the player is tethered near it by
     /// invisible walls ([`GATE_TETHER_RADIUS`]) while the gate holds.
     anchor: Option<Vec2>,
+    /// Set by the first `tick` after installation, i.e. once a frame's
+    /// systems have run UNDER this gate. `gate_notify` ignores an unarmed
+    /// gate: the events of the frame that installed it were produced by
+    /// unfrozen input and must not release it before its prompt was even
+    /// drawn.
+    armed: bool,
 }
 
 /// Live state of a `talk` conversation: the line on screen, the lines still
@@ -883,6 +889,9 @@ impl ScenarioState {
     /// [`GameEvent`]: crate::components::GameEvent
     pub fn gate_notify(&mut self, world: &mut World, events: &[crate::components::GameEvent]) {
         let Some(g) = self.gate else { return };
+        if !g.armed {
+            return; // installed this frame: these events predate it
+        }
         if events.iter().any(|e| g.def.input.satisfied_by(e)) {
             self.gate = None;
             self.gate_done_at[g.step_idx] = Some(self.time);
@@ -984,16 +993,18 @@ impl ScenarioState {
         // comms typewriter keeps playing — the lines a gated step queued
         // BEFORE its gate (the beat's flavour) still type out under the
         // prompt; the frozen clock keeps delayed lines waiting.
-        if self.gate.is_some() {
+        if let Some(g) = self.gate.as_mut() {
+            // This frame's systems ran frozen under the gate: from now on
+            // their events may release it.
+            g.armed = true;
             self.comms.update(self.time, dt);
             return;
         }
         self.time += dt;
 
         let player_pos = world
-            .query::<Player>()
-            .first()
-            .and_then(|&p| world.get_component::<Position>(p))
+            .first::<Player>()
+            .and_then(|p| world.get_component::<Position>(p))
             .map(|p| p.to_vec2());
         let mut counts = count_rogues(world);
         let boss_dead = any_boss_dead(world);
@@ -1068,7 +1079,10 @@ impl ScenarioState {
                 }
             }
             Trigger::Kills(n) => ctx.kills >= n,
-            Trigger::AllDead => ctx.alive == 0,
+            // "Every rogue is dead" needs a rogue to have died: a floor whose
+            // hostiles have not shown up yet (an un-alerted crowd, a wave
+            // still to spawn) is not "cleared".
+            Trigger::AllDead => ctx.alive == 0 && ctx.kills > 0,
             Trigger::Timer { seconds, after } => {
                 let base = match after {
                     None => Some(0.0),
@@ -1162,13 +1176,14 @@ impl ScenarioState {
                         step_idx,
                         rest: &actions[i + 1..],
                         anchor,
+                        armed: false,
                     });
                     return;
                 }
                 Action::Checkpoint => self.checkpoint_requested = true,
                 Action::Combat(on) => self.combat_enabled = on,
                 Action::Disarm => {
-                    if let Some(&p) = world.query::<Player>().first() {
+                    if let Some(p) = world.first::<Player>() {
                         world.remove_component::<crate::components::Weapon>(p);
                     }
                 }
@@ -1310,6 +1325,11 @@ pub fn count_rogues(world: &World) -> (usize, usize) {
     let mut dead = 0;
     let mut alive = 0;
     for entity in world.query::<crate::components::Enemy>() {
+        if crate::systems::passive::is_passive(world, entity) {
+            // An un-alerted civilian is a bystander, not a rogue: it must not
+            // hold `all_dead` / `kills` hostage (nor pad the HUD count).
+            continue;
+        }
         match world.get_component::<Health>(entity) {
             Some(h) if h.is_alive() => alive += 1,
             Some(_) => dead += 1,
@@ -2135,7 +2155,7 @@ mod tests {
             let ai = world.get_component::<AI>(e).unwrap();
             assert_eq!(ai.state, AIState::SurePlayerSeen);
         }
-        // Passives count as rogues: killing them all fires all_dead-style
+        // Alerted passives are rogues: killing them all fires all_dead-style
         // counts like any floor.
         assert_eq!(count_rogues(&world), (0, 3));
         kill_all(&mut world);
@@ -2537,6 +2557,32 @@ mod tests {
     }
 
     #[test]
+    fn gate_ignores_events_from_the_frame_that_installed_it() {
+        // Frame order is systems -> tick (installs the gate) -> gate_notify
+        // with that same frame's events. Those events were produced under
+        // UNFROZEN input: a punch that landed just before the zone step ran
+        // must not release a gate whose prompt was never drawn.
+        let (mut sim, mut sc) = sim_for(&GT_FLOOR);
+        teleport(&mut sim, Vec2::new(650.0, 620.0));
+        sim.world
+            .push_event(crate::components::GameEvent::PunchLanded);
+        run(&mut sim, &mut sc, 1);
+        assert!(sc.step_fired("teach"));
+        assert_eq!(
+            sc.gate_view().map(|g| g.input),
+            Some(GateInput::Punch),
+            "a same-frame event must not release the gate it predates"
+        );
+        assert_eq!(sc.objective, "start");
+        // The next frame's punch does.
+        sim.world
+            .push_event(crate::components::GameEvent::PunchLanded);
+        run(&mut sim, &mut sc, 1);
+        assert_ne!(sc.gate_view().map(|g| g.input), Some(GateInput::Punch));
+        assert_eq!(sc.objective, "punched");
+    }
+
+    #[test]
     fn gate_freezes_the_world_and_releases_on_the_punch() {
         let (mut sim, mut sc) = sim_for(&GT_FLOOR);
         // Walk into the zone: the teach step disarms, checkpoints, spawns
@@ -2751,7 +2797,16 @@ mod tests {
         let mut sc = ScenarioState::new(floor);
         run(&mut sim, &mut sc, 2);
         assert!(sc.step_fired("intro"));
-        assert_eq!(sim.enemies_alive(), 4, "the passive lobby crowd");
+        assert_eq!(
+            sim.world.query::<Enemy>().len(),
+            4,
+            "the passive lobby crowd"
+        );
+        assert_eq!(sim.enemies_alive(), 0, "bystanders are not rogues yet");
+        assert!(
+            !sc.step_fired("clear"),
+            "all_dead must not fire on a floor whose rogues have not shown up"
+        );
 
         // Straight to the desk: the cover-blown conversation opens.
         teleport(&mut sim, Vec2::new(500.0, 420.0));

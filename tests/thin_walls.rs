@@ -158,7 +158,7 @@ fn bullet_cannot_tunnel_thin_wall() {
     let bullet = world.spawn();
     world.add_component(bullet, Bullet::new(WeaponType::Pistol, 30));
     world.add_component(bullet, Position::new(493.5, 100.0));
-    world.add_component(bullet, Velocity::new(800.0, 0.0));
+    world.add_component(bullet, Velocity::new(1600.0, 0.0));
     world.add_component(bullet, Radius::new(2.0));
 
     let mut bullets = BulletSystem;
@@ -184,9 +184,9 @@ fn bullet_cannot_tunnel_thin_wall() {
 
 #[test]
 fn bullet_cannot_tunnel_thin_wall_full_pipeline() {
-    // Same, but through the real per-frame system order (MovementSystem also
-    // advances bullets — they carry Position + Velocity — and its push-out
-    // resolution must not shove one across a thin wall either).
+    // Same, but through the real per-frame system order (MovementSystem must
+    // leave bullets alone — BulletSystem owns their swept integration — and
+    // in any case nothing may shove one across a thin wall).
     let mut world = World::new();
     add_thin_vertical_wall(&mut world);
     let enemy = spawn_enemy_behind_wall(&mut world);
@@ -194,7 +194,7 @@ fn bullet_cannot_tunnel_thin_wall_full_pipeline() {
     let bullet = world.spawn();
     world.add_component(bullet, Bullet::new(WeaponType::Pistol, 30));
     world.add_component(bullet, Position::new(450.0, 100.0));
-    world.add_component(bullet, Velocity::new(800.0, 0.0));
+    world.add_component(bullet, Velocity::new(1600.0, 0.0));
     world.add_component(bullet, Radius::new(2.0));
 
     let mut movement = MovementSystem;

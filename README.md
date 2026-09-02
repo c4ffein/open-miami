@@ -63,47 +63,32 @@ python3 serve.py       # dev server (no-store caching, level-editor write API)
 ### Testing
 
 ```bash
-make verify            # fmt, clippy, tests (incl. doc tests), release build, wasm build, level data check
+make verify            # fmt, clippy, tests (incl. doc tests), release build, wasm build, level + prop data checks
 make check-e2e         # browser e2e tests (Playwright on Bun) — see tests/e2e/README.md
-make verify-all        # verify + e2e
+make check-render      # renderer acceptance scripts (composite-coherence + props-stability), same toolchain
+make verify-all        # verify + check-e2e + check-render
 ```
+
+CI (`.github/workflows/`) runs exactly these Makefile targets, one job each.
 
 ### Building for the Web (WASM)
 
-#### Prerequisites
+```bash
+make build-wasm
+```
 
-1. Add the WASM target:
+This installs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` if
+missing (the CLI is pinned to the `wasm-bindgen` version in `Cargo.lock` —
+they must match exactly), builds the release wasm and generates the
+JavaScript glue (`open_miami.js`, `open_miami_bg.wasm`). It is what
+`make check-e2e` / `make check-render` and the CI build run.
+
+Manually, the same steps are:
+
 ```bash
 rustup target add wasm32-unknown-unknown
-```
-
-2. Install wasm-bindgen-cli (required for generating JavaScript glue code):
-```bash
-cargo install wasm-bindgen-cli
-```
-
-#### Quick Build (Recommended)
-
-Use the provided build script:
-
-```bash
-./build-wasm.sh
-```
-
-This will:
-1. Build the WASM binary
-2. Generate the wasm-bindgen JavaScript glue code
-3. Prepare all files for deployment
-
-#### Manual Build
-
-If you prefer to build manually:
-
-```bash
-# Build the WASM binary
+cargo install wasm-bindgen-cli --version <version of wasm-bindgen in Cargo.lock>
 cargo build --release --target wasm32-unknown-unknown
-
-# Generate wasm-bindgen JavaScript glue
 wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm \
     --out-dir . \
     --target web \
@@ -155,7 +140,7 @@ open-miami/
 ├── tests/
 │   └── integration_tests.rs # 89 comprehensive tests
 ├── index.html               # Web interface
-├── build-wasm.sh            # WASM build script
+├── Makefile                 # verify / build-wasm / check-* targets (CI calls these)
 ├── Cargo.toml               # Rust dependencies
 ├── ECS_ARCHITECTURE.md      # Detailed ECS documentation
 ├── TESTING.md               # Testing strategy guide

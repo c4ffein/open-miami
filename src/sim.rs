@@ -75,9 +75,11 @@ pub fn gate_frozen_step(world: &mut World, dt: f32) {
     }
 }
 
-/// A headless instance of the full game engine.
-pub struct Simulation {
-    pub world: World,
+/// Every gameplay system, run in THE per-frame order by [`GameSystems::step`].
+/// Shared by the headless [`Simulation`] and the browser loop (`update_game`
+/// in lib.rs) so the two can never drift apart; the host tests that pin the
+/// order therefore cover the browser too.
+pub struct GameSystems {
     finisher: FinisherSystem,
     stun: StunSystem,
     weapon: WeaponUpdateSystem,
@@ -90,6 +92,52 @@ pub struct Simulation {
     head: HeadSystem,
     projectile: ProjectileTrailSystem,
     pickup: PickupSystem,
+}
+
+impl Default for GameSystems {
+    fn default() -> Self {
+        Self {
+            finisher: FinisherSystem,
+            stun: StunSystem,
+            weapon: WeaponUpdateSystem,
+            ai: AISystem::default(),
+            boss: BossSystem,
+            movement: MovementSystem,
+            combat: CombatSystem,
+            bullet: BulletSystem,
+            thrown: ThrownWeaponSystem,
+            head: HeadSystem,
+            projectile: ProjectileTrailSystem,
+            pickup: PickupSystem,
+        }
+    }
+}
+
+impl GameSystems {
+    /// One engine tick: every gameplay system in order.
+    pub fn step(&mut self, world: &mut World, dt: f32) {
+        // The finisher runs before the stun tick so it can keep its victim
+        // pinned.
+        self.finisher.run(world, dt);
+        self.stun.run(world, dt);
+        self.weapon.run(world, dt);
+        self.ai.run(world, dt);
+        self.boss.run(world, dt);
+        self.movement.run(world, dt);
+        self.combat.run(world, dt);
+        self.bullet.run(world, dt);
+        self.thrown.run(world, dt);
+        self.head.run(world, dt);
+        self.projectile.run(world, dt);
+        // Drop weapons from downed enemies (the player collects via E).
+        self.pickup.run(world, dt);
+    }
+}
+
+/// A headless instance of the full game engine.
+pub struct Simulation {
+    pub world: World,
+    systems: GameSystems,
     /// Bot navigation state: the player position at the previous `bot_step`,
     /// used to detect when the bot is wedged against geometry.
     bot_prev_pos: Option<Vec2>,
@@ -268,18 +316,7 @@ impl Simulation {
     pub fn from_world(world: World) -> Self {
         Simulation {
             world,
-            finisher: FinisherSystem,
-            stun: StunSystem,
-            weapon: WeaponUpdateSystem,
-            ai: AISystem::default(),
-            boss: BossSystem,
-            movement: MovementSystem,
-            combat: CombatSystem,
-            bullet: BulletSystem,
-            thrown: ThrownWeaponSystem,
-            head: HeadSystem,
-            projectile: ProjectileTrailSystem,
-            pickup: PickupSystem,
+            systems: GameSystems::default(),
             bot_prev_pos: None,
             bot_unstick_timer: 0.0,
             bot_unstick_dir: Vec2::zero(),
@@ -290,20 +327,7 @@ impl Simulation {
     /// Advance the whole simulation by `dt` seconds — one engine tick, running
     /// every gameplay system in the same order as the browser loop.
     pub fn step(&mut self, dt: f32) {
-        // The finisher runs before the stun tick so it can keep its victim
-        // pinned (same order as the browser loop).
-        self.finisher.run(&mut self.world, dt);
-        self.stun.run(&mut self.world, dt);
-        self.weapon.run(&mut self.world, dt);
-        self.ai.run(&mut self.world, dt);
-        self.boss.run(&mut self.world, dt);
-        self.movement.run(&mut self.world, dt);
-        self.combat.run(&mut self.world, dt);
-        self.bullet.run(&mut self.world, dt);
-        self.thrown.run(&mut self.world, dt);
-        self.head.run(&mut self.world, dt);
-        self.projectile.run(&mut self.world, dt);
-        self.pickup.run(&mut self.world, dt);
+        self.systems.step(&mut self.world, dt);
     }
 
     /// Run `frames` ticks of `dt` seconds each (fast-forward).
@@ -346,7 +370,7 @@ impl Simulation {
 
     /// The player entity, if one exists.
     pub fn player(&self) -> Option<Entity> {
-        self.world.query::<Player>().into_iter().next()
+        self.world.first::<Player>()
     }
 
     /// Set the player's velocity directly (as WASD movement would).
@@ -460,6 +484,13 @@ impl Simulation {
         self.world
             .query::<WeaponPickup>()
             .into_iter()
+            // Only pickups that can still hurt someone: an empty gun would be
+            // swapped for the empty gun just dropped, forever.
+            .filter(|&e| {
+                self.world
+                    .get_component::<WeaponPickup>(e)
+                    .is_some_and(|p| p.weapon_type.is_melee() || p.ammo > 0)
+            })
             .filter_map(|e| self.world.get_component::<Position>(e).map(|p| p.to_vec2()))
             .min_by(|a, b| {
                 from.distance(*a)

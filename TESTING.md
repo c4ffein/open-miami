@@ -235,26 +235,24 @@ fn test_complete_game_scenario_player_clears_room() {
 
 ## Running Tests
 
-### All Tests
+The Makefile is the single entry point (CI runs the same targets):
+
 ```bash
-cargo test
+make verify        # fmt, clippy, tests + doc tests, release build, wasm compile check, levels + props data
+make check-test    # just the test suite (cargo test --all-features + doc tests)
+make check-e2e     # browser e2e specs (Playwright on Bun) — tests/e2e/README.md
+make check-render  # renderer acceptance scripts (composite-coherence + props-stability)
+make verify-all    # verify + check-e2e + check-render
 ```
 
-### Specific Test Module
-```bash
-cargo test --test integration_tests
-cargo test --lib components
-cargo test --lib ecs
-```
+Directly with cargo:
 
-### Single Test
 ```bash
-cargo test test_enemy_ai_chases_player
-```
-
-### With Output
-```bash
-cargo test -- --nocapture
+cargo test                                  # everything
+cargo test --test integration_tests         # one test binary
+cargo test --lib components                 # one module
+cargo test test_enemy_ai_chases_player      # one test
+cargo test -- --nocapture                   # with output
 ```
 
 ## Test Coverage Summary

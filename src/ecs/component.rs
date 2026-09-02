@@ -1,22 +1,11 @@
 use std::any::{Any, TypeId};
 
-/// Marker trait for components
-/// Any type that is 'static can be a component
-pub trait Component: 'static {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
+/// Marker trait for components: any `'static` type can be a component. The
+/// downcasting lives on [`AnyComponent`] (what the world actually boxes).
+pub trait Component: 'static {}
 
 // Blanket implementation for all 'static types
-impl<T: 'static> Component for T {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-}
+impl<T: 'static> Component for T {}
 
 /// Object-safe clonable `Any`: what the world's component storage actually
 /// boxes. Every stored component must be `Clone` so the whole [`World`] can
@@ -102,14 +91,18 @@ mod tests {
 
     #[test]
     fn test_component_as_any() {
-        let mut pos = Position { x: 10.0, y: 20.0 };
+        #[derive(Debug, Clone, PartialEq)]
+        struct Pos {
+            x: f32,
+        }
+        let mut pos = Pos { x: 10.0 };
 
-        let any_ref = Component::as_any(&pos);
-        let downcast = any_ref.downcast_ref::<Position>().unwrap();
+        let any_ref = pos.as_any();
+        let downcast = any_ref.downcast_ref::<Pos>().unwrap();
         assert_eq!(downcast.x, 10.0);
 
-        let any_mut = Component::as_any_mut(&mut pos);
-        let downcast_mut = any_mut.downcast_mut::<Position>().unwrap();
+        let any_mut = pos.as_any_mut();
+        let downcast_mut = any_mut.downcast_mut::<Pos>().unwrap();
         downcast_mut.x = 30.0;
         assert_eq!(pos.x, 30.0);
     }
@@ -121,7 +114,7 @@ mod tests {
         let boxed: Box<dyn AnyComponent> = Box::new(Tag(7));
         let cloned = boxed.clone();
         assert_eq!(
-            AnyComponent::as_any(cloned.as_ref()).downcast_ref::<Tag>(),
+            cloned.as_ref().as_any().downcast_ref::<Tag>(),
             Some(&Tag(7))
         );
         let back = cloned.into_any().downcast::<Tag>().unwrap();

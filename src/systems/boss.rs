@@ -28,9 +28,8 @@ pub struct BossSystem;
 impl BossSystem {
     fn player_position(world: &World) -> Option<Position> {
         world
-            .query::<Player>()
-            .first()
-            .and_then(|&e| world.get_component::<Position>(e))
+            .first::<Player>()
+            .and_then(|e| world.get_component::<Position>(e))
             .copied()
     }
 }

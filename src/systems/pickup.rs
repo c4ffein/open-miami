@@ -89,7 +89,7 @@ impl PickupSystem {
     /// key press so the player chooses when to swap. Returns the newly held
     /// weapon type if a swap happened, and emits [`GameEvent::Pickup`].
     pub fn swap_for_player(world: &mut World) -> Option<WeaponType> {
-        let player = world.query::<Player>().into_iter().next()?;
+        let player = world.first::<Player>()?;
         let player_pos = *world.get_component::<Position>(player)?;
         let player_radius = world
             .get_component::<Radius>(player)

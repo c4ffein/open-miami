@@ -64,7 +64,7 @@ impl System for BulletSystem {
             let new_y = bullet_pos.y + bullet_vel.y * dt;
 
             // Check wall collision (bullets are small, use 2.0 radius).
-            // Swept old->new segment check: a bullet covers ~13 px per 60 Hz
+            // Swept old->new segment check: a bullet covers ~27 px per 60 Hz
             // frame, so an endpoint-only test would tunnel straight through
             // walls thinner than that.
             let bullet_radius = 2.0;
@@ -242,7 +242,7 @@ mod tests {
         let bullet = world.spawn();
         world.add_component(bullet, Bullet::new(WeaponType::Shotgun, 30));
         world.add_component(bullet, Position::new(0.0, 0.0));
-        world.add_component(bullet, Velocity::new(800.0, 0.0));
+        world.add_component(bullet, Velocity::new(1600.0, 0.0));
         world.add_component(bullet, Radius::new(2.0));
 
         let mut system = BulletSystem;
@@ -274,7 +274,7 @@ mod tests {
         let bullet = world.spawn();
         world.add_component(bullet, Bullet::new(WeaponType::Pistol, 30));
         world.add_component(bullet, Position::new(0.0, 0.0));
-        world.add_component(bullet, Velocity::new(800.0, 0.0));
+        world.add_component(bullet, Velocity::new(1600.0, 0.0));
         world.add_component(bullet, Radius::new(2.0));
 
         let mut system = BulletSystem;
@@ -420,5 +420,36 @@ mod tests {
         // All trails should be removed
         let trails = world.query::<ProjectileTrail>();
         assert_eq!(trails.len(), 0);
+    }
+
+    #[test]
+    fn bullet_is_integrated_exactly_once_per_frame() {
+        // Regression: bullets carry Position + Velocity, and MovementSystem
+        // used to advance them as well as BulletSystem — doubling their
+        // speed and leaving half of each frame's travel un-swept.
+        use crate::components::WeaponType;
+        use crate::systems::MovementSystem;
+        let mut world = World::new();
+        let bullet = world.spawn();
+        let b = Bullet::new(WeaponType::Pistol, 30);
+        world.add_component(bullet, b);
+        world.add_component(bullet, Position::new(0.0, 0.0));
+        world.add_component(bullet, Velocity::new(b.speed, 0.0));
+        world.add_component(bullet, Radius::new(2.0));
+
+        let dt = 1.0 / 60.0;
+        let frames = 30;
+        let mut movement = MovementSystem;
+        let mut bullets = BulletSystem;
+        for _ in 0..frames {
+            movement.run(&mut world, dt);
+            bullets.run(&mut world, dt);
+        }
+        let x = world.get_component::<Position>(bullet).unwrap().x;
+        let expected = b.speed * dt * frames as f32;
+        assert!(
+            (x - expected).abs() < 1e-2,
+            "bullet travelled {x} px in {frames} frames, expected {expected}"
+        );
     }
 }

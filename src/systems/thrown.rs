@@ -27,7 +27,7 @@ impl ThrownWeaponSystem {
     /// holding it. Returns `true` if a weapon was actually thrown (and emits
     /// [`GameEvent::Throw`]).
     pub fn throw_from_player(world: &mut World, aim_dir: Vec2) -> bool {
-        let player = match world.query::<Player>().into_iter().next() {
+        let player = match world.first::<Player>() {
             Some(p) => p,
             None => return false,
         };

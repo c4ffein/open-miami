@@ -1,0 +1,69 @@
+{
+  "name": "Descent",
+  "notes": [
+    "SONG 4 — \"Descent\" (AGGRESSIVE): tense mid-descent. D Phrygian (flat 2nd),",
+    "driving square bass hammering the root, restless saw arp, four-on-the-floor."
+  ],
+  "root": 36.71,
+  "root_note": "D1",
+  "scale": "phrygian",
+  "bpm": 132.0,
+  "steps_per_beat": 4,
+  "waves": { "bass": "square", "lead": "sawtooth", "pad": "sawtooth", "arp": "square" },
+  "intensity": 0.85,
+  "sections": {
+    "intro": {
+      "bass": "0 . . . 0 . . . 0 . . . 0 . . .",
+      "lead": [
+        ". . . . . . . . 7 . 8 . 10 . 8 .",
+        ". . . . . . . . 7 . 10 . 8 . 7 ."
+      ],
+      "pad": "0 . . . . . . . 5 . . . . . . .",
+      "arp": [
+        "14 . 15 . 17 . 15 . 14 . 17 . 19 . 17 .",
+        "14 . 15 . 17 . 15 . 14 . 17 . 19 . 17 ."
+      ],
+      "drums": "k.h.s.h.k.h.s.h."
+    },
+    "verse": {
+      "bass": "0 . 0 . 0 . 0 . 0 . 0 . 5 . 4 .",
+      "lead": [
+        "7 8 10 8 7 10 8 10 12 11 10 8 7 8 7 .",
+        "7 8 10 8 10 11 12 10 8 10 12 11 10 8 7 ."
+      ],
+      "pad": "0 . . . . . . . 5 . . . 4 . . .",
+      "arp": [
+        "14 . 15 . 17 . 15 . 14 . 17 . 19 . 17 .",
+        "14 . 17 . 19 . 17 . 15 . 17 . 15 . 14 ."
+      ],
+      "drums": "khhhshhhkhkhshhh"
+    },
+    "refrain": {
+      "bass": "0 0 . 0 0 0 . 0 0 0 . 0 5 . 4 .",
+      "lead": [
+        "12 . 11 . 10 . 8 . 7 . 8 . 10 . 12 .",
+        "14 . 12 . 11 . 10 . 8 . 10 . 12 . 14 ."
+      ],
+      "pad": "5 . . . . . . . 4 . . . . . . .",
+      "arp": [
+        "17 . 19 . 21 . 19 . 17 . 19 . 22 . 19 .",
+        "21 . 22 . 24 . 22 . 19 . 17 . 15 . 14 ."
+      ],
+      "drums": "khshkhshkkshkssh"
+    },
+    "bridge": {
+      "bass": "5 . . . 5 . . . 4 . . . 4 . . .",
+      "lead": [
+        ". . 10 . 8 . 7 . . . . . . . . .",
+        ". . 12 . 10 . 8 . . . . . . . . ."
+      ],
+      "pad": "5 . . . . . . . 4 . . . . . . .",
+      "arp": [
+        "14 . 15 . 17 . 15 . 14 . 15 . 17 . 19 .",
+        "17 . 15 . 14 . 12 . 10 . 8 . 7 . 5 ."
+      ],
+      "drums": "k.h.s.h.k.h.s.hh"
+    }
+  },
+  "order": ["intro", "verse", "verse", "refrain", "verse", "bridge", "refrain", "refrain"]
+}

@@ -1,5 +1,5 @@
 use crate::collision::circle_rect_collision;
-use crate::components::{Knockback, Position, Radius, Velocity};
+use crate::components::{Bullet, Knockback, Position, Radius, Velocity};
 use crate::ecs::{System, World};
 use crate::math::Vec2;
 
@@ -43,6 +43,13 @@ impl System for MovementSystem {
         let entities: Vec<_> = world.query_with::<Position, Velocity>();
 
         for entity in entities {
+            // Bullets own their integration: `BulletSystem` advances them with
+            // the swept wall / enemy checks. Advancing them here too would
+            // double their speed and leave half of each frame's travel
+            // un-swept against enemies.
+            if world.has_component::<Bullet>(entity) {
+                continue;
+            }
             // Get velocity, any knockback impulse, and radius (immutable
             // borrows), copy the values.
             let vel = world.get_component::<Velocity>(entity).copied();

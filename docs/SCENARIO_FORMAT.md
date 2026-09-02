@@ -86,7 +86,7 @@ World units: the existing levels are ~1000×800 world units; keep that scale
 | `start` | — | the floor starts |
 | `enter_zone` | `zone`, optional `before` (step id) | the player is inside that zone — with `before`, only while step `before` has **not** fired yet (once it fires the step is disarmed forever; for scene beats that stop making sense past a point, like floor 1's "not past the line" block before the desk scene) |
 | `kills` | `count` | at least `count` rogues are dead on this floor |
-| `all_dead` | — | every rogue (incl. spawned waves) is dead |
+| `all_dead` | — | every rogue (incl. spawned waves) is dead, and at least one has died — un-alerted civilians are not rogues, so a floor whose hostiles have not shown up yet is not "cleared" |
 | `timer` | `seconds`, optional `after` (step id) | `seconds` after floor start (or after step `after` fired — but when step `after` has `talk` actions, `seconds` counts from the moment its **conversation ends** (last line dismissed, panel gone), since the player paces it) |
 | `exit_open` | optional `exit` | that exit (any if omitted) has been opened |
 | `step_done` | `step` | step `step` has fired (chain steps) |

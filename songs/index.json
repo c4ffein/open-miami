@@ -1,0 +1,14 @@
+{
+  "songs": [
+    { "file": "insert_coin.json", "name": "Insert Coin" },
+    { "file": "neon_lounge.json", "name": "Neon Lounge" },
+    { "file": "chrome_veins.json", "name": "Chrome Veins" },
+    { "file": "descent.json", "name": "Descent" },
+    { "file": "blood_rush.json", "name": "Blood Rush" },
+    { "file": "deep_static.json", "name": "Deep Static" },
+    { "file": "static_prayer.json", "name": "Static Prayer" },
+    { "file": "mask_of_dread.json", "name": "Mask of Dread" },
+    { "file": "razor_circuit.json", "name": "Razor Circuit" },
+    { "file": "cold_storage.json", "name": "Cold Storage" }
+  ]
+}

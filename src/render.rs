@@ -4,10 +4,9 @@ use crate::ecs::{Entity, World};
 use crate::graphics::Graphics;
 use crate::math::{Color, Vec2};
 
-/// Render all entities in the world
-/// `draw_bots` selects whether the player/rogue sprites are drawn here; the
-/// game passes false and draws them as live 3D robots instead (the boss is
-/// always drawn here, live too). `now` is the continuous animation clock in
+/// Render all entities in the world except the upright player / rogue
+/// bots — the game draws those as live 3D robots afterwards (the boss IS
+/// drawn here, live too). `now` is the continuous animation clock in
 /// seconds (drives the boss's writhing). `cull` = the camera's inflated view
 /// rect: the expensive live sprites (ground guns, the boss) fully outside it
 /// skip their commands — bullets / trails / debug overlays keep their own
@@ -16,7 +15,6 @@ pub fn render_entities(
     world: &World,
     graphics: &Graphics,
     show_infos: bool,
-    draw_bots: bool,
     now: f32,
     cull: &crate::camera::ViewCull,
 ) {
@@ -42,18 +40,8 @@ pub fn render_entities(
     // Render weapons in flight
     render_thrown_weapons(world, graphics, cull);
 
-    // Render enemies
-    if draw_bots {
-        render_enemies(world, graphics);
-    }
-
     // Render the boss (big; under the player)
     render_bosses(world, graphics, now, cull);
-
-    // Render player (on top)
-    if draw_bots {
-        render_player(world, graphics);
-    }
 }
 
 /// On-screen size (px) of the boss's live tile relative to its hitbox radius.
@@ -421,74 +409,6 @@ fn render_thrown_weapons(world: &World, graphics: &Graphics, cull: &crate::camer
     }
 }
 
-/// Render all enemies
-fn render_enemies(world: &World, graphics: &Graphics) {
-    let enemies: Vec<Entity> = world.query::<Enemy>();
-
-    for entity in enemies {
-        // The boss is drawn by render_bosses, not as a regular sprite.
-        if world.has_component::<Boss>(entity) {
-            continue;
-        }
-
-        let (pos, rotation, health, ai) = match (
-            world.get_component::<Position>(entity),
-            world.get_component::<Rotation>(entity),
-            world.get_component::<Health>(entity),
-            world.get_component::<AI>(entity),
-        ) {
-            (Some(p), Some(r), Some(h), Some(a)) => (p, r, h, a),
-            _ => continue,
-        };
-
-        // Rogue AI palette, keyed by behavioral signature (flavor names in LORE.md).
-        let base_color = match ai.initial_type {
-            EnemyType::Idle => Color::from_rgba(224, 49, 66, 255), // SENTINEL - hostile red
-            EnemyType::Wandering => Color::from_rgba(150, 70, 210, 255), // DRIFTER - glitch violet
-            EnemyType::Patrolling => Color::from_rgba(224, 40, 160, 255), // HUNTER - predatory magenta
-        };
-        // Draw knocked-down (stunned) enemies as prone, like the dead pose.
-        let prone = health.is_dead() || world.has_component::<Stunned>(entity);
-
-        graphics.draw_pixelated_sprite(Vec2::new(pos.x, pos.y), rotation.angle, base_color, prone);
-    }
-}
-
-/// Render the player
-fn render_player(world: &World, graphics: &Graphics) {
-    let players: Vec<Entity> = world.query::<Player>();
-    let player = match players.first() {
-        Some(&e) => e,
-        None => return,
-    };
-
-    let pos = match world.get_component::<Position>(player) {
-        Some(p) => p,
-        None => return,
-    };
-
-    let rotation = world
-        .get_component::<Rotation>(player)
-        .map(|r| r.angle)
-        .unwrap_or(0.0);
-
-    let health = world
-        .get_component::<Health>(player)
-        .map(|h| h.current)
-        .unwrap_or(0);
-
-    if health > 0 {
-        // Draw the friendly coral purge bot in warm coral.
-        let base_color = Color::from_rgba(217, 119, 87, 255);
-        graphics.draw_pixelated_sprite(
-            Vec2::new(pos.x, pos.y),
-            rotation,
-            base_color,
-            false, // Player is alive
-        );
-    }
-}
-
 /// Render UI (health, rogue count, the sliding ammo box, etc.). `weapon` is
 /// the held weapon type (`None` = unarmed), `ammo` the rounds left in it and
 /// `ammo_slide` the eased slide offset of the ammo box (`AmmoSlide::eased`:
@@ -529,7 +449,7 @@ pub fn render_ui(
         );
 
         render_ammo_box(graphics, weapon, ammo, ammo_slide);
-    } else if !player_alive {
+    } else {
         // Death screen with animations
 
         // "SYSTEM HALTED" - reveal left to right

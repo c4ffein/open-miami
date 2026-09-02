@@ -1,0 +1,132 @@
+{
+  "name": "Razor Circuit",
+  "notes": [
+    "SONG 9 — \"Razor Circuit\" (AGGRESSIVE, audition candidate): driving darksynth",
+    "combat. E natural minor, 126 BPM. Four-on-the-floor kick against pure",
+    "offbeat square bass (the classic synthwave pump), a relentless 16th arp",
+    "cycling the chord tones, and a hook lead that only arrives once the groove",
+    "has earned it. One chord per bar, i - VI - III - VII (Em - C - G - D).",
+    "Form: intro x2 (8 bars, arp teases in) -> groove x2 -> hook x2 ->",
+    "breakdown -> groove -> hook x2. Sections are 4 bars (64 steps).",
+    "",
+    "pattern razor_pad: Chord bed shared by intro / groove / hook: one low triad on",
+    "beats 1 and 3 of each bar, walking Em / C / G / D (pad degrees 0 / 5 / 2 / 6).",
+    "",
+    "pattern razor_bass_groove: The groove/hook bass: quarter-note OFFBEATS only",
+    "(steps 2/6/10/14 of each bar) so the four-on-the-floor kick and the bass",
+    "alternate — the pump. Roots follow the chords an octave down: E1 / C1 / G1 /",
+    "D1 (0 / -2 / 2 / -1), with a doubled 16th turnaround at the end of bar 4.",
+    "",
+    "pattern razor_arp: The 16th-note arp: an up-down cycle of each bar's chord",
+    "tones one to two octaves up (Em 7-9-11-14, C 12-14-16-19, G 9-11-13-16, D",
+    "13-15-17-20)."
+  ],
+  "root": 41.2,
+  "root_note": "E1",
+  "scale": "minor",
+  "bpm": 126.0,
+  "steps_per_beat": 4,
+  "waves": { "bass": "square", "lead": "sawtooth", "pad": "sawtooth", "arp": "square" },
+  "intensity": 0.9,
+  "patterns": {
+    "razor_pad": [
+      "0 . . . . . . . 0 . . . . . . .",
+      "5 . . . . . . . 5 . . . . . . .",
+      "2 . . . . . . . 2 . . . . . . .",
+      "6 . . . . . . . 6 . . . . . . ."
+    ],
+    "razor_bass_groove": [
+      ". . 0 . . . 0 . . . 0 . . . 0 .",
+      ". . -2 . . . -2 . . . -2 . . . -2 .",
+      ". . 2 . . . 2 . . . 2 . . . 2 .",
+      ". . -1 . . . -1 . . . -1 . -1 . -1 -1"
+    ],
+    "razor_arp": [
+      "7 9 11 14 11 9 7 9 7 9 11 14 11 9 7 9",
+      "12 14 16 19 16 14 12 14 12 14 16 19 16 14 12 14",
+      "9 11 13 16 13 11 9 11 9 11 13 16 13 11 9 11",
+      "13 15 17 20 17 15 13 15 13 15 17 20 17 15 13 15"
+    ]
+  },
+  "sections": {
+    "intro": {
+      "bass": [
+        "0 . . . . . . . 0 . . . . . . .",
+        "-2 . . . . . . . -2 . . . . . . .",
+        "2 . . . . . . . 2 . . . . . . .",
+        "-1 . . . . . . . -1 . . . . . . ."
+      ],
+      "lead": ".",
+      "pad": "@razor_pad",
+      "arp": [
+        ". . . . . . . . . . . . . . . .",
+        ". . . . . . . . . . . . . . . .",
+        "9 11 13 16 13 11 9 11 9 11 13 16 13 11 9 11",
+        "13 15 17 20 17 15 13 15 13 15 17 20 17 15 13 15"
+      ],
+      "drums": [
+        "..h...h...h...h.",
+        "..h...h...h...h.",
+        "k.h.k.h.k.h.k.h.",
+        "k.h.k.h.k.h.k.hh"
+      ]
+    },
+    "groove": {
+      "bass": "@razor_bass_groove",
+      "lead": ".",
+      "pad": "@razor_pad",
+      "arp": "@razor_arp",
+      "drums": "k.h.k.h.k.h.k.hh"
+    },
+    "hook": {
+      "bass": "@razor_bass_groove",
+      "lead": [
+        "18 . . 18 . 16 . 14 . . 16 . 14 . . .",
+        "19 . . 19 . 16 . 14 . . 16 . 14 . . .",
+        "20 . . 20 . 18 . 16 . . 18 . 16 . . .",
+        "21 . . 20 . 18 . 17 . 15 . 17 . 18 . ."
+      ],
+      "pad": "@razor_pad",
+      "arp": "@razor_arp",
+      "drums": [
+        "k.h.k.s.k.h.k.s.",
+        "k.h.k.s.k.h.k.s.",
+        "k.h.k.s.k.h.k.s.",
+        "k.h.k.s.k.s.ksss"
+      ]
+    },
+    "breakdown": {
+      "bass": [
+        "0 . . . . . . . . . . . . . . .",
+        "0 . . . . . . . . . . . . . . .",
+        "-2 . . . . . . . . . . . . . . .",
+        "-1 . . . . . . . -1 . . . -1 . -1 -1"
+      ],
+      "lead": [
+        ". . . . . . . . . . . . . . . .",
+        ". . . . 18 . . 16 . 14 . . . . . .",
+        ". . . . . . . . . . . . . . . .",
+        ". . . . . . . . 14 . 16 . 18 . 21 ."
+      ],
+      "pad": [
+        "0 . . . . . . . 0 . . . . . . .",
+        "0 . . . . . . . 0 . . . . . . .",
+        "5 . . . . . . . 5 . . . . . . .",
+        "6 . . . . . . . 6 . . . . . . ."
+      ],
+      "arp": [
+        ". . . . . . . . . . . . . . . .",
+        ". . . . . . . . . . . . . . . .",
+        "12 14 16 19 16 14 12 14 12 14 16 19 16 14 12 14",
+        "13 15 17 20 17 15 13 15 13 15 17 20 17 15 13 15"
+      ],
+      "drums": [
+        "..h...h...h...h.",
+        "..h...h...h...h.",
+        "k.h.k.h.k.h.k.h.",
+        "k.h.k.s.k.s.ksss"
+      ]
+    }
+  },
+  "order": ["intro", "intro", "groove", "groove", "hook", "hook", "breakdown", "groove", "hook", "hook"]
+}

@@ -33,6 +33,12 @@ fn test_full_game_initialization() {
     assert_eq!(world.query::<Player>().len(), 1);
     assert_eq!(world.query::<Enemy>().len(), 4);
     assert!(is_player_alive(&world));
+    // Floor 1 opens on a passive crowd: bystanders until alerted.
+    assert_eq!(count_alive_enemies(&world), 0);
+    open_miami::systems::passive::alert_passives(
+        &mut world,
+        open_miami::scenario::AlertTarget::All,
+    );
     assert_eq!(count_alive_enemies(&world), 4);
 }
 
@@ -184,6 +190,10 @@ fn test_enemy_attacks_player() {
 fn test_complete_game_scenario_player_clears_room() {
     let mut world = World::new();
     initialize_game(&mut world, 1);
+    open_miami::systems::passive::alert_passives(
+        &mut world,
+        open_miami::scenario::AlertTarget::All,
+    );
 
     assert_eq!(count_alive_enemies(&world), 4);
 

@@ -1,0 +1,70 @@
+{
+  "name": "Mask of Dread",
+  "notes": [
+    "SONG 8 — \"Mask of Dread\" (AGGRESSIVE / heavy BOSS): dread-filled and huge. C",
+    "Locrian (flat 2nd + tritone), slow but crushing; sustained saw bass lurching",
+    "to the tritone, high square wails, enormous slow kicks. The mask watches."
+  ],
+  "root": 32.7,
+  "root_note": "C1",
+  "scale": "locrian",
+  "bpm": 100.0,
+  "steps_per_beat": 4,
+  "waves": { "bass": "sawtooth", "lead": "square", "pad": "sawtooth", "arp": "square" },
+  "intensity": 1.15,
+  "sections": {
+    "intro": {
+      "bass": "0 . . . . . . . 0 . . . . . . .",
+      "lead": [
+        "7 . . . . . . . . . . . . . . .",
+        "8 . . . . . . . . . . . . . . ."
+      ],
+      "pad": "0 . . . . . . . 4 . . . . . . .",
+      "arp": [
+        ". . 14 . 15 . . . . . 18 . 15 . 14 .",
+        ". . 14 . 15 . . . . . 18 . 15 . 14 ."
+      ],
+      "drums": "k...s...k...s..."
+    },
+    "verse": {
+      "bass": "0 . . . 0 . 4 . 0 . . . 4 . 3 .",
+      "lead": [
+        "7 . . . . . . . 8 . . . . . 11 .",
+        ". . . . 7 . . . 8 . . . . . 4 ."
+      ],
+      "pad": "0 . . . . . . . 4 . . . . . . .",
+      "arp": [
+        ". . 14 . 15 . . . . . 18 . 15 . 14 .",
+        ". . 15 . 18 . . . . . 14 . 11 . 14 ."
+      ],
+      "drums": "k...s...k..ks.s."
+    },
+    "refrain": {
+      "bass": "0 . 0 . 4 . 4 . 3 . 3 . 4 . 1 .",
+      "lead": [
+        "11 . . . 8 . . . 7 . . . 8 . 11 .",
+        "12 . . . 11 . . . 8 . . . 7 . 4 ."
+      ],
+      "pad": "0 . . . . . . . 4 . . . 1 . . .",
+      "arp": [
+        "14 . 15 . 18 . 15 . 14 . 15 . 18 . 21 .",
+        "18 . 15 . 14 . 11 . 14 . 15 . 18 . 15 ."
+      ],
+      "drums": "k.k.s.k.k.kks.ss"
+    },
+    "bridge": {
+      "bass": "4 . . . . . . . 3 . . . . . . .",
+      "lead": [
+        ". . . . 8 . . . . . . . 7 . . .",
+        ". . . . 11 . . . . . . . 8 . . ."
+      ],
+      "pad": "4 . . . . . . . 3 . . . . . . .",
+      "arp": [
+        ". . 14 . . . 15 . . . 18 . . . 21 .",
+        ". . 18 . . . 15 . . . 14 . . . 11 ."
+      ],
+      "drums": "k...s...k...s..."
+    }
+  },
+  "order": ["intro", "verse", "verse", "refrain", "verse", "bridge", "refrain", "refrain"]
+}

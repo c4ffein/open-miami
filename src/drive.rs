@@ -25,6 +25,16 @@
 // DRIVE shader (DRIVE_FS + its palm-placement JS); editing one side alone
 // desyncs the native tests from the picture. `BANDS` and the schedule
 // functions below are the live Rust side of the split.
+//
+// NOTE: `HORIZON_FRAC`, `SPEED`, `STRIPE`, `DASH`, `ROAD_HALF`, `PALM_*`,
+// `Z_FAR`, `PPU_FRAC` and the `project_y` / `z_at` projection are the
+// NATIVE-TEST MIRROR of the picture, not what draws it: the wasm path only
+// ships the schedules + `BANDS`. The live values are the literals in
+// renderer.js — DRIVE_FS (`horizon = h * 0.44`, `ppu = w * 0.14`, the
+// `13.0` speed / `2.4` stripe / `1.4` dash / `3.0 * ppu / z` road half
+// width in the road rows) and the palm-placement JS right after it
+// (`SPEED = 13.0, SPACING = 6.5, PX = 4.6, PH = 3.4, ZFAR = 36.0`). Keep
+// both sides equal so the unit tests here keep describing the shader.
 // ---------------------------------------------------------------------------
 
 /// Horizon height as a fraction of the screen height.

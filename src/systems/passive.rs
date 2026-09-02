@@ -120,9 +120,8 @@ pub fn count_passives(world: &World) -> usize {
 /// how many were flipped.
 pub fn alert_passives(world: &mut World, target: AlertTarget) -> usize {
     let player_pos = world
-        .query::<Player>()
-        .first()
-        .and_then(|&p| world.get_component::<Position>(p))
+        .first::<Player>()
+        .and_then(|p| world.get_component::<Position>(p))
         .copied();
     let zone_rect = match target {
         AlertTarget::Zone(id) => world.query::<Zone>().into_iter().find_map(|e| {
@@ -617,8 +616,13 @@ mod tests {
     }
 
     #[test]
-    fn passives_count_as_rogues() {
-        let world = crowd_world(None);
+    fn passives_are_not_rogues_until_alerted() {
+        let mut world = crowd_world(None);
+        // Bystanders: an `all_dead` step must not wait on them, and the HUD
+        // must not count them.
+        assert_eq!(crate::scenario::count_rogues(&world), (0, 0));
+        assert_eq!(crate::game::count_alive_enemies(&world), 0);
+        alert_passives(&mut world, AlertTarget::All);
         assert_eq!(crate::scenario::count_rogues(&world), (0, 2));
         assert_eq!(crate::game::count_alive_enemies(&world), 2);
     }

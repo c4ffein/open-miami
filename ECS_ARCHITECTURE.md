@@ -58,18 +58,20 @@ Entities have no data or behavior - they're just IDs that link components togeth
 
 ### 2. Component (`src/ecs/component.rs`)
 
-Any type can be a component:
+Any `'static` type can be a component — `Component` is a bare marker trait
+with a blanket impl:
 
 ```rust
-pub trait Component: 'static {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-}
+pub trait Component: 'static {}
+impl<T: 'static> Component for T {}
 ```
 
-Blanket implementation means any struct automatically works:
+The world boxes components as `dyn AnyComponent` (`Any` + `Clone` +
+downcasting), so every stored component must also be `Clone` — the whole
+`World` is snapshotted by the mid-floor `checkpoint` scenario action:
 
 ```rust
+#[derive(Clone)]
 struct Position { x: f32, y: f32 }  // Automatically a component!
 ```
 
@@ -145,23 +147,33 @@ struct Enemy;   // Marks entity as enemy
 
 ## Game Systems
 
-### System Execution Order (`src/lib.rs`, `wasm_entry::GameState::update_game`)
+### System Execution Order (`src/sim.rs`, `GameSystems::step`)
+
+Input is applied first by the game loop (`wasm_entry::GameState::update_game`
+in `src/lib.rs`: `InputSystem::update_player_rotation` / `update_player_movement`
+/ `handle_shoot_input`, skipped while the player is dead or held by a
+scenario `hold`), then one engine tick runs the twelve gameplay systems in a
+fixed order:
 
 ```rust
-// 1. Input (if player alive)
-InputSystem::update_player_rotation(&mut world, mouse_pos);
-InputSystem::update_player_movement(&mut world);
-InputSystem::handle_shoot_input(&mut world, mouse_pos);
-
-// 2. Update game logic
-weapon_system.run(&mut world, dt);
-ai_system.run(&mut world, dt);
-movement_system.run(&mut world, dt);
-combat_system.run(&mut world, dt);
-
-// 3. Render
-render_entities(&world);
+pub fn step(&mut self, world: &mut World, dt: f32) {
+    self.finisher.run(world, dt);   // before stun so it can keep its victim pinned
+    self.stun.run(world, dt);
+    self.weapon.run(world, dt);
+    self.ai.run(world, dt);
+    self.boss.run(world, dt);
+    self.movement.run(world, dt);
+    self.combat.run(world, dt);
+    self.bullet.run(world, dt);
+    self.thrown.run(world, dt);
+    self.head.run(world, dt);
+    self.projectile.run(world, dt);
+    self.pickup.run(world, dt);     // drop weapons from downed enemies
+}
 ```
+
+Rendering is not a system: the game loop records the frame afterwards
+(`render_entities` and friends, see `CLAUDE.md` for the renderer split).
 
 ### System Details
 
@@ -173,10 +185,12 @@ pos.y += vel.y * dt;
 ```
 
 #### AISystem (`src/systems/ai.rs`)
-Enemy state machine:
-- **Idle**: Player out of range
-- **Chase**: Player detected, move toward them
-- **Attack**: Player in melee range, attack
+Enemy state machine (`AIState`):
+- **Unaware**: never saw the player; idles / wanders / patrols per `EnemyType`
+- **SpottedUnsure**: glimpsed the player — still spotting, or investigating the last known position
+- **SurePlayerSeen**: chase (A* + string pulling) and attack
+- **Confused**: looking around, then back to the initial behaviour
+- **Passive**: cold-open civilians (`systems/passive.rs`); flipped hostile by the scenario `alert` action
 
 #### CombatSystem (`src/systems/combat.rs`)
 Handles damage dealing:
@@ -192,7 +206,6 @@ Processes player input:
 - WASD movement
 - Mouse aiming
 - Shooting
-- Weapon switching (1-4 keys)
 
 ## Entity Spawning
 
@@ -456,10 +469,10 @@ world.insert_resource(GameConfig { difficulty: Hard });
 ## Conclusion
 
 The custom ECS architecture provides:
-- ✅ **100% test coverage** of game logic
+- ✅ **Host-testable** game logic (no browser needed for the simulation)
 - ✅ **Clean separation** of data and behavior
 - ✅ **Easy to extend** with new features
 - ✅ **Simple to understand** implementation
 - ✅ **Fast enough** for this game's scale
 
-The game is now highly maintainable and testable with 89 comprehensive tests covering all systems and components.
+The game is maintainable and testable: `cargo test` runs the native unit tests of every system and component plus the integration / replay tests under `tests/`.

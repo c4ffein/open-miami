@@ -1,3 +1,7 @@
+# The two browser suites, one job each (matrix): `make check-e2e` (the
+# Playwright specs) and `make check-render` (the renderer acceptance scripts).
+# Both go through the Makefile's `e2e-prep` (wasm + glue, bun install,
+# Chromium) — nothing is re-implemented here.
 name: E2E Tests
 
 on:
@@ -10,13 +14,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  e2e-test:
-    name: End-to-End Tests
+  browser:
+    name: ${{ matrix.target }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [check-e2e, check-render]
 
     steps:
       - name: Checkout repository
@@ -27,54 +35,53 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache cargo build
+      - name: Cache cargo registry + git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-deps-
+
+      - name: Cache cargo build (wasm release)
         uses: actions/cache@v4
         with:
           path: target
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-wasm-
 
-      - name: Install wasm-bindgen-cli
-        run: |
-          # Pin wasm-bindgen-cli to the wasm-bindgen crate version in Cargo.lock:
-          # the CLI and the crate must match exactly or glue generation fails.
-          WASM_BINDGEN_VERSION=$(grep -A 2 'name = "wasm-bindgen"' Cargo.lock | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/')
-          echo "Installing wasm-bindgen-cli v$WASM_BINDGEN_VERSION to match Cargo.lock"
-          cargo install wasm-bindgen-cli --version $WASM_BINDGEN_VERSION
+      # wasm-bindgen-cli must match the wasm-bindgen crate in Cargo.lock
+      # exactly; `make build-wasm` installs that version when it is missing
+      # or drifts, so cache the binary keyed on the version.
+      - name: wasm-bindgen version (from Cargo.lock)
+        id: wb
+        run: echo "version=$(grep -A 2 'name = "wasm-bindgen"' Cargo.lock | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
 
-      - name: Build WASM
-        run: |
-          echo "Building WASM for e2e tests..."
-          cargo build --release --target wasm32-unknown-unknown
-
-      - name: Generate wasm-bindgen JavaScript glue
-        run: |
-          wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm \
-            --out-dir . \
-            --target web \
-            --no-typescript
-          ls -lh open_miami.js open_miami_bg.wasm index.html
+      - name: Cache wasm-bindgen-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: ${{ runner.os }}-wasm-bindgen-cli-${{ steps.wb.outputs.version }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
-      - name: Install Playwright and dependencies
-        working-directory: tests/e2e
-        run: |
-          bun install
-          bunx playwright install --with-deps chromium
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('tests/e2e/bun.lock') }}
 
-      # No continue-on-error: a failing spec fails the job. The artifacts below
-      # still upload via `if: always()`.
-      - name: Run E2E tests
-        id: e2e
-        working-directory: tests/e2e
-        run: |
-          mkdir -p test-results
-          bunx playwright test
+      # No continue-on-error: a failing suite fails the job. The artifacts
+      # below still upload via `if: always()`.
+      - name: make ${{ matrix.target }}
+        id: suite
+        run: make ${{ matrix.target }}
 
       - name: Upload test results
-        if: always()
+        if: always() && matrix.target == 'check-e2e'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-test-results
@@ -85,7 +92,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload screenshots
-        if: always()
+        if: always() && matrix.target == 'check-e2e'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-screenshots
@@ -96,10 +103,10 @@ jobs:
       # The PR comment reflects the real outcome of the test step (pass/fail),
       # not a count of PNG files. Skipped for PRs from forks (read-only token).
       - name: Comment test results on PR
-        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: always() && matrix.target == 'check-e2e' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v7
         env:
-          E2E_OUTCOME: ${{ steps.e2e.outcome }}
+          E2E_OUTCOME: ${{ steps.suite.outcome }}
         with:
           script: |
             const outcome = process.env.E2E_OUTCOME; // success | failure | cancelled | skipped

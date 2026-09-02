@@ -127,7 +127,7 @@ async function walkUntil(page, key, pred, { timeout = 15000, what = `walking (${
     while (Date.now() < deadline) {
       pos = await playerPos(page);
       if (pos && pred(pos)) return pos;
-      await page.waitForTimeout(30);
+      await page.waitForTimeout(10);
     }
   } finally {
     await page.keyboard.up(key);
@@ -196,14 +196,19 @@ async function loadFloor(page, floor) {
 
 /**
  * Debug overlay on (I) then purge every rogue (K). Waits until the HUD reports
- * 0 rogues (the all-dead scenario step then opens the exit lift).
+ * 0 rogues AND floor 1's all-dead step has run (its objective line flips to
+ * "Reception is quiet…" as it opens the exit lift). The count alone is not
+ * enough: floor 1 opens on a passive crowd that does not count as rogues, so
+ * ROGUES: 0 is already showing before the purge lands.
  */
 async function purgeRogues(page) {
   await tap(page, 'i');
   await tap(page, 'k');
-  await waitForFrameTexts(page, (t) => hudValue(t, 'ROGUES:') === '0', {
-    what: 'Rogues: 0 after the debug purge',
-  });
+  await waitForFrameTexts(
+    page,
+    (t) => hudValue(t, 'ROGUES:') === '0' && t.some((s) => s.includes('RECEPTION IS QUIET')),
+    { what: 'Rogues: 0 and the all-dead step after the debug purge' },
+  );
 }
 
 /**
@@ -214,7 +219,9 @@ async function purgeRogues(page) {
  *
  * The hall is the TUTORIAL stage now: the desk zone (x 400..600, y 395..450)
  * starts the cover-blown scene and the gated combat tutorial, so this MINIMAL
- * path to the lift stays south of it (y >= 470) and hugs the west side. The
+ * path to the lift stays south of it (y >= 480: the walk polls the position,
+ * and at SwiftShader frame rates one frame of lag is ~13 px) and hugs the
+ * west side. The
  * `deep` zone (y <= 340) still fires the SENTINEL "not past the line" block
  * talk on the way up — it is clicked through here. The caller then waits for
  * the dwell (0.6 s), the extraction card and floor 2 to load.
@@ -222,7 +229,7 @@ async function purgeRogues(page) {
 async function walkFloor1ToServiceLift(page) {
   // North through the turnstile gap, stopping SOUTH of the desk zone.
   await page.mouse.move(640, 100);
-  await walkUntil(page, 'w', (p) => p.y <= 470, { what: 'walking north through the turnstiles' });
+  await walkUntil(page, 'w', (p) => p.y <= 480, { what: 'walking north through the turnstiles' });
   // West along the hall's south band, clear of the desk trigger.
   await page.mouse.move(300, 400);
   await walkUntil(page, 'a', (p) => p.x <= 108, { what: 'walking west to the SERVICE LIFT column' });

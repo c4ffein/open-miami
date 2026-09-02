@@ -26,7 +26,7 @@ flowchart TD
     WALK --> BATCH["batched triangles<br/>(CPU transform stack, ONE shader,<br/>flushed on texture/target changes)"]
     WALK --> STATIC["STATIC geometry cache<br/>floor + walls tessellated ONCE into a persistent<br/>world-space VBO; later frames send a 2-float REF,<br/>the camera applies in the vertex shader (uXA/uXB)"]
     WALK --> PIX["PIXEL-ART GROUPS<br/>batch redirected into an art-res NEAREST scratch FBO;<br/>END composites the finished image as one quad —<br/>origin-snapped (props), or sub-pixel for the world<br/>(gliding motion; sampling stays NEAREST: aliasing is<br/>the art direction)"]
-    WALK --> LIVE["robots / boss — LIVE 3D→2D every frame<br/>robot-core / shoggoth-core render into<br/>per-frame scratch tile atlases"]
+    WALK --> LIVE["robots / boss — LIVE 3D→2D every frame<br/>robot-core / shoggoth-core render into<br/>per-frame scratch tile atlases (NEAREST);<br/>robots as ONE batch: tiles of one pass-1 target,<br/>one post draw at block resolution"]
     WALK --> BAKE["portraits / ground guns — BAKED ONCE<br/>into a persistent NEAREST atlas,<br/>then drawn as rigid rocking / spinning quads"]
     WALK --> TXT["text — VT323 glyph atlas<br/>(lazily baked, all-caps at the draw boundary)"]
     WALK --> DRV["DRIVE backdrop — one full-shader pass<br/>at art resolution → one upscaled quad"]

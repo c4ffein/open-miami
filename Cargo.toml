@@ -51,6 +51,15 @@ crate-type = ["cdylib", "rlib"]
 [profile.release]
 opt-level = 3
 lto = true
+# One codegen unit = whole-crate optimisation (smaller / faster wasm, slower
+# link). panic = "abort" drops the unwinding tables + landing pads from the
+# wasm (nothing in src/ uses catch_unwind / set_hook; a panic already aborts
+# in the browser). Release only — `cargo test` uses the test/dev profile,
+# which keeps unwinding (tests need it). strip: no-op for the wasm target
+# (wasm-bindgen strips debug sections itself), harmless for the native lib.
+codegen-units = 1
+panic = "abort"
+strip = true
 
 [profile.dev]
 opt-level = 1

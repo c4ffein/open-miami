@@ -126,7 +126,10 @@ impl World {
     /// Random integer in `[min, max]` (inclusive).
     pub fn random_int_range(&mut self, min: i32, max: i32) -> i32 {
         let range = (max - min + 1) as u32;
-        min + (self.next_random() % range) as i32
+        // High bits: the low bits of a power-of-two-modulus LCG have tiny
+        // periods (bit 0 strictly alternates), so `% 2` off the raw value
+        // is not a coin flip.
+        min + ((self.next_random() >> 16) % range) as i32
     }
 
     /// Read the current raw RNG state. Systems that need to draw several random
@@ -160,20 +163,26 @@ impl World {
     /// Get an immutable reference to a component
     pub fn get_component<T: Component>(&self, entity: Entity) -> Option<&T> {
         let type_id = TypeId::of::<T>();
-        AnyComponent::as_any(self.components.get(&type_id)?.get(&entity)?.as_ref())
+        // `.as_ref()` first: `Box<dyn AnyComponent>` is itself `Any + Clone`,
+        // so calling `as_any` on the box would hit the blanket impl on the
+        // BOX and downcast the box, not the component.
+        self.components
+            .get(&type_id)?
+            .get(&entity)?
+            .as_ref()
+            .as_any()
             .downcast_ref::<T>()
     }
 
     /// Get a mutable reference to a component
     pub fn get_component_mut<T: Component>(&mut self, entity: Entity) -> Option<&mut T> {
         let type_id = TypeId::of::<T>();
-        AnyComponent::as_any_mut(
-            self.components
-                .get_mut(&type_id)?
-                .get_mut(&entity)?
-                .as_mut(),
-        )
-        .downcast_mut::<T>()
+        self.components
+            .get_mut(&type_id)?
+            .get_mut(&entity)?
+            .as_mut()
+            .as_any_mut()
+            .downcast_mut::<T>()
     }
 
     /// Check if an entity has a component
@@ -223,21 +232,21 @@ impl World {
         entities
     }
 
+    /// The lowest-id entity holding `T` (the one `query::<T>().first()`
+    /// returns) without the allocation + sort: for the one-of-a-kind
+    /// components (`Player`, `Boss`) that are looked up many times a frame.
+    pub fn first<T: Component>(&self) -> Option<Entity> {
+        self.components
+            .get(&TypeId::of::<T>())
+            .and_then(|storage| storage.keys().copied().min_by_key(|e| e.id()))
+    }
+
     /// Get all entities that have all specified component types
     pub fn query_with<T1: Component, T2: Component>(&self) -> Vec<Entity> {
         let entities_with_t1: Vec<Entity> = self.query::<T1>();
         entities_with_t1
             .into_iter()
             .filter(|&e| self.has_component::<T2>(e))
-            .collect()
-    }
-
-    /// Get all entities that have three specific component types
-    pub fn query_with3<T1: Component, T2: Component, T3: Component>(&self) -> Vec<Entity> {
-        let entities: Vec<Entity> = self.query::<T1>();
-        entities
-            .into_iter()
-            .filter(|&e| self.has_component::<T2>(e) && self.has_component::<T3>(e))
             .collect()
     }
 
@@ -273,6 +282,28 @@ impl Default for World {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn coin_flips_have_entropy() {
+        // The raw LCG's bit 0 has period 2: `% 2` on it strictly alternates
+        // (0 consecutive equal pairs). A fair flip gives ~half.
+        let mut w = super::World::new();
+        let flips: Vec<i32> = (0..2000).map(|_| w.random_int_range(0, 1)).collect();
+        let same = flips.windows(2).filter(|p| p[0] == p[1]).count();
+        assert!(
+            (800..1200).contains(&same),
+            "consecutive equal pairs: {same}"
+        );
+        let ones: i32 = flips.iter().sum();
+        assert!((800..1200).contains(&ones), "ones: {ones}");
+        // Small ranges too (the `2..=3` confusion-look draw).
+        let looks: Vec<i32> = (0..2000).map(|_| w.random_int_range(2, 3)).collect();
+        let same = looks.windows(2).filter(|p| p[0] == p[1]).count();
+        assert!(
+            (800..1200).contains(&same),
+            "consecutive equal looks: {same}"
+        );
+    }
+
     use super::*;
 
     #[derive(Debug, Clone, PartialEq)]
@@ -408,30 +439,6 @@ mod tests {
         world.add_component(e3, Velocity { x: 5.0, y: 6.0 });
 
         let entities = world.query_with::<Position, Velocity>();
-        assert_eq!(entities.len(), 1);
-        assert_eq!(entities[0], e1);
-    }
-
-    #[test]
-    fn test_query_with_three_components() {
-        let mut world = World::new();
-
-        let e1 = world.spawn();
-        world.add_component(e1, Position { x: 1.0, y: 2.0 });
-        world.add_component(e1, Velocity { x: 1.0, y: 1.0 });
-        world.add_component(
-            e1,
-            Health {
-                current: 100,
-                max: 100,
-            },
-        );
-
-        let e2 = world.spawn();
-        world.add_component(e2, Position { x: 3.0, y: 4.0 });
-        world.add_component(e2, Velocity { x: 2.0, y: 2.0 });
-
-        let entities = world.query_with3::<Position, Velocity, Health>();
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0], e1);
     }

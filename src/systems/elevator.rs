@@ -13,7 +13,7 @@ pub struct ElevatorSystem;
 
 impl System for ElevatorSystem {
     fn run(&mut self, world: &mut World, dt: f32) {
-        let player_pos = world.query::<Player>().first().and_then(|&p| {
+        let player_pos = world.first::<Player>().and_then(|p| {
             let alive = world
                 .get_component::<Health>(p)
                 .map(|h| h.is_alive())
@@ -54,7 +54,7 @@ impl ElevatorSystem {
 
     /// The exit the player is currently standing in (open or not).
     pub fn player_exit(world: &World) -> Option<Elevator> {
-        let p = world.query::<Player>().into_iter().next()?;
+        let p = world.first::<Player>()?;
         let pos = world.get_component::<Position>(p)?.to_vec2();
         world
             .query::<Elevator>()

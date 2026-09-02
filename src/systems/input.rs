@@ -9,7 +9,7 @@ pub struct InputSystem;
 
 impl InputSystem {
     fn find_player(world: &World) -> Option<Entity> {
-        world.query::<Player>().first().copied()
+        world.first::<Player>()
     }
 
     /// Update player rotation to face mouse

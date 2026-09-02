@@ -124,8 +124,8 @@ impl FinisherSystem {
     /// victim and is locked into the animation. Returns whether one started —
     /// `false` means the click should behave exactly as a normal attack.
     pub fn try_start(world: &mut World) -> bool {
-        let player = match world.query::<Player>().first() {
-            Some(&p) => p,
+        let player = match world.first::<Player>() {
+            Some(p) => p,
             None => return false,
         };
         if world.has_component::<Finisher>(player) {

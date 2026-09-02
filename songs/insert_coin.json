@@ -1,0 +1,69 @@
+{
+  "name": "Insert Coin",
+  "notes": [
+    "SONG 1 — \"Insert Coin\" (WAVY): ominous, dreamy title theme. A-minor, slow,",
+    "soft triangle/sine voices, lush pad, sparse falling arp. The calm before it."
+  ],
+  "root": 55.0,
+  "root_note": "A1",
+  "scale": "minor",
+  "bpm": 84.0,
+  "steps_per_beat": 4,
+  "waves": { "bass": "triangle", "lead": "sine", "pad": "triangle", "arp": "sine" },
+  "intensity": 0.5,
+  "sections": {
+    "intro": {
+      "bass": "0 . . . . . . . . . . . . . . .",
+      "lead": [
+        ". . . . . . 14 . . . . . 12 . . .",
+        ". . . . . . 11 . . . . . 9 . . ."
+      ],
+      "pad": "0 . . . . . . . . . . . . . . .",
+      "arp": [
+        ". . . . 7 . 9 . . . . . 11 . 9 .",
+        ". . . . 9 . 11 . . . . . 12 . 9 ."
+      ],
+      "drums": "....h.......h..."
+    },
+    "verse": {
+      "bass": "0 . . . . . . . 3 . . . . . . .",
+      "lead": [
+        ". . 14 . . . 12 . . . 11 . . . . .",
+        ". . 12 . . . 10 . . . 9 . . . 7 ."
+      ],
+      "pad": "7 . . . . . . . 10 . . . . . . .",
+      "arp": [
+        ". . . . 7 . 9 . . . . . 11 . 9 .",
+        ". . . . 9 . 11 . . . . . 12 . 9 ."
+      ],
+      "drums": "....h.......h..."
+    },
+    "refrain": {
+      "bass": "0 . . . 0 . 3 . 5 . . . 3 . 2 .",
+      "lead": [
+        "7 . 9 . 11 . 12 . . 14 . 12 11 . 9 .",
+        "7 . 9 . 11 . 14 . . 16 . 14 12 . 11 ."
+      ],
+      "pad": "0 . . . . . . . 3 . . . . . . .",
+      "arp": [
+        "14 16 18 16 14 16 18 21 14 16 18 16 18 16 14 11",
+        "14 16 18 21 18 16 14 16 18 21 23 21 18 16 14 12"
+      ],
+      "drums": "k.h...h.k.h.s.h."
+    },
+    "bridge": {
+      "bass": "5 . . . . . . . 4 . . . . . . .",
+      "lead": [
+        ". . . . . . . . 11 . . . 9 . 7 .",
+        ". . . . . . . . 12 . . . 10 . 9 ."
+      ],
+      "pad": "5 . . . . . . . 4 . . . . . . .",
+      "arp": [
+        "7 . 9 . 11 . 9 . 7 . 9 . 11 . 14 .",
+        "11 . 9 . 7 . 9 . 11 . 9 . 7 . 4 ."
+      ],
+      "drums": "........h......."
+    }
+  },
+  "order": ["intro", "verse", "verse", "refrain", "verse", "bridge", "refrain", "refrain"]
+}

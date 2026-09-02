@@ -151,13 +151,33 @@ pub fn setup_input_handlers() -> Result<(), JsValue> {
     }) as Box<dyn FnMut(_)>);
     canvas.add_event_listener_with_callback("wheel", wheel_closure.as_ref().unchecked_ref())?;
 
+    // Focus loss: the browser sends no keyup / mouseup for keys held while
+    // alt-tabbing away, so without this the sampled state keeps the player
+    // walking (or firing) until the key is pressed again.
+    let blur_closure = Closure::wrap(Box::new(|| {
+        release_all();
+    }) as Box<dyn FnMut()>);
+    window.add_event_listener_with_callback("blur", blur_closure.as_ref().unchecked_ref())?;
+    document.add_event_listener_with_callback(
+        "visibilitychange",
+        blur_closure.as_ref().unchecked_ref(),
+    )?;
+
     mousemove_closure.forget();
     mousedown_closure.forget();
     mouseup_closure.forget();
     contextmenu_closure.forget();
     wheel_closure.forget();
+    blur_closure.forget();
 
     Ok(())
+}
+
+/// Forget every held key and mouse button (focus loss). Latched taps are
+/// kept: a press whose release the page never saw still counts once.
+pub fn release_all() {
+    PRESSED_KEYS.with(|keys| keys.borrow_mut().clear());
+    MOUSE_BUTTONS.with(|buttons| buttons.borrow_mut().clear());
 }
 
 pub fn is_key_down(key: &str) -> bool {
