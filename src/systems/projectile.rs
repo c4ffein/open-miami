@@ -395,6 +395,175 @@ mod tests {
         corpse_falls_away_from(crate::math::Vec2::new(100.0, 100.0));
     }
 
+    /// SHOTGUN SPRAY rig: a player with a fresh shotgun fires once toward
+    /// `aim`; returns the spawned pellets' velocity angles (radians).
+    fn shotgun_blast_angles(aim: crate::math::Vec2) -> Vec<f32> {
+        use crate::components::WeaponType;
+        use crate::game::{fire_player_weapon, spawn_player};
+
+        let mut world = World::new();
+        let player = spawn_player(&mut world, crate::math::Vec2::new(0.0, 0.0));
+        *world
+            .get_component_mut::<crate::components::Weapon>(player)
+            .unwrap() = crate::components::Weapon::new(WeaponType::Shotgun);
+        assert!(!fire_player_weapon(&mut world, aim));
+        world
+            .query::<Bullet>()
+            .iter()
+            .map(|&b| {
+                let v = world.get_component::<Velocity>(b).unwrap();
+                v.y.atan2(v.x)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn shotgun_fires_pellet_count_in_cone() {
+        use crate::components::WeaponType;
+        use crate::game::{
+            fire_player_weapon, spawn_player, SHOTGUN_PELLETS, SHOTGUN_PELLET_DAMAGE,
+            SHOTGUN_SPREAD,
+        };
+
+        let mut world = World::new();
+        let player = spawn_player(&mut world, crate::math::Vec2::new(0.0, 0.0));
+        *world
+            .get_component_mut::<crate::components::Weapon>(player)
+            .unwrap() = crate::components::Weapon::new(WeaponType::Shotgun);
+
+        assert!(!fire_player_weapon(
+            &mut world,
+            crate::math::Vec2::new(100.0, 0.0)
+        ));
+
+        // One pull = one shell = SHOTGUN_PELLETS bullets, each a pellet.
+        let bullets = world.query::<Bullet>();
+        assert_eq!(bullets.len(), SHOTGUN_PELLETS);
+        assert_eq!(
+            world
+                .get_component::<crate::components::Weapon>(player)
+                .unwrap()
+                .ammo,
+            WeaponType::Shotgun.magazine() - 1,
+            "one shell per pull"
+        );
+        // ONE PlayerFired per pull (one boom), not one per pellet.
+        assert_eq!(
+            world.drain_events(),
+            vec![GameEvent::PlayerFired(WeaponType::Shotgun)]
+        );
+
+        let mut angles = Vec::new();
+        for &b in &bullets {
+            let bullet = world.get_component::<Bullet>(b).unwrap();
+            assert_eq!(bullet.weapon_type, WeaponType::Shotgun);
+            assert_eq!(bullet.damage, SHOTGUN_PELLET_DAMAGE);
+            let v = world.get_component::<Velocity>(b).unwrap();
+            let speed = (v.x * v.x + v.y * v.y).sqrt();
+            assert!((speed - bullet.speed).abs() < 0.5, "full speed: {speed}");
+            angles.push(v.y.atan2(v.x));
+        }
+        // Cone bounds: every pellet within ±SPREAD/2 of the (+x) aim...
+        for a in &angles {
+            assert!(a.abs() <= SHOTGUN_SPREAD / 2.0 + 1e-4, "in cone: {a}");
+        }
+        // ...and it really is a SPRAY: the fan covers most of the cone.
+        let min = angles.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max = angles.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            max - min > SHOTGUN_SPREAD * 0.5,
+            "pellets spread across the cone: {min}..{max}"
+        );
+        // A full point-blank hit is devastating: at least the old 80 total.
+        assert!(SHOTGUN_PELLET_DAMAGE * SHOTGUN_PELLETS as i32 >= 80);
+    }
+
+    #[test]
+    fn shotgun_spray_is_deterministic_per_seed() {
+        use crate::game::{shotgun_pellet_offsets, SHOTGUN_PELLETS, SHOTGUN_SPREAD};
+
+        // Equal seeds -> the exact same pattern (hash01, never rand)...
+        assert_eq!(shotgun_pellet_offsets(3), shotgun_pellet_offsets(3));
+        // ...different seeds -> different jitter within the same cone.
+        assert_ne!(shotgun_pellet_offsets(3), shotgun_pellet_offsets(4));
+        for seed in 0..16 {
+            let offsets = shotgun_pellet_offsets(seed);
+            assert_eq!(offsets.len(), SHOTGUN_PELLETS);
+            for w in offsets.windows(2) {
+                assert!(w[0] < w[1], "stratified: ascending across the cone");
+            }
+            for o in offsets {
+                assert!(o.abs() <= SHOTGUN_SPREAD / 2.0 + 1e-4);
+            }
+        }
+
+        // End to end: two identical worlds produce the identical blast.
+        let aim = crate::math::Vec2::new(70.0, -40.0);
+        assert_eq!(shotgun_blast_angles(aim), shotgun_blast_angles(aim));
+    }
+
+    #[test]
+    fn shotgun_point_blank_blast_kills_where_strays_wound() {
+        use crate::components::WeaponType;
+        use crate::game::{fire_player_weapon, spawn_player};
+
+        // Point blank: the whole fan is still tight enough to land every
+        // pellet on an adjacent bot -> 6 x 20 = 120 damage, a kill.
+        let mut world = World::new();
+        let player = spawn_player(&mut world, crate::math::Vec2::new(0.0, 0.0));
+        *world
+            .get_component_mut::<crate::components::Weapon>(player)
+            .unwrap() = crate::components::Weapon::new(WeaponType::Shotgun);
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(40.0, 0.0));
+        world.add_component(enemy, Radius::new(12.0));
+        world.add_component(enemy, Health::new(100));
+
+        assert!(!fire_player_weapon(
+            &mut world,
+            crate::math::Vec2::new(40.0, 0.0)
+        ));
+        let mut system = BulletSystem;
+        for _ in 0..10 {
+            system.run(&mut world, 0.016);
+            if world.query::<Bullet>().is_empty() {
+                break;
+            }
+        }
+        assert!(
+            world.get_component::<Health>(enemy).unwrap().is_dead(),
+            "a full point-blank blast is devastating"
+        );
+        // The 100-health bot soaked 5 of the 6 pellets; once it is dead the
+        // remaining pellet overpenetrates (dead bots stop nothing).
+        assert!(world.query::<Bullet>().len() <= 1, "the blast connected");
+
+        // Two stray pellets only wound a 100-health target.
+        let mut world = World::new();
+        let enemy = world.spawn();
+        world.add_component(enemy, Enemy);
+        world.add_component(enemy, Position::new(50.0, 0.0));
+        world.add_component(enemy, Radius::new(12.0));
+        world.add_component(enemy, Health::new(100));
+        for _ in 0..2 {
+            let b = world.spawn();
+            world.add_component(
+                b,
+                Bullet::new(WeaponType::Shotgun, crate::game::SHOTGUN_PELLET_DAMAGE),
+            );
+            world.add_component(b, Position::new(0.0, 0.0));
+            world.add_component(b, Velocity::new(1600.0, 0.0));
+            world.add_component(b, Radius::new(2.0));
+        }
+        let mut system = BulletSystem;
+        for _ in 0..10 {
+            system.run(&mut world, 0.016);
+        }
+        let hp = world.get_component::<Health>(enemy).unwrap();
+        assert!(hp.is_alive() && hp.current < hp.max, "strays wound");
+    }
+
     #[test]
     fn test_projectile_trail_system_multiple_trails() {
         let mut world = World::new();

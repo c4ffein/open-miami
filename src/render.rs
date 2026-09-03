@@ -34,8 +34,8 @@ pub fn render_entities(
     // Render projectile trails
     render_projectile_trails(world, graphics);
 
-    // Render bullets
-    render_bullets(world, graphics);
+    // Render bullets (tracer dashes; view-culled like the other sprites)
+    render_bullets(world, graphics, cull);
 
     // Render weapons in flight
     render_thrown_weapons(world, graphics, cull);
@@ -260,6 +260,32 @@ fn render_enemy_vision_cones(world: &World, graphics: &Graphics) {
     }
 }
 
+/// Art-pixel size (world units) of the hand-drawn chunky ground stamps
+/// (pickup markers, oil splats) — the same referential `?pixel=3` rasterizes
+/// the scenery at, so actor-layer decals share the world's crunch.
+pub const GROUND_ART_PX: f32 = 3.0;
+
+/// A filled disc drawn as stacked horizontal bars on an `apx` art grid — the
+/// chunky stand-in for `draw_circle` in the WORLD layer (## Design: hard
+/// stair-stepped edges; smooth vector circles outside a pixel group are
+/// off-vibe). The stamp itself is rigid; `center` may still move smoothly
+/// (chunky asset, continuous motion). Rows never overlap, so translucent
+/// colours blend exactly once.
+pub fn draw_pixel_disc(graphics: &Graphics, center: Vec2, radius: f32, apx: f32, color: Color) {
+    let half_rows = ((radius / apx).round() as i32).max(1);
+    for i in -half_rows..half_rows {
+        let yc = (i as f32 + 0.5) * apx;
+        let chord = (radius * radius - yc * yc).max(0.0).sqrt();
+        let hw = (chord / apx).round().max(1.0) * apx;
+        graphics.draw_rectangle(
+            Vec2::new(center.x - hw, center.y + i as f32 * apx),
+            hw * 2.0,
+            apx,
+            color,
+        );
+    }
+}
+
 /// Color used to represent a weapon type on the ground / in the UI.
 fn weapon_color(weapon_type: WeaponType) -> Color {
     match weapon_type {
@@ -317,12 +343,16 @@ fn render_pickups(world: &World, graphics: &Graphics, cull: &crate::camera::View
 
         let color = weapon_color(pickup.weapon_type);
 
-        // Subtle ground marker: a faint weapon-coloured halo over a dark plate.
+        // Subtle ground marker: a faint weapon-coloured halo over a dark
+        // plate — stepped chunky discs on the world art grid, not smooth
+        // circles (## Design).
         let halo = Color::new(color.r, color.g, color.b, 0.16);
-        graphics.draw_circle(Vec2::new(pos.x, pos.y), 17.0, halo);
-        graphics.draw_circle(
+        draw_pixel_disc(graphics, Vec2::new(pos.x, pos.y), 17.0, GROUND_ART_PX, halo);
+        draw_pixel_disc(
+            graphics,
             Vec2::new(pos.x, pos.y),
             13.0,
+            GROUND_ART_PX,
             Color::new(0.0, 0.0, 0.0, 0.35),
         );
 
@@ -359,24 +389,63 @@ fn render_projectile_trails(world: &World, graphics: &Graphics) {
     }
 }
 
-/// Render bullets
-fn render_bullets(world: &World, graphics: &Graphics) {
+/// Art-pixel size of a bullet tracer's pixel group, in WORLD units.
+const TRACER_PX: f32 = 2.5;
+/// Tracer dash length: 6 art pixels along the velocity.
+const TRACER_LEN: f32 = 6.0 * TRACER_PX;
+/// Tracer dash height: 2 art pixels.
+const TRACER_H: f32 = 2.0 * TRACER_PX;
+
+/// Render bullets as HM-style TRACERS: an elongated 6x2-art-pixel dash
+/// oriented along the velocity — a warm off-white core with a slightly
+/// dimmer/warmer 2-pixel tail, no outline. Each bullet is one small
+/// pixel-art group (the props/sparks idiom: `pixel_begin`, plain snapped
+/// composite) opened UNDER the heading rotation ("Before" mode), so the
+/// finished chunky dash rotates and glides as a rigid pixel image at native
+/// resolution (CLAUDE.md ## Design). Actors layer: this runs after the
+/// `?pixel=N` scenery group closes.
+fn render_bullets(world: &World, graphics: &Graphics, cull: &crate::camera::ViewCull) {
     let bullets: Vec<Entity> = world.query::<Bullet>();
+
+    // Warm off-white core, dimmer/warmer tail (the measured HM dash).
+    let core = Color::new(1.0, 240.0 / 255.0, 220.0 / 255.0, 1.0);
+    let tail = Color::new(230.0 / 255.0, 200.0 / 255.0, 160.0 / 255.0, 1.0);
 
     for entity in bullets {
         let pos = match world.get_component::<Position>(entity) {
             Some(p) => p,
             None => continue,
         };
+        if !cull.visible(pos.x, pos.y, TRACER_LEN) {
+            continue;
+        }
+        // Heading from the live velocity (a degenerate stationary round
+        // points +x).
+        let angle = world
+            .get_component::<Velocity>(entity)
+            .map(|v| v.y.atan2(v.x))
+            .unwrap_or(0.0);
 
-        let radius = world
-            .get_component::<Radius>(entity)
-            .map(|r| r.value)
-            .unwrap_or(2.0);
-
-        // Yellow bullets
-        let color = Color::new(1.0, 0.9, 0.3, 1.0);
-        graphics.draw_circle(Vec2::new(pos.x, pos.y), radius, color);
+        graphics.save();
+        graphics.translate(pos.x, pos.y);
+        graphics.rotate(angle);
+        // Rotate, THEN open the group: the dash rasterizes on its own grid
+        // and PIX_END's quad — drawn through the rotated transform — turns
+        // the rigid pixel image (sampling stays NEAREST, edges stay hard).
+        graphics.pixel_begin(TRACER_PX, TRACER_LEN, TRACER_H);
+        // Tail: rear 2 art pixels, full height.
+        graphics.draw_rectangle(Vec2::new(0.0, 0.0), 2.0 * TRACER_PX, TRACER_H, tail);
+        // Core: front 4 art pixels.
+        graphics.draw_rectangle(
+            Vec2::new(2.0 * TRACER_PX, 0.0),
+            4.0 * TRACER_PX,
+            TRACER_H,
+            core,
+        );
+        // The bullet's physical position leads the dash: ~1 art pixel of
+        // tracer ahead of the round, the rest streaking behind.
+        graphics.pixel_end(-(TRACER_LEN - TRACER_PX), -TRACER_H * 0.5);
+        graphics.restore();
     }
 }
 
@@ -409,14 +478,14 @@ fn render_thrown_weapons(world: &World, graphics: &Graphics, cull: &crate::camer
     }
 }
 
-/// Render UI (health, rogue count, the sliding ammo box, etc.). `weapon` is
-/// the held weapon type (`None` = unarmed), `ammo` the rounds left in it and
-/// `ammo_slide` the eased slide offset of the ammo box (`AmmoSlide::eased`:
-/// 0 = in place, 1 = fully below the screen edge).
+/// Render UI (the chromatic rogue counter, the sliding ammo box, the message
+/// roller, etc.). `weapon` is the held weapon type (`None` = unarmed), `ammo`
+/// the rounds left in it, `ammo_slide` the eased slide offset of the ammo box
+/// (`AmmoSlide::eased`: 0 = in place, 1 = fully below the screen edge), and
+/// `t` the game clock in seconds (drives the chroma cycle + wobble).
 #[allow(clippy::too_many_arguments)]
 pub fn render_ui(
     graphics: &Graphics,
-    health: i32,
     ammo: i32,
     weapon: Option<WeaponType>,
     ammo_slide: f32,
@@ -425,30 +494,28 @@ pub fn render_ui(
     death_time: f32,
     debug_enabled: bool,
     show_infos: bool,
+    roller: &crate::hud_msg::MsgRoller,
+    t: f32,
 ) {
     let screen_width = graphics.width();
     let screen_height = graphics.height();
 
     if player_alive {
-        graphics.draw_text("Health:", Vec2::new(10.0, 30.0), 20.0, Color::WHITE);
-        graphics.draw_text(
-            &format!("{}", health),
-            Vec2::new(100.0, 30.0),
-            20.0,
-            Color::WHITE,
+        // Top-right, under the message roller's resting spot: the compact
+        // HM-style rogue counter (always visible; the top-LEFT stays empty
+        // during play — HEALTH is gone, the game is one-hit death).
+        let rogues = format!("{} ROGUES", enemies_alive);
+        let rx = screen_width - MSG_PAD_X - chroma_text_width(&rogues, ROGUES_FS);
+        draw_chroma_text(
+            graphics,
+            &rogues,
+            Vec2::new(rx, ROGUES_BASELINE),
+            ROGUES_FS,
+            t,
         );
 
-        // The held gun's rounds live in the sliding bottom-left AMMO BOX
-        // (`render_ammo_box`), not up here — so ROGUES moves up under HEALTH.
-        graphics.draw_text("Rogues:", Vec2::new(10.0, 60.0), 20.0, Color::WHITE);
-        graphics.draw_text(
-            &format!("{}", enemies_alive),
-            Vec2::new(120.0, 60.0),
-            20.0,
-            Color::WHITE,
-        );
-
-        render_ammo_box(graphics, weapon, ammo, ammo_slide);
+        render_msg_roller(graphics, roller, t);
+        render_ammo_box(graphics, weapon, ammo, ammo_slide, t);
     } else {
         // Death screen with animations
 
@@ -488,7 +555,8 @@ pub fn render_ui(
         }
     }
 
-    // Info display indicator
+    // Info display indicator — top-LEFT now (the play HUD keeps it empty,
+    // and the top-right belongs to the roller + rogue counter).
     if debug_enabled {
         let info_text = if show_infos {
             "Infos: ON (Press I to toggle)"
@@ -500,16 +568,11 @@ pub fn render_ui(
         } else {
             Color::GRAY // Gray when inactive
         };
-        graphics.draw_text(
-            info_text,
-            Vec2::new(screen_width - 280.0, 30.0),
-            16.0,
-            info_color,
-        );
+        graphics.draw_text(info_text, Vec2::new(10.0, 30.0), 16.0, info_color);
         if show_infos {
             graphics.draw_text(
                 "K: purge all rogues / B: crack boss mask (debug)",
-                Vec2::new(screen_width - 280.0, 50.0),
+                Vec2::new(10.0, 50.0),
                 14.0,
                 Color::GRAY,
             );
@@ -525,13 +588,86 @@ pub fn render_ui(
     );
 }
 
-/// VT323 average advance per character at font size 1 (the approximation the
-/// other panels use — editor_ui / render_dialogue / ending agree on 0.42).
-const AMMO_CHAR_W: f32 = 0.42;
-/// HUD font size inside the box (same as the HEALTH / ROGUES lines).
-const AMMO_FS: f32 = 20.0;
-/// Box height: the 20 px text plus comfortable inner padding.
-const AMMO_BOX_H: f32 = 34.0;
+// ---------------------------------------------------------------------------
+// The HM chromatic HUD text: two layers, hard color steps, wobble
+// ---------------------------------------------------------------------------
+
+/// VT323 average advance per character at font size 1. The other panels'
+/// 0.42 estimate runs narrow on wide-cap directives ("WARDENS"): the HUD
+/// boxes size with a touch of headroom so the wobbling text never hangs
+/// off the black.
+const AMMO_CHAR_W: f32 = 0.46;
+/// The hard-step colour cycle: light cyan -> light magenta -> pure white.
+const CHROMA_COLORS: [Color; 3] = [
+    Color::new(150.0 / 255.0, 240.0 / 255.0, 1.0, 1.0),
+    Color::new(1.0, 150.0 / 255.0, 230.0 / 255.0, 1.0),
+    Color::new(1.0, 1.0, 1.0, 1.0),
+];
+/// Colour / wobble steps per second (hard steps, no fades).
+pub const CHROMA_HZ: f32 = 9.0;
+/// The BACK layer's down-left offset from the front layer, px.
+const CHROMA_BACK_OFF: f32 = 2.5;
+/// Wobble rotation amplitude, degrees (alternates sign every step).
+const CHROMA_WOBBLE_DEG: f32 = 3.5;
+/// Vertical bob amplitude, px (alternates every two steps).
+const CHROMA_BOB_PX: f32 = 1.5;
+/// Approximate half cap-height above the baseline at font size 1 (where the
+/// wobble pivot sits so the text rocks about its own centre).
+const CHROMA_HALF_H: f32 = 0.35;
+
+/// Width the chroma text will occupy (the same VT323 average-advance
+/// estimate everything else uses).
+pub fn chroma_text_width(text: &str, font_size: f32) -> f32 {
+    text.chars().count() as f32 * font_size * AMMO_CHAR_W
+}
+
+/// The classic HM two-layer chromatic HUD text: the string drawn TWICE — a
+/// back layer offset down-left, a front layer on top — both cycling hard
+/// through light cyan / light magenta / white at [`CHROMA_HZ`], the back
+/// layer one step ahead so the two are never the same colour. The whole
+/// thing wobbles: rotation flips ±[`CHROMA_WOBBLE_DEG`]° with the colour
+/// steps and a small vertical bob rides on top. Fully deterministic from
+/// `t` (the game clock, seconds). `pos` is the baseline-left of the front
+/// layer at rest, like `draw_text`.
+pub fn draw_chroma_text(graphics: &Graphics, text: &str, pos: Vec2, font_size: f32, t: f32) {
+    let step = (t * CHROMA_HZ).floor() as i64;
+    let front = CHROMA_COLORS[step.rem_euclid(3) as usize];
+    let back = CHROMA_COLORS[(step + 1).rem_euclid(3) as usize];
+    let rot = if step % 2 == 0 {
+        CHROMA_WOBBLE_DEG.to_radians()
+    } else {
+        -CHROMA_WOBBLE_DEG.to_radians()
+    };
+    let bob = if step.rem_euclid(4) < 2 {
+        CHROMA_BOB_PX
+    } else {
+        -CHROMA_BOB_PX
+    };
+
+    let w = chroma_text_width(text, font_size);
+    let half_h = font_size * CHROMA_HALF_H;
+    // Pivot at the text's visual centre so the wobble ROCKS in place.
+    graphics.save();
+    graphics.translate(pos.x + w / 2.0, pos.y - half_h + bob);
+    graphics.rotate(rot);
+    graphics.draw_text(
+        text,
+        Vec2::new(-w / 2.0 - CHROMA_BACK_OFF, half_h + CHROMA_BACK_OFF),
+        font_size,
+        back,
+    );
+    graphics.draw_text(text, Vec2::new(-w / 2.0, half_h), font_size, front);
+    graphics.restore();
+}
+
+// ---------------------------------------------------------------------------
+// The sliding bottom-left AMMO BOX
+// ---------------------------------------------------------------------------
+
+/// HUD font size inside the ammo box: ~70% of the box height (the HM ratio).
+const AMMO_FS: f32 = 26.0;
+/// Box height: snug around the text at the 70% fill.
+const AMMO_BOX_H: f32 = 37.0;
 /// Horizontal inner padding (the box hugs the LEFT screen border; this pads
 /// the text on both sides inside it).
 const AMMO_PAD_X: f32 = 14.0;
@@ -543,14 +679,22 @@ const AMMO_BOTTOM_GAP: f32 = 44.0;
 
 /// The sliding bottom-left AMMO BOX: a pure black rectangle flush with the
 /// left screen border showing only `12/12 RNDS` (or `NO GUN` as it slides
-/// away). `slide` is `AmmoSlide::eased` — 0 draws the box in place, 1 puts
-/// it fully below the bottom screen edge (then nothing is drawn at all).
-pub fn render_ammo_box(graphics: &Graphics, weapon: Option<WeaponType>, ammo: i32, slide: f32) {
+/// away) in the two-layer chromatic wobble style. `slide` is
+/// `AmmoSlide::eased` — 0 draws the box in place, 1 puts it fully below the
+/// bottom screen edge (then nothing is drawn at all); `t` is the game clock
+/// (the chroma cycle).
+pub fn render_ammo_box(
+    graphics: &Graphics,
+    weapon: Option<WeaponType>,
+    ammo: i32,
+    slide: f32,
+    t: f32,
+) {
     if slide >= 1.0 {
         return; // fully slid out
     }
     let text = crate::hud_ammo::ammo_box_text(weapon, ammo);
-    let text_w = text.chars().count() as f32 * AMMO_FS * AMMO_CHAR_W;
+    let text_w = chroma_text_width(&text, AMMO_FS);
     let box_w = text_w + 2.0 * AMMO_PAD_X;
 
     let screen_height = graphics.height();
@@ -559,11 +703,67 @@ pub fn render_ammo_box(graphics: &Graphics, weapon: Option<WeaponType>, ammo: i3
     let y = shown_y + slide * (AMMO_BOX_H + AMMO_BOTTOM_GAP);
 
     graphics.draw_rectangle(Vec2::new(0.0, y), box_w, AMMO_BOX_H, Color::BLACK);
-    // Baseline sits so the 20 px caps centre in the 34 px box.
-    graphics.draw_text(
+    // Baseline sits so the caps centre in the box.
+    draw_chroma_text(
+        graphics,
         &text,
-        Vec2::new(AMMO_PAD_X, y + AMMO_BOX_H - 10.0),
+        Vec2::new(AMMO_PAD_X, y + AMMO_BOX_H / 2.0 + AMMO_FS * CHROMA_HALF_H),
         AMMO_FS,
-        Color::WHITE,
+        t,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The top-right MESSAGE ROLLER + rogue counter
+// ---------------------------------------------------------------------------
+
+/// Roller font size: ~70% of the box height, like the ammo box.
+const MSG_FS: f32 = 25.0;
+/// Roller box height.
+const MSG_BOX_H: f32 = 36.0;
+/// Horizontal inner padding of the roller box (and the rogue counter's
+/// right-edge margin, so the two right-align together).
+const MSG_PAD_X: f32 = 14.0;
+/// Resting gap between the roller box's top edge and the top screen border.
+const MSG_TOP_GAP: f32 = 18.0;
+/// Rogue counter font size (small, always visible).
+const ROGUES_FS: f32 = 20.0;
+/// Rogue counter baseline: under the roller's resting spot.
+const ROGUES_BASELINE: f32 = MSG_TOP_GAP + MSG_BOX_H + 28.0;
+
+/// The top-right MESSAGE ROLLER: a black box glued to the RIGHT screen edge
+/// that rolls DOWN from above the top border when a directive arrives and
+/// rolls back up when it expires (`hud_msg::MsgRoller` owns the state; this
+/// only draws). The text is the short chromatic directive.
+pub fn render_msg_roller(graphics: &Graphics, roller: &crate::hud_msg::MsgRoller, t: f32) {
+    if roller.hidden() {
+        return; // fully rolled away
+    }
+    let msg = roller.message();
+    if msg.is_empty() {
+        return;
+    }
+    let text_w = chroma_text_width(msg, MSG_FS);
+    let box_w = text_w + 2.0 * MSG_PAD_X;
+    let screen_width = graphics.width();
+
+    // Roll travel: from resting place to fully above the top border.
+    let y = MSG_TOP_GAP - roller.eased() * (MSG_TOP_GAP + MSG_BOX_H + CHROMA_BACK_OFF + 4.0);
+
+    graphics.draw_rectangle(
+        Vec2::new(screen_width - box_w, y),
+        box_w,
+        MSG_BOX_H,
+        Color::BLACK,
+    );
+    draw_chroma_text(
+        graphics,
+        msg,
+        Vec2::new(
+            screen_width - box_w + MSG_PAD_X,
+            y + MSG_BOX_H / 2.0 + MSG_FS * CHROMA_HALF_H,
+        ),
+        MSG_FS,
+        t,
     );
 }

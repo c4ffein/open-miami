@@ -53,6 +53,9 @@ pub const MARBLE_VEIN_LIGHT: Color = Color::rgb(0.445, 0.43, 0.455);
 pub const MARBLE_VEIN_DARK: Color = Color::rgb(0.285, 0.27, 0.30);
 /// Rare brass floor inlay — the lobby's muted sodium glint.
 pub const MARBLE_INLAY: Color = Color::rgb(0.56, 0.43, 0.20);
+/// Rare 1-art-pixel polish glint on a slab (marble stays mostly clean —
+/// polish reads as FLAT — so this is the only speckle it gets).
+pub const MARBLE_GLINT: Color = Color::rgb(0.475, 0.46, 0.485);
 
 // ------------------------------------------------------------------- concrete
 pub const CONCRETE_A: Color = Color::rgb(0.272, 0.270, 0.284);
@@ -66,6 +69,8 @@ pub const CONCRETE_STAIN: Color = Color::rgb(0.213, 0.209, 0.226);
 pub const CONCRETE_CRACK: Color = Color::rgb(0.188, 0.184, 0.20);
 /// Faded acid-green safety paint remnant.
 pub const CONCRETE_MARK: Color = Color::rgb(0.30, 0.40, 0.17);
+/// Air-pocket pit in the slab — a 1-art-pixel dark dot, below the joints.
+pub const CONCRETE_PIT: Color = Color::rgb(0.158, 0.155, 0.170);
 
 // ------------------------------------------------- asphalt (floor 0, outdoor)
 pub const ASPHALT_DARK: Color = Color::rgb(0.066, 0.070, 0.086);
@@ -78,6 +83,9 @@ pub const ASPHALT_PAINT: Color = Color::rgb(0.50, 0.42, 0.17);
 /// Faded white lane paint remnant.
 pub const ASPHALT_PAINT_WHITE: Color = Color::rgb(0.40, 0.41, 0.45);
 pub const ASPHALT_CRACK: Color = Color::rgb(0.038, 0.041, 0.054);
+/// Bright aggregate chip poking through the worn wearing course (rare
+/// speckle grain, a step above `ASPHALT_LIGHT`).
+pub const ASPHALT_AGGREGATE: Color = Color::rgb(0.130, 0.134, 0.152);
 
 // -------------------------------------------------------------------- grating
 /// The void under the mesh.

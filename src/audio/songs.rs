@@ -1,14 +1,15 @@
-//! The data-driven song format + the pure sequencer arithmetic.
+//! The song format + the pure sequencer arithmetic.
 //!
 //! Everything here compiles NATIVELY (no `web-sys`): the song types, the
 //! in-key pitch math, the section / step playhead and the voice-set
-//! enumeration the bake queue works from. The songs themselves are data in
-//! `songs/*.json`, compiled by `tools/gen_songs.py` into
-//! [`super::songs_data`] (see `docs/SONGS_FORMAT.md`); the WebAudio engine
+//! enumeration the bake queue works from. The songs themselves are RUST
+//! CODE — one file per song under `src/audio/songs/`, written with the
+//! composable authoring layer in [`super::compose`] (see
+//! `docs/MUSIC_CODE.md`) and collected in [`SONGS`]; the WebAudio engine
 //! (`audio/engine.rs`, wasm-only) only *plays* what is described here.
 //!
-//! A song is *plain, `const`-able data*: a key (root frequency + scale), a
-//! tempo, a set of oscillator voices, and an ordered list of SECTIONS.
+//! A song is *plain data*: a key (root frequency + scale), a tempo, a set
+//! of oscillator voices, and an ordered list of SECTIONS.
 //!
 //! Each [`Section`] is its own multi-bar block of five step-sequenced
 //! channels (bass, lead, pad, arp, drums). A [`SongSpec`] strings sections
@@ -33,9 +34,17 @@
 //! third + fifth taken from the scale) with a slow attack, for sustained
 //! chord beds.
 
-use super::songs_data::{
-    BLOOD_RUSH, CHROME_VEINS, DEEP_STATIC, DESCENT, MASK_OF_DREAD, NEON_LOUNGE, STATIC_PRAYER,
-};
+use std::sync::LazyLock;
+
+// The songs themselves: one Rust file per song (src/audio/songs/<name>.rs),
+// written with the `compose` authoring layer. Listed in `SONGS` below.
+pub mod coast_home;
+pub mod crown_of_static;
+pub mod neon_checksum;
+pub mod service_corridor;
+pub mod signal_rot;
+pub mod thermal_mass;
+pub mod walk_dont_run;
 
 /// Sentinel used inside a pattern to mean "rest" (no note this step).
 pub const REST: i32 = i32::MIN;
@@ -63,14 +72,27 @@ pub const PHRYGIAN_DOMINANT: Scale = &[0, 1, 4, 5, 7, 8, 10];
 /// Locrian — flat 2nd *and* a diminished 5th (tritone); maximally unstable.
 pub const LOCRIAN: Scale = &[0, 1, 3, 5, 6, 8, 10];
 
-/// Oscillator shape of a melodic voice. A plain enum so the song data is
-/// host-compilable; the wasm engine maps it to `web_sys::OscillatorType`.
+/// Oscillator shape — or synthesis PRESET — of a melodic voice. A plain
+/// enum so the song data is host-compilable; the wasm engine maps the four
+/// basic shapes to `web_sys::OscillatorType` and builds the presets from
+/// small node graphs (see the "music voices" section of `audio/engine.rs`).
+/// Presets bake per pitch exactly like the basic shapes, so they cost the
+/// same in the note-bake budget.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Wave {
     Sine,
     Square,
     Sawtooth,
     Triangle,
+    /// DARKSYNTH PRESET: 3–5 detuned sawtooths with a slight spread — the
+    /// wide, hissing supersaw lead/pad of every darksynth record.
+    Supersaw,
+    /// DARKSYNTH PRESET: a saw+square pair driven through a waveshaper-style
+    /// soft clip (`WaveShaperNode`) — a growling, overdriven bass.
+    DrivenBass,
+    /// DARKSYNTH PRESET: a slow-attack detuned saw pair through a fixed
+    /// lowpass — a dark, breathing chord bed.
+    DarkPad,
 }
 
 /// One step of the drum lane. Rendered from synthesized noise/tones only.
@@ -106,10 +128,19 @@ pub struct Section {
     pub arp: &'static [i32],
     /// Percussion lane, one `Drum` per step.
     pub drums: &'static [Drum],
+    /// Per-channel velocity (gain multipliers, 1.0 = nominal), indexed like
+    /// [`CHANNEL_NAMES`]. Applied at schedule time (a play-time gain, never
+    /// baked into the note buffers), so it costs nothing in the bake budget.
+    pub vel: [f32; NUM_CHANNELS],
+    /// SIDECHAIN DUCK flag: while this section plays, every kick step pumps
+    /// the melodic voices down along [`duck_gain`]'s fast-recovering curve
+    /// (the drums keep their own path and never duck themselves).
+    pub duck: bool,
 }
 
-/// A whole song as copyable data. Author one in `songs/`, list it in
-/// `songs/index.json`, `make gen-songs`, done.
+/// A whole song as copyable data. Author one as a Rust file in
+/// `src/audio/songs/` with the [`super::compose`] builders, list it in
+/// [`SONGS`], done (see `docs/MUSIC_CODE.md`).
 ///
 /// The key/tempo/voices live here; the *notes* live in the ordered `sections`.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -139,21 +170,76 @@ pub struct SongSpec {
     pub intensity: f64,
 }
 
-/// Pick a song for a given floor, escalating darkness as you descend. Kept as a
-/// plain mapping so the integrator can call it per level. The trailing
-/// entries of [`super::songs_data::SONGS`] ("Razor Circuit", "Cold Storage")
-/// are AUDITION CANDIDATES: listed so the `?viz` tracker can play them, but
-/// mapped to no floor — promote one by referencing it here.
-pub fn song_for_floor(level: usize) -> SongSpec {
-    match level {
-        0..=1 => NEON_LOUNGE,
-        2..=3 => CHROME_VEINS,
-        4..=5 => DESCENT,
-        6..=7 => BLOOD_RUSH,
-        8..=9 => DEEP_STATIC,
-        10..=12 => STATIC_PRAYER,
-        _ => MASK_OF_DREAD,
+/// Number of songs in [`SONGS`].
+pub const SONG_COUNT: usize = 7;
+
+/// THE SOUNDTRACK — every track, built once on first use, in play order
+/// (the `?viz` tracker's list). Each entry is one Rust file in
+/// `src/audio/songs/` whose memoized `spec()` assembles its arrangement
+/// through the [`super::compose`] builders; the briefs are in
+/// `docs/music/TRACKS.md`. The game picks tracks by ROLE — [`title_song`],
+/// [`song_for_floor`], [`ending_song`] — never by index.
+pub static SONGS: LazyLock<[SongSpec; SONG_COUNT]> = LazyLock::new(|| {
+    [
+        neon_checksum::spec(),
+        walk_dont_run::spec(),
+        service_corridor::spec(),
+        thermal_mass::spec(),
+        signal_rot::spec(),
+        crown_of_static::spec(),
+        coast_home::spec(),
+    ]
+});
+
+/// The title screen's track (what the engine holds before any floor).
+pub fn title_song() -> SongSpec {
+    neon_checksum::spec()
+}
+
+/// The track under the EXFILTRATED uplink and the credits' ride home.
+pub fn ending_song() -> SongSpec {
+    coast_home::spec()
+}
+
+/// The track for a floor, by FLOOR ID (0 = the gate cold open, 1..=13 the
+/// tower, 14 = 13½): the soundtrack escalates as you climb — forced calm,
+/// the grind, the tower pushing back, the signal rotting, the mask coming
+/// off. Total: any id maps to a listed song.
+pub fn song_for_floor(floor_id: usize) -> SongSpec {
+    match floor_id {
+        0 => walk_dont_run::spec(),
+        1..=4 => service_corridor::spec(),
+        5..=8 => thermal_mass::spec(),
+        9..=12 => signal_rot::spec(),
+        _ => crown_of_static::spec(),
     }
+}
+
+// --- the sidechain duck ------------------------------------------------------
+
+/// How far the melodic voices dip at a kick in a ducked section (gain).
+pub const DUCK_FLOOR: f64 = 0.35;
+
+/// Seconds a duck takes to recover fully — fast, well under a beat at
+/// combat tempi, so the pump breathes with the kick instead of smearing.
+pub const DUCK_RECOVERY: f64 = 0.3;
+
+/// The pure sidechain envelope: melodic gain `dt` seconds after the most
+/// recent kick (retrigger semantics — a new kick snaps the gain back to
+/// [`DUCK_FLOOR`], then it recovers linearly over [`DUCK_RECOVERY`]).
+/// `dt < 0` (no kick yet / before the kick) is nominal gain. The engine's
+/// scheduler reproduces exactly this curve with one `setValueAtTime` +
+/// `linearRampToValueAtTime` pair per kick on the melodic duck node.
+pub fn duck_gain(dt: f64) -> f64 {
+    if dt < 0.0 {
+        return 1.0;
+    }
+    (DUCK_FLOOR + (1.0 - DUCK_FLOOR) * (dt / DUCK_RECOVERY)).min(1.0)
+}
+
+/// Does `step` of `sec` fire a kick? (What retriggers the duck.)
+pub fn is_kick_step(sec: &Section, step: usize) -> bool {
+    drum_at(sec.drums, step) == Kick
 }
 
 // --- pure helpers ----------------------------------------------------------
@@ -398,7 +484,6 @@ pub fn music_keys(song: &SongSpec) -> Vec<MusicKey> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::songs_data::SONGS;
     use super::*;
 
     /// Every note any song can ever schedule must map to an enumerated
@@ -407,7 +492,7 @@ mod tests {
     /// Run with `--nocapture` to see the per-song counts.
     #[test]
     fn music_voice_sets_are_small_and_complete() {
-        for song in SONGS {
+        for song in SONGS.iter() {
             let keys = music_keys(song);
             assert!(!keys.is_empty(), "{}: empty voice set", song.name);
             assert!(
@@ -462,11 +547,11 @@ mod tests {
     /// multiple of 16 steps at 4 steps/beat, 4 beats/bar): `Playhead::advance`
     /// moves on when the LONGEST lane ends, so a ragged longest lane would
     /// shift every later section off the beat grid. Short lanes may still be
-    /// any length — they loop inside the section (that is how Cold Storage's
+    /// any length — they loop inside the section (that is how the raindrop layers'
     /// 12-step motif phases 3-against-4) — and every arrangement is non-empty.
     #[test]
     fn sections_are_bar_aligned() {
-        for song in SONGS {
+        for song in SONGS.iter() {
             assert!(
                 !song.sections.is_empty(),
                 "{}: empty arrangement",
@@ -487,26 +572,112 @@ mod tests {
         }
     }
 
-    /// The audition candidates are appended, unmapped extras: they must be in
-    /// [`SONGS`] (so the `?viz` tracker lists them) but no floor may pick them
-    /// yet, and the ending's calmest-track pick must not drift onto them.
+    /// The soundtrack's ROLES: the title, the ending and every floor id
+    /// map to the briefed tracks (`docs/music/TRACKS.md`), every track has
+    /// a role (nothing is listed for the tracker that the game never plays)
+    /// and the ending is the calmest track in the list.
     #[test]
-    fn audition_candidates_are_listed_but_unmapped() {
-        for name in ["Razor Circuit", "Cold Storage"] {
-            assert!(SONGS.iter().any(|s| s.name == name), "{name} not in SONGS");
-            for floor in 0..32 {
-                assert_ne!(
-                    song_for_floor(floor).name,
-                    name,
-                    "floor {floor} maps to audition candidate {name}"
-                );
-            }
+    fn soundtrack_roles_follow_the_briefs() {
+        assert_eq!(title_song().name, "Neon Checksum");
+        assert_eq!(ending_song().name, "Coast Home");
+        let floor_track = |id: usize| song_for_floor(id).name;
+        assert_eq!(floor_track(0), "Walk Don't Run");
+        for id in 1..=4 {
+            assert_eq!(floor_track(id), "Service Corridor", "floor {id}");
+        }
+        for id in 5..=8 {
+            assert_eq!(floor_track(id), "Thermal Mass", "floor {id}");
+        }
+        for id in 9..=12 {
+            assert_eq!(floor_track(id), "Signal Rot", "floor {id}");
+        }
+        for id in [13, 14, 99] {
+            assert_eq!(floor_track(id), "Crown of Static", "floor {id}");
+        }
+        for song in SONGS.iter() {
+            let has_role = song.name == title_song().name
+                || song.name == ending_song().name
+                || (0..32).any(|id| song_for_floor(id).name == song.name);
+            assert!(has_role, "{} has no role in the game", song.name);
         }
         let calmest = SONGS
             .iter()
             .min_by(|a, b| a.intensity.total_cmp(&b.intensity))
             .unwrap();
-        assert_eq!(calmest.name, "Insert Coin");
+        assert_eq!(calmest.name, ending_song().name);
+    }
+
+    /// Seconds one play-through of `song` lasts.
+    fn song_secs(song: &SongSpec) -> f64 {
+        let steps: usize = song.sections.iter().map(section_len).sum();
+        steps as f64 * step_dur(song)
+    }
+
+    /// Every track runs the length its brief asks for — the soundtrack
+    /// range is 1:30 to 5:00, and each track's own target (±20 s) is pinned
+    /// so a rewrite cannot quietly shrink one back to a 30-second loop.
+    /// Run with `--nocapture` for the per-track lengths.
+    #[test]
+    fn tracks_run_the_briefed_length() {
+        const TARGET_SECS: [(&str, f64); SONG_COUNT] = [
+            ("Neon Checksum", 150.0),
+            ("Walk Don't Run", 120.0),
+            ("Service Corridor", 180.0),
+            ("Thermal Mass", 210.0),
+            ("Signal Rot", 210.0),
+            ("Crown of Static", 270.0),
+            ("Coast Home", 150.0),
+        ];
+        for (name, target) in TARGET_SECS {
+            let song = SONGS
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("{name} not in SONGS"));
+            let secs = song_secs(song);
+            println!(
+                "{name:16} {:5.1} s ({:2} sections)",
+                secs,
+                song.sections.len()
+            );
+            assert!((90.0..=300.0).contains(&secs), "{name}: {secs:.1} s");
+            assert!(
+                (secs - target).abs() <= 20.0,
+                "{name}: {secs:.1} s, brief says ~{target} s"
+            );
+        }
+    }
+
+    /// The darksynth-led tracks PUMP (at least one ducked section; every
+    /// section with a kick in the pure darksynth ones) and the wave-led
+    /// ones never do — the duck is a genre marker, not a default.
+    #[test]
+    fn the_duck_follows_the_genre() {
+        let ducked = |name: &str| {
+            let song = SONGS.iter().find(|s| s.name == name).unwrap();
+            song.sections.iter().filter(|s| s.duck).count()
+        };
+        for name in [
+            "Service Corridor",
+            "Thermal Mass",
+            "Signal Rot",
+            "Crown of Static",
+        ] {
+            assert!(ducked(name) > 0, "{name} never pumps");
+        }
+        for name in ["Service Corridor", "Thermal Mass"] {
+            let song = SONGS.iter().find(|s| s.name == name).unwrap();
+            for sec in song.sections {
+                let kicked = sec.drums.contains(&Kick);
+                assert!(
+                    !kicked || sec.duck,
+                    "{name}: '{}' has a kick and no duck",
+                    sec.label
+                );
+            }
+        }
+        for name in ["Walk Don't Run", "Coast Home"] {
+            assert_eq!(ducked(name), 0, "{name} pumps — wave doesn't");
+        }
     }
 
     /// Every floor's song is one of the listed songs (the `?viz` tracker can
@@ -572,6 +743,8 @@ mod tests {
             pad: &[REST; 32],
             arp: &[],
             drums: &[Kick],
+            vel: [1.0; NUM_CHANNELS],
+            duck: false,
         };
         assert_eq!(section_len(&sec), 32);
         assert!(cell_active(&sec, 0, 31));
@@ -584,7 +757,7 @@ mod tests {
     /// section exactly at its longest lane's end, and wraps the arrangement.
     #[test]
     fn playhead_walks_the_arrangement() {
-        for song in SONGS {
+        for song in SONGS.iter() {
             let mut ph = Playhead::START;
             let total: usize = song.sections.iter().map(section_len).sum();
             let mut crossings = 0;
@@ -611,5 +784,38 @@ mod tests {
         assert_eq!(ph.step, 3);
         assert_eq!(ph.sounding_step(&song, 2), 1);
         assert_eq!(ph.sounding_step(&song, 4), ph.loop_len(&song) - 1);
+    }
+
+    /// The sidechain envelope is a pure, fast-recovering curve: nominal
+    /// before a kick, floored at the kick, monotonically back to nominal
+    /// within [`DUCK_RECOVERY`] — and the kick-step probe reads the drum
+    /// lane with its looping semantics.
+    #[test]
+    fn duck_curve_dips_and_recovers() {
+        assert_eq!(duck_gain(-0.001), 1.0);
+        assert_eq!(duck_gain(0.0), DUCK_FLOOR);
+        assert_eq!(duck_gain(DUCK_RECOVERY), 1.0);
+        assert_eq!(duck_gain(10.0), 1.0);
+        let mid = duck_gain(DUCK_RECOVERY / 2.0);
+        assert!((mid - (DUCK_FLOOR + (1.0 - DUCK_FLOOR) * 0.5)).abs() < 1e-12);
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let g = duck_gain(DUCK_RECOVERY * i as f64 / 100.0);
+            assert!(g >= last && (DUCK_FLOOR..=1.0).contains(&g));
+            last = g;
+        }
+        let sec = Section {
+            label: "t",
+            bass: &[],
+            lead: &[],
+            pad: &[],
+            arp: &[],
+            drums: &[Kick, Silent, Hat, Snare],
+            vel: [1.0; NUM_CHANNELS],
+            duck: true,
+        };
+        assert!(is_kick_step(&sec, 0));
+        assert!(!is_kick_step(&sec, 1) && !is_kick_step(&sec, 2) && !is_kick_step(&sec, 3));
+        assert!(is_kick_step(&sec, 4), "kick probe follows lane looping");
     }
 }

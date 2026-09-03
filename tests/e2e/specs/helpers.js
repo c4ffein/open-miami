@@ -171,10 +171,20 @@ async function waitForFrameTexts(page, pred, { timeout = 15000, what = 'frame te
   throw new Error(`timed out waiting for ${what}; last frame texts: ${JSON.stringify(texts)}`);
 }
 
-/** The value drawn right after a `label` (e.g. "Rogues:" -> "12"). */
+/** The value drawn right after a `label` (e.g. "SCORE:" -> "12"). */
 function hudValue(texts, label) {
   const i = texts.indexOf(label);
   return i >= 0 ? texts[i + 1] : undefined;
+}
+
+/**
+ * The rogue count from the top-right chromatic counter ("3 ROGUES", drawn
+ * twice — two chroma layers — so the arena holds it twice). `undefined` when
+ * the counter is not on screen (title, death, extraction card).
+ */
+function rogueCount(texts) {
+  const s = texts.find((x) => /^\d+ ROGUES$/.test(x));
+  return s === undefined ? undefined : Number(s.split(' ')[0]);
 }
 
 /**
@@ -187,8 +197,10 @@ async function loadFloor(page, floor) {
   const canvas = page.locator('canvas#glcanvas');
   await canvas.waitFor({ state: 'visible', timeout: 10000 });
   await waitForFrames(page, 10);
-  await waitForFrameTexts(page, (t) => t.includes('HEALTH:') && t.includes('ROGUES:'), {
-    what: 'the in-game HUD',
+  // The persistent in-game HUD text is the top-right rogue counter
+  // ("N ROGUES"; HEALTH/ROGUES: rows are gone — HM-style HUD).
+  await waitForFrameTexts(page, (t) => rogueCount(t) !== undefined, {
+    what: 'the in-game HUD (the "N ROGUES" counter)',
   });
   await canvas.focus();
   return canvas;
@@ -196,18 +208,19 @@ async function loadFloor(page, floor) {
 
 /**
  * Debug overlay on (I) then purge every rogue (K). Waits until the HUD reports
- * 0 rogues AND floor 1's all-dead step has run (its objective line flips to
- * "Reception is quiet…" as it opens the exit lift). The count alone is not
- * enough: floor 1 opens on a passive crowd that does not count as rogues, so
- * ROGUES: 0 is already showing before the purge lands.
+ * 0 rogues AND floor 1's all-dead step has run (the message roller rolls down
+ * with "GO TO ELEVATOR" as it opens the exit lift; the roller rests ~4 s, the
+ * poll catches it). The count alone is not enough: floor 1 opens on a passive
+ * crowd that does not count as rogues, so 0 ROGUES is already showing before
+ * the purge lands.
  */
 async function purgeRogues(page) {
   await tap(page, 'i');
   await tap(page, 'k');
   await waitForFrameTexts(
     page,
-    (t) => hudValue(t, 'ROGUES:') === '0' && t.some((s) => s.includes('RECEPTION IS QUIET')),
-    { what: 'Rogues: 0 and the all-dead step after the debug purge' },
+    (t) => rogueCount(t) === 0 && t.includes('GO TO ELEVATOR'),
+    { what: '0 ROGUES and the GO TO ELEVATOR roller after the debug purge' },
   );
 }
 
@@ -270,14 +283,18 @@ async function walkFloor1ToServiceLift(page) {
   expect(pos.x).toBeLessThan(150);
 }
 
-/** Wait for the floor-2 HUD (its objective names the FREIGHT LIFT). */
+/**
+ * Wait for the floor-2 HUD: the message roller announces the floor's opening
+ * directive ("PURGE THE WARDENS", floor 2's shortened objective) for ~4 s
+ * after the load, alongside the persistent rogue counter.
+ */
 async function expectFloor2(page) {
   const texts = await waitForFrameTexts(
     page,
-    (t) => t.includes('HEALTH:') && t.some((s) => s.includes('FREIGHT LIFT')),
-    { timeout: 12000, what: 'floor 2 (COLD STORAGE / FREIGHT LIFT objective)' },
+    (t) => rogueCount(t) !== undefined && t.includes('PURGE THE WARDENS'),
+    { timeout: 12000, what: 'floor 2 (COLD STORAGE: the PURGE THE WARDENS roller)' },
   );
-  expect(texts.some((s) => s.includes('SERVICE LIFT'))).toBe(false);
+  expect(texts.includes('PASS THE CHECKPOINT')).toBe(false); // floor 1's directive is gone
   return texts;
 }
 
@@ -292,6 +309,7 @@ module.exports = {
   waitForFrames,
   waitForFrameTexts,
   hudValue,
+  rogueCount,
   playerPos,
   walkUntil,
   loadFloor,

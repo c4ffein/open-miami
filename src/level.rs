@@ -83,7 +83,10 @@ impl Level {
     ///
     /// Every surface is plain axis-aligned rectangles (one base rect per tile
     /// plus a few detail rects — insets, seams, stains, cracks, paint
-    /// remnants), all colours from `src/palette.rs` and every detail feature
+    /// remnants, and a fine hash-scattered micro-speckle: dense aggregate
+    /// grains on asphalt, sparse grains + pits on concrete, subtle fibre dots
+    /// on the carpet, a rare glint on marble, none on the already-busy
+    /// grating), all colours from `src/palette.rs` and every detail feature
     /// at least 3 world units thick so it survives `?pixel=3` art-res
     /// rasterization. Detail placement is position-hashed (`tile_noise`) so
     /// every frame records identically — the whole floor goes through the
@@ -124,11 +127,12 @@ impl Level {
                         // the tile tone), a rare muted hot-pink mark and a
                         // rare soaked-in stain.
                         let a_tile = (x + y) % 2 == 0;
-                        let base = mix(if a_tile {
+                        let raw = if a_tile {
                             palette::CHECKER_A
                         } else {
                             palette::CHECKER_B
-                        });
+                        };
+                        let base = mix(raw);
                         graphics.draw_rectangle(origin, tw, th, base);
                         if !full {
                             continue;
@@ -150,6 +154,28 @@ impl Level {
                             ts - 14.0,
                             base,
                         );
+                        // Fibre variance: a few 1-art-pixel dots of the tile's
+                        // own tone nudged ~4% either way, inside the ring —
+                        // the pile catches the light differently dalle by
+                        // dalle instead of reading dead flat.
+                        for i in 0..3u32 {
+                            let hx = tile_noise(x, y, 0x3100 + i);
+                            let hy = tile_noise(x, y, 0x3200 + i);
+                            let d = if tile_noise(x, y, 0x3300 + i) > 0.5 {
+                                0.009
+                            } else {
+                                -0.009
+                            };
+                            graphics.draw_rectangle(
+                                Vec2::new(
+                                    origin.x + 7.0 + hx * (ts - 17.0),
+                                    origin.y + 7.0 + hy * (ts - 17.0),
+                                ),
+                                3.0,
+                                3.0,
+                                mix(shade(raw, d)),
+                            );
+                        }
                         let n = tile_noise(x, y, 0xCA9);
                         if n > 0.93 {
                             // Hot carpet mark, centred on the tile.
@@ -186,6 +212,35 @@ impl Level {
                         graphics.draw_rectangle(origin, tw, th, mix(base));
                         if !full {
                             continue;
+                        }
+                        // Aggregate speckle: 3-6 wu (1-2 art px) grains of the
+                        // neighbour tones plus a rare bright chip — dense
+                        // enough that the lot reads worn, not flat, both raw
+                        // and at `?pixel=3`.
+                        for i in 0..6u32 {
+                            let hx = tile_noise(x, y, 0x4100 + i);
+                            let hy = tile_noise(x, y, 0x4200 + i);
+                            let hs = tile_noise(x, y, 0x4300 + i);
+                            let ht = tile_noise(x, y, 0x4400 + i);
+                            let s = if hs > 0.62 { 6.0 } else { 3.0 };
+                            let tone = if ht < 0.06 {
+                                palette::ASPHALT_AGGREGATE
+                            } else if !(0.34..0.67).contains(&n) {
+                                palette::ASPHALT_MID
+                            } else if ht > 0.5 {
+                                palette::ASPHALT_LIGHT
+                            } else {
+                                palette::ASPHALT_DARK
+                            };
+                            graphics.draw_rectangle(
+                                Vec2::new(
+                                    origin.x + 1.0 + hx * (ts - s - 2.0),
+                                    origin.y + 1.0 + hy * (ts - s - 2.0),
+                                ),
+                                s,
+                                s,
+                                mix(tone),
+                            );
                         }
                         let d = tile_noise(x, y, 0x77);
                         let m = tile_noise(x, y, 0x515);
@@ -265,6 +320,19 @@ impl Level {
                             3.0,
                             seam,
                         );
+                        // Rare 1-art-px polish glint — marble stays otherwise
+                        // clean on purpose (polish = flat).
+                        if tile_noise(x, y, 0x6E6) > 0.955 {
+                            graphics.draw_rectangle(
+                                Vec2::new(
+                                    origin.x + 3.0 + tile_noise(x, y, 0x6F6) * (ts - 9.0),
+                                    origin.y + 3.0 + tile_noise(x, y, 0x707) * (ts - 9.0),
+                                ),
+                                3.0,
+                                3.0,
+                                mix(palette::MARBLE_GLINT),
+                            );
+                        }
                         if n > 0.55 {
                             // A stepped diagonal vein: two offset thin rects.
                             let m = tile_noise(x, y, 0x51);
@@ -322,6 +390,41 @@ impl Level {
                                 ts,
                                 3.0,
                                 joint,
+                            );
+                        }
+                        // Sparse cure speckle (neighbour-tone 1-art-px grains)
+                        // + an occasional air-pocket pit — a poured slab is
+                        // never perfectly flat.
+                        for i in 0..3u32 {
+                            let hx = tile_noise(x, y, 0x5100 + i);
+                            let hy = tile_noise(x, y, 0x5200 + i);
+                            let ht = tile_noise(x, y, 0x5300 + i);
+                            let tone = if n >= 0.34 {
+                                palette::CONCRETE_A
+                            } else if ht > 0.5 {
+                                palette::CONCRETE_B
+                            } else {
+                                palette::CONCRETE_C
+                            };
+                            graphics.draw_rectangle(
+                                Vec2::new(
+                                    origin.x + 1.0 + hx * (ts - 5.0),
+                                    origin.y + 1.0 + hy * (ts - 5.0),
+                                ),
+                                3.0,
+                                3.0,
+                                mix(tone),
+                            );
+                        }
+                        if tile_noise(x, y, 0x5A5) > 0.72 {
+                            graphics.draw_rectangle(
+                                Vec2::new(
+                                    origin.x + 2.0 + tile_noise(x, y, 0x5B5) * (ts - 7.0),
+                                    origin.y + 2.0 + tile_noise(x, y, 0x5C5) * (ts - 7.0),
+                                ),
+                                3.0,
+                                3.0,
+                                mix(palette::CONCRETE_PIT),
                             );
                         }
                         let d = tile_noise(x, y, 0xD17);

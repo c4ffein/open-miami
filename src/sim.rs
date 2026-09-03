@@ -674,8 +674,11 @@ impl Simulation {
                 // Try to grab it every tick; the swap only succeeds once we're
                 // physically overlapping it. Keep closing the distance until it
                 // does (a fixed "close enough" threshold can leave the bot parked
-                // just outside the real pickup radius, deadlocked).
-                if self.player_pickup().is_some() {
+                // just outside the real pickup radius, deadlocked). A swap can
+                // also land on some OTHER (empty) pickup underfoot on the way —
+                // only stop once the weapon in hand is actually usable, or the
+                // bot ping-pongs two dry guns on the same tile forever.
+                if self.player_pickup().is_some() && self.player_has_usable_weapon() {
                     self.set_player_velocity(Vec2::zero());
                 } else {
                     move_goal = Some(pickup_pos);
@@ -686,12 +689,28 @@ impl Simulation {
                 move_goal = Some(enemy_pos);
             }
         } else {
-            // Armed: engage the enemy.
+            // Armed: engage the enemy. The shotgun is a SPRAY now (a cone of
+            // pellets, per-pellet damage): shells fired from across the room
+            // land a stray or two at best, so the bot holds fire and closes to
+            // effective spray range instead of emptying the magazine for
+            // scratches.
+            let holds_shotgun = self
+                .player()
+                .and_then(|p| self.world.get_component::<Weapon>(p))
+                .is_some_and(|w| w.weapon_type == WeaponType::Shotgun);
+            let (fire_range, hold_range) = if holds_shotgun {
+                (200.0, 150.0)
+            } else {
+                (f32::INFINITY, 250.0)
+            };
             if has_line_of_sight(player_pos, enemy_pos, &walls) {
-                // Fire at the target.
-                let _ = self.player_fire(enemy_pos);
+                let dist = player_pos.distance(enemy_pos);
+                // Fire at the target (once within the weapon's payoff range).
+                if dist <= fire_range {
+                    let _ = self.player_fire(enemy_pos);
+                }
                 // Close in if far, otherwise hold position and keep firing.
-                if player_pos.distance(enemy_pos) > 250.0 {
+                if dist > hold_range {
                     move_goal = Some(enemy_pos);
                 } else {
                     self.set_player_velocity(Vec2::zero());

@@ -223,7 +223,10 @@ impl SfxKind {
     pub(crate) fn spec(self) -> SfxSpec {
         let (route, len, rate_jitter) = match self {
             SfxKind::AttackGun => (SfxRoute::Real(REAL_762X39.wet), 1.1, 0.05),
-            SfxKind::AttackMachinegun => (SfxRoute::Real(REAL_556.wet), 1.4, 0.05),
+            // One SHORT 5.56 crack per call — the game plays it once PER
+            // BULLET (a round every 0.1 s of held trigger), never a baked
+            // multi-round burst.
+            SfxKind::AttackMachinegun => (SfxRoute::Real(REAL_556.wet), 0.8, 0.05),
             SfxKind::AttackShotgun => (SfxRoute::Real(REAL_762X54R.wet), 1.4, 0.05),
             SfxKind::AttackClub => (SfxRoute::Melee(0.16), 0.55, 0.06),
             SfxKind::HitGun => (SfxRoute::Real(0.5), 0.85, 0.05),

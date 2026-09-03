@@ -2,8 +2,8 @@ const { test, expect } = require('@playwright/test');
 const {
   collectErrors,
   loadFloor,
-  lastFrameTexts,
-  hudValue,
+  waitForFrameTexts,
+  rogueCount,
   purgeRogues,
   walkFloor1ToServiceLift,
   expectFloor2,
@@ -19,9 +19,10 @@ test.describe('Open Miami - Floors & scenarios', () => {
     const errors = collectErrors(page);
     const canvas = await loadFloor(page, 1);
 
-    // Floor 1's scenario objective is drawn under the HUD.
-    let texts = await lastFrameTexts(page);
-    expect(texts.some((s) => s.includes('SERVICE LIFT'))).toBe(true);
+    // Floor 1's opening directive rolls down top-right for ~4 s on load.
+    let texts = await waitForFrameTexts(page, (t) => t.includes('PASS THE CHECKPOINT'), {
+      what: "floor 1's PASS THE CHECKPOINT roller",
+    });
 
     // Debug overlays on, then purge every rogue -> the SERVICE LIFT opens.
     await purgeRogues(page);
@@ -32,9 +33,9 @@ test.describe('Open Miami - Floors & scenarios', () => {
     await page.waitForTimeout(1200); // dwell (0.6s) + the completion card starts
     await page.screenshot({ path: 'test-results/scenario-02-extracting.png' });
 
-    // Card ends -> floor 2 loads (COLD STORAGE: FREIGHT LIFT objective).
+    // Card ends -> floor 2 loads (COLD STORAGE: PURGE THE WARDENS roller).
     texts = await expectFloor2(page);
-    expect(Number(hudValue(texts, 'ROGUES:'))).toBeGreaterThan(0);
+    expect(rogueCount(texts)).toBeGreaterThan(0);
     await page.screenshot({ path: 'test-results/scenario-03-next-floor.png' });
 
     await expect(canvas).toBeVisible();

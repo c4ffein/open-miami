@@ -10,6 +10,46 @@ use crate::systems::combat::CombatSystem;
 /// Where the shoggoth boss stands at the start of its floor.
 pub const BOSS_SPAWN: Vec2 = Vec2::new(400.0, 560.0);
 
+/// SHOTGUN SPRAY — one trigger pull, one shell, [`SHOTGUN_PELLETS`] pellets
+/// fanned across a [`SHOTGUN_SPREAD`]-wide cone. Each pellet is a normal
+/// bullet at [`SHOTGUN_PELLET_DAMAGE`]: a full point-blank hit lands
+/// 6 × 20 = 120 (over the old single 80-damage slug), while 2-3 stray
+/// pellets at range wound-to-kill a 50-health rogue.
+pub const SHOTGUN_PELLETS: usize = 6;
+/// Total cone width, radians (~16°: pellets sit within ±8° of the aim).
+pub const SHOTGUN_SPREAD: f32 = 0.28;
+/// Damage per pellet (see [`SHOTGUN_PELLETS`] for the tuning).
+pub const SHOTGUN_PELLET_DAMAGE: i32 = 20;
+
+/// The per-pellet heading offsets (radians, relative to the aim) of one
+/// shotgun blast. STRATIFIED: pellet `i` jitters inside its own
+/// `1/SHOTGUN_PELLETS` slice of the cone via the codebase's deterministic
+/// `hash01` (never rand), so every blast covers the whole cone yet no two
+/// seeds pattern alike — and equal seeds always yield the exact same spray.
+pub fn shotgun_pellet_offsets(seed: u32) -> [f32; SHOTGUN_PELLETS] {
+    let mut offsets = [0.0; SHOTGUN_PELLETS];
+    for (i, offset) in offsets.iter_mut().enumerate() {
+        let u = (i as f32 + crate::drive::hash01(seed, i as u32)) / SHOTGUN_PELLETS as f32;
+        *offset = (u - 0.5) * SHOTGUN_SPREAD;
+    }
+    offsets
+}
+
+/// Spawn one bullet entity flying from `from` along `angle`. `speed_scale`
+/// is 1 for a real shot and 0 for the degenerate aim-at-your-own-feet case
+/// (a zero-length aim vector historically spawns a stationary round).
+fn spawn_round(world: &mut World, from: Position, angle: f32, speed_scale: f32, bullet: Bullet) {
+    let (vel_x, vel_y) = (
+        angle.cos() * bullet.speed * speed_scale,
+        angle.sin() * bullet.speed * speed_scale,
+    );
+    let bullet_entity = world.spawn();
+    world.add_component(bullet_entity, bullet);
+    world.add_component(bullet_entity, from);
+    world.add_component(bullet_entity, Velocity::new(vel_x, vel_y));
+    world.add_component(bullet_entity, Radius::new(2.0));
+}
+
 /// Spawn the shoggoth boss (a big, tanky, masked enemy) at `position`.
 pub fn spawn_boss(world: &mut World, position: Vec2) -> Entity {
     let entity = world.spawn();
@@ -279,20 +319,38 @@ pub fn fire_player_weapon(world: &mut World, target_world_pos: Vec2) -> bool {
         let dx = target_pos.x - player_pos.x;
         let dy = target_pos.y - player_pos.y;
         let length = (dx * dx + dy * dy).sqrt();
+        let aim = dy.atan2(dx);
+        // Zero-length aim (mouse exactly on the player): the round has
+        // nowhere to go — keep the historical stationary-bullet behavior.
+        let speed_scale = if length > 0.0 { 1.0 } else { 0.0 };
 
-        let bullet = Bullet::new(weapon_type, damage);
-        let bullet_speed = bullet.speed;
-        let (vel_x, vel_y) = if length > 0.0 {
-            (dx / length * bullet_speed, dy / length * bullet_speed)
+        if weapon_type == WeaponType::Shotgun {
+            // One shell, SHOTGUN_PELLETS pellets in a cone. The spray's
+            // jitter seed is the shells-left-after-this-pull counter — a
+            // deterministic per-shot value (checkpoint/replay safe), never
+            // rand.
+            let seed = world
+                .get_component::<Weapon>(player)
+                .map(|w| w.ammo.max(0) as u32)
+                .unwrap_or(0);
+            for offset in shotgun_pellet_offsets(seed) {
+                spawn_round(
+                    world,
+                    player_pos,
+                    aim + offset,
+                    speed_scale,
+                    Bullet::new(weapon_type, SHOTGUN_PELLET_DAMAGE),
+                );
+            }
         } else {
-            (0.0, 0.0)
-        };
-
-        let bullet_entity = world.spawn();
-        world.add_component(bullet_entity, bullet);
-        world.add_component(bullet_entity, player_pos);
-        world.add_component(bullet_entity, Velocity::new(vel_x, vel_y));
-        world.add_component(bullet_entity, Radius::new(2.0));
+            spawn_round(
+                world,
+                player_pos,
+                aim,
+                speed_scale,
+                Bullet::new(weapon_type, damage),
+            );
+        }
 
         false
     }

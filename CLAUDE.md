@@ -268,7 +268,36 @@
 - `tools/`: the `?viz` panels — `inspector.html` (character inspector: `?kind=robot&color=…` / `?kind=shoggoth&phase=masked|enraged`, `&embed=1` for the SPRITES tab; 3D orbit + 2D top-down views), `levels.html` + `levels-editor*.js` (level + scenario editor, LEVELS tab) — and `gen_levels.py`, `gen_props.py`
 - `levels/`: `floor_00.json` (the ground-level cold open: gate / parking lot, passive crowd), `floor_01..13.json`, `floor_13h.json`, `index.json` — the floors' single source of truth (format: `docs/SCENARIO_FORMAT.md`). Level *index* = position in `index.json` (sorted by id: index 0 = floor 0); `?floor=N` takes the floor **id** A floor may carry `"props": [{ "kind", "x", "y", "rot" (deg, cw), "size" (world units, default 100) }]` = placed set dressing (`kind` = a `PROP_NAMES` snake_case id, validated by `gen_levels.py` → `FloorDef.props: &[PropPlacement]`); DECORATION ONLY — drawn in-game by `src/floor_props.rs` (`render_floor_props`, called in `update_game` after the walls and before the actors, inside the `?pixel=N` world group), no collision
 - `src/levels_data.rs` is GENERATED from `levels/*.json` by `make gen-levels`; `make check-levels` validates + checks it is current. Never hand-edit it.
-- `songs/`: the tracker SONGS — one `songs/<name>.json` per song (format: `docs/SONGS_FORMAT.md`: key / tempo / waves + sections as token-string lanes, `.` = rest) + `songs/index.json` (the `SONGS` order); `make gen-songs` compiles them via `tools/gen_songs.py` (stdlib only) into `src/audio/songs_data.rs` (GENERATED — never hand-edit), `make check-songs` (in `make verify`) validates + checks it is current. The audio module tree: `src/audio.rs` (root) → `audio/songs.rs` (the song types, `Wave`, in-key pitch math, the pure `Playhead` sequencer + `music_keys` voice-set enumeration, `song_for_floor`; host-tested), `audio/sfx.rs` (the SFX kind catalogue + bake specs, host-tested), `audio/engine.rs` (the WebAudio `AudioEngine`, wasm-only)
+- MUSIC IS CODE: one song = one Rust file in `src/audio/songs/` — the
+  SOUNDTRACK is 7 tracks with ROLES (`docs/music/TRACKS.md`): NEON
+  CHECKSUM (`title_song`), WALK DON'T RUN (floor 0), SERVICE CORRIDOR
+  (1–4), THERMAL MASS (5–8), SIGNAL ROT (9–12), CROWN OF STATIC (13 +
+  13½) via `song_for_floor(floor_id)`, COAST HOME (`ending_song`, the
+  calmest); 2:00–4:34 each, test-pinned (`tracks_run_the_briefed_length`,
+  `soundtrack_roles_follow_the_briefs`, `the_duck_follows_the_genre`).
+  Written with the authoring API in `src/audio/compose.rs` (host-tested)
+  — riffs are FUNCTIONS (`steps("0 . 3 .")` lanes, `transpose` / `repeat`
+  / `cat` / `every_other_bar` / `stretch` / seeded `sparsify`
+  combinators, `section(label, parts)`, `SongBuilder::arrange`, refrains
+  as functions called again with `Intensity` args; songs can share
+  material — the ending quotes `neon_checksum::motif()`); `build()`
+  produces the `SongSpec` structures the sequencer plays (`SONGS` is a
+  LazyLock in songs.rs). No JSON, no generator — `docs/MUSIC_CODE.md`
+  documents the API AND the engine's limits for composers (fixed note
+  lengths per channel, 3 drums, straight 16ths, no reverb on the music
+  bus, per-song intensity, per-section-channel velocity); genre guides
+  (each with an "Engine reality" section) + track briefs in
+  `docs/music/`. Voice presets incl. darksynth's `Wave::{Supersaw,
+  DrivenBass, DarkPad}` and a host-tested SIDECHAIN DUCK (`Section::duck`:
+  melodic bus gain dips to 0.35 on each kick, 0.3 s linear recovery;
+  drums bypass; baked buffers stay duck-free — it's bus automation). Bake
+  budget: each song's `music_keys` voice set stays ≤ 64 (test-pinned; the
+  tracks use 15–34). The audio module tree: `src/audio.rs` (root) →
+  `audio/songs.rs` (song types, `Wave`, in-key pitch math, the pure
+  `Playhead` sequencer + `music_keys`, the role pickers; host-tested),
+  `audio/compose.rs`, `audio/songs/*.rs`, `audio/sfx.rs` (SFX catalogue +
+  bake specs, host-tested), `audio/engine.rs` (the WebAudio
+  `AudioEngine`, wasm-only)
 - Cold-open engine bits (floor 0): `src/systems/passive.rs` — passive civilians (`"type": "passive"` spawns → `AIState::Passive`, brief in `AI.passive: PassiveAI`; the AI system delegates to `passive::update_passive`; `alert_passives` / any damage flips them hostile; un-alerted passives are BYSTANDERS, not rogues: `scenario::count_rogues` / `game::count_alive_enemies` skip them, so the HUD count and `kills` ignore them and `all_dead` — which also needs at least one kill — cannot fire on an un-alerted crowd); scenario actions `alert` / `hold` / `look_at` (`scenario.rs` `AlertTarget` / `HoldDef` / `LookAtDef`; `ScenarioState::hold_active/hold_caption/look_at`; lib.rs `update_game` skips player input + `stop_player` while held, `render_hold_caption`, `Camera::set_cinematic`); `FloorDef.surface` (`src/level.rs` renders checker|asphalt|marble|concrete|grating); `ElevatorKind` lift|door|gate on entry/exits (`render_comms.rs` `draw_doorway` / `draw_gateway`); `"to": "surface"` → `scenario::SURFACE_EXIT` (floor id 0 is real now)
 - `src/props.rs`: the PROP library, 60 props in three FAMILIES (`PROP_FAMILIES` = contiguous id ranges: DATACENTER 0–23 the server-floor set, OUTDOOR 24–41 the gate / parking lot for the planned floor 00 — cars, charge pad, main gate with its swing arm, guard booth, bollards, planter, lamp post, road decals, drone pad, scooter rack, drain, holo billboard, dumpster —, LOBBY 42–59 the welcome hall — reception desk, turnstiles, scanner arch, benches, plant, lobby holo, directory totem, vending, coffee corner, charge lockers, floor logo, call panel, velvet rope, extinguisher, credit kiosk, holo clock, welcome mat; `family_range` / `prop_family`; new props are APPENDED, ids are persisted in props/props.json) drawn imperatively from primitives as LAYERS (`PROP_LAYERS`: `LayerDef { name, pivot, bounds, rot: LayerRot::{None, Static(deg), Spin{hz}, Sway{deg,hz}, Anim(fn)}, pixel: PixelMode::{Before, After} }`; `draw_prop_layer(g, kind, layer, t)` draws one layer in its own frame; `draw_prop_ex(g, kind, center, size, t, px, &PropDrawOpts{visible, modes})` is the driver — per layer `translate(pivot)` then, with `px >= 2` (design units of the 100-box), a pixel group per layer either BEFORE its rotation (rotate, then group: the pixel image turns as a whole) or AFTER (group in the parent frame, rotate inside: re-rasterized on the parent grid); `px <= 1` = plain drawing, identical to the pre-layer look; `draw_prop` = `draw_prop_ex` with the saved settings — what a floor renderer should call). Nothing draws props on floors yet
 - `props/props.json` = the SAVED per-prop `px` + per-layer before/after (format: `docs/PROPS_FORMAT.md`), written by the `?viz` PROPS page SAVE (`PUT /props/props.json`, serve.py, same token as levels) and compiled by `make gen-props` into `src/props_data.rs` (`PROP_SETTINGS`; GENERATED — never hand-edit); `make check-props` (in `make verify`) validates + checks it is current. `tools/gen_props.py` reads `PROP_NAMES` from props.rs for the order / kind ids (`snake_case` of the display name); layer names are checked by a props.rs unit test

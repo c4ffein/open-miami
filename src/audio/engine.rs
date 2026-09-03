@@ -56,7 +56,6 @@ use web_sys::{
 use super::sfx::*;
 use super::songs::Drum::{Hat, Kick, Silent, Snare};
 use super::songs::*;
-use super::songs_data::SONGS;
 
 /// Look-ahead window (seconds) for the music scheduler: we queue notes this far
 /// in advance of the audio clock so playback never gaps between frames.
@@ -631,6 +630,11 @@ pub struct AudioEngine {
     rng: Cell<u32>,
     /// Input gain for the whole music mix — every music note connects here.
     music_bus: Option<GainNode>,
+    /// The SIDECHAIN DUCK stage: melodic voices enter the bus through this
+    /// gain, drums bypass it. In a `Section` with `duck` set, every kick
+    /// step snaps it to `DUCK_FLOOR` and ramps it back to 1 over
+    /// `DUCK_RECOVERY` (the exact pure curve of `songs::duck_gain`).
+    music_duck: Option<GainNode>,
     /// Lowpass filter on the music bus, cutoff swept once per bar (synthwave).
     music_filter: Option<BiquadFilterNode>,
     music_playing: bool,
@@ -679,6 +683,10 @@ impl AudioEngine {
             .as_ref()
             .map(Self::make_music_bus)
             .unwrap_or((None, None));
+        let music_duck = ctx
+            .as_ref()
+            .zip(music_bus.as_ref())
+            .and_then(|(c, bus)| Self::make_duck(c, bus));
         let engine = Self {
             ctx,
             noise,
@@ -686,11 +694,12 @@ impl AudioEngine {
             enabled: Cell::new(true),
             rng: Cell::new(0x2545_F491),
             music_bus,
+            music_duck,
             music_filter,
             music_playing: false,
             next_note_time: 0.0,
             playhead: Playhead::START,
-            song: SONGS[0],
+            song: title_song(),
             mute: [false; NUM_CHANNELS],
             solo: [false; NUM_CHANNELS],
             baked: Rc::new(BakedSfx {
@@ -821,9 +830,11 @@ impl AudioEngine {
         }
     }
 
-    /// MACHINEGUN attack — 5.56 rounds at the same ~1000 rpm:
-    /// each a bright crack + plateau body, their room tails overlapping into
-    /// a continuous wash; bolt clacks under each round, clatter after.
+    /// MACHINEGUN attack — ONE 5.56 round: a bright crack + plateau body
+    /// with a bolt clack under it and the odd brass tinkle after. Called
+    /// once PER BULLET (the game spawns a round every 0.1 s while the
+    /// trigger is held), so sustained fire is exactly as many cracks as
+    /// bullets and their room tails overlap into the burst wash live.
     pub fn play_attack_machinegun(&self) {
         if !self.enabled.get() {
             return; // sound off: build NO nodes (the context is suspended anyway)
@@ -841,33 +852,14 @@ impl AudioEngine {
             Some(v) => v,
             None => return,
         };
-        let rounds = 8;
-        let spacing = 0.058;
-        let mut at = t;
-        for i in 0..rounds {
-            let j = self.jit(0.05);
-            let level = if i == 0 { 1.0 } else { 0.9 };
-            self.real_shot(&out, at, j, level, &REAL_556);
-            self.tick(&out, at + 0.018, 1800.0 * j, 0.08);
-            if i % 3 == 1 {
-                self.tinkle(&out, at + 0.12 + self.rand() * 0.05, 0.03);
-            }
-            at += spacing * self.jit(0.05);
+        let j = self.jit(0.05);
+        self.real_shot(&out, t, j, 0.95, &REAL_556);
+        // Bolt cycling under the round.
+        self.tick(&out, t + 0.018, 1800.0 * j, 0.08);
+        // Sometimes a spent case rings off the floor.
+        if self.chance(0.35) {
+            self.tinkle(&out, t + 0.12 + self.rand() * 0.05, 0.03);
         }
-        self.tick(&out, at + 0.02, 2300.0, 0.16);
-        self.tick(&out, at + 0.075, 1500.0, 0.13);
-        self.noise_env(
-            &out,
-            at + 0.02,
-            0.0,
-            0.05,
-            0.2,
-            BiquadFilterType::Highpass,
-            2500.0,
-            2500.0,
-            0.7,
-        );
-        self.tinkle(&out, at + 0.24 + self.rand() * 0.08, 0.05);
     }
 
     /// SHOTGUN attack — a 7.62×54R-sized single with a real
@@ -3151,44 +3143,62 @@ impl AudioEngine {
         };
         if self.channel_audible(0) {
             if let Some(d) = degree_at(sec.bass, step) {
-                self.music_note(MusicKey::Bass(d), t);
+                self.music_note(MusicKey::Bass(d), t, sec.vel[0]);
             }
         }
         if self.channel_audible(1) {
             if let Some(d) = degree_at(sec.lead, step) {
-                self.music_note(MusicKey::Lead(d), t);
+                self.music_note(MusicKey::Lead(d), t, sec.vel[1]);
             }
         }
         if self.channel_audible(2) {
             if let Some(d) = degree_at(sec.pad, step) {
-                self.music_note(MusicKey::Pad(d), t);
+                self.music_note(MusicKey::Pad(d), t, sec.vel[2]);
             }
         }
         if self.channel_audible(3) {
             if let Some(d) = degree_at(sec.arp, step) {
-                self.music_note(MusicKey::Arp(d), t);
+                self.music_note(MusicKey::Arp(d), t, sec.vel[3]);
             }
         }
         if self.channel_audible(4) {
             if let Some(key) = MusicKey::of_drum(drum_at(sec.drums, step)) {
-                self.music_note(key, t);
+                self.music_note(key, t, sec.vel[4]);
+            }
+        }
+        // SIDECHAIN DUCK: in a ducked section every sounding kick pumps the
+        // melodic stage of the bus down and lets it recover — the exact
+        // retrigger-and-recover curve of `songs::duck_gain`, programmed as
+        // one set + ramp pair per kick on the duck gain node (drums enter
+        // the bus past it and never duck themselves).
+        if sec.duck && self.channel_audible(4) && is_kick_step(sec, step) {
+            if let Some(duck) = &self.music_duck {
+                let g = duck.gain();
+                let _ = g.set_value_at_time(DUCK_FLOOR as f32, t);
+                let _ = g.linear_ramp_to_value_at_time(1.0, t + DUCK_RECOVERY);
             }
         }
     }
 
-    /// Play one music voice at absolute time `t`: the pre-baked buffer if it
-    /// landed (a single source node into the live music bus — the per-bar
-    /// filter sweep still shapes it downstream), else the live synthesis.
-    fn music_note(&self, key: MusicKey, t: f64) {
-        if self.play_music_baked(key, t) {
+    /// Play one music voice at absolute time `t` at velocity `vel` (the
+    /// section's per-channel level): the pre-baked buffer if it landed (a
+    /// single source node into the live music bus — the per-bar filter
+    /// sweep still shapes it downstream), else the live synthesis.
+    /// Velocity is applied at play time, so one baked buffer serves every
+    /// level.
+    fn music_note(&self, key: MusicKey, t: f64, vel: f32) {
+        if self.play_music_baked(key, t, vel) {
             return;
         }
-        self.synth_music_note(key, t);
+        self.synth_music_note_vel(key, t, vel as f64);
     }
 
     /// Fire `key` from its pre-rendered buffer at time `t`. `false` = not
     /// baked yet (or no context): the caller falls back to live synthesis.
-    fn play_music_baked(&self, key: MusicKey, t: f64) -> bool {
+    /// Melodic keys enter the bus through the duck stage, drums bypass it;
+    /// a non-nominal `vel` inserts one gain node (nominal notes stay a
+    /// single source node).
+    fn play_music_baked(&self, key: MusicKey, t: f64, vel: f32) -> bool {
         let ctx = match &self.ctx {
             Some(c) => c,
             None => return false,
@@ -3202,7 +3212,12 @@ impl AudioEngine {
             Some(b) => b,
             None => return false,
         };
-        let out = match self.music_out() {
+        let is_drum = matches!(key, MusicKey::Kick | MusicKey::Hat | MusicKey::Snare);
+        let out = match if is_drum {
+            self.music_out()
+        } else {
+            self.melodic_out()
+        } {
             Some(o) => o,
             None => return false,
         };
@@ -3211,7 +3226,19 @@ impl AudioEngine {
             Err(_) => return false,
         };
         src.set_buffer(Some(buf));
-        if src.connect_with_audio_node(&out).is_err() {
+        let wired = if (vel - 1.0).abs() > 1e-3 {
+            match ctx.create_gain() {
+                Ok(g) => {
+                    let _ = g.gain().set_value_at_time(vel.max(0.0), 0.0);
+                    src.connect_with_audio_node(&g).is_ok()
+                        && g.connect_with_audio_node(&out).is_ok()
+                }
+                Err(_) => false,
+            }
+        } else {
+            src.connect_with_audio_node(&out).is_ok()
+        };
+        if !wired {
             return false;
         }
         let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
@@ -3220,37 +3247,217 @@ impl AudioEngine {
     }
 
     /// The LIVE synthesis of one music voice at absolute time `t` — also
-    /// what the offline pre-render runs (at t = 0, see
+    /// what the offline pre-render runs (at t = 0 and nominal velocity, see
     /// [`Self::render_music_slot`]), so a baked note is the identical
     /// signal, just rendered ahead of time.
     fn synth_music_note(&self, key: MusicKey, t: f64) {
+        self.synth_music_note_vel(key, t, 1.0);
+    }
+
+    /// [`Self::synth_music_note`] scaled by a section velocity (the live
+    /// fallback path; the bake always renders at 1.0 and velocity is a
+    /// play-time gain).
+    fn synth_music_note_vel(&self, key: MusicKey, t: f64, vel: f64) {
         let s = &self.song;
         let step_dur = self.step_dur();
-        let gain = MUSIC_GAIN * s.intensity;
+        let gain = MUSIC_GAIN * s.intensity * vel.max(0.0);
         match key {
             MusicKey::Bass(d) => {
                 let f = degree_freq(s.root, s.scale, d);
-                self.music_tone(f, f, t, step_dur * 1.9, gain * 1.3, osc(s.bass_wave));
+                self.music_voice(s.bass_wave, f, t, step_dur * 1.9, gain * 1.3, 0.005);
             }
             MusicKey::Lead(d) => {
                 let f = degree_freq(s.root, s.scale, d);
-                self.music_tone(f, f, t, step_dur * 0.9, gain, osc(s.lead_wave));
+                self.music_voice(s.lead_wave, f, t, step_dur * 0.9, gain, 0.005);
             }
             MusicKey::Pad(d) => {
                 // Bloom the pad note into a triad (root + third + fifth), held
                 // across several steps with a slow attack for a chord bed.
                 for interval in [0, 2, 4] {
                     let f = degree_freq(s.root, s.scale, d + interval);
-                    self.music_pad(f, t, step_dur * 4.0, gain * 0.45, osc(s.pad_wave));
+                    self.music_voice(s.pad_wave, f, t, step_dur * 4.0, gain * 0.45, 0.06);
                 }
             }
             MusicKey::Arp(d) => {
                 let f = degree_freq(s.root, s.scale, d);
-                self.music_tone(f, f, t, step_dur * 0.7, gain * 0.7, osc(s.arp_wave));
+                self.music_voice(s.arp_wave, f, t, step_dur * 0.7, gain * 0.7, 0.005);
             }
             MusicKey::Kick => self.drum(Kick, t, gain),
             MusicKey::Hat => self.drum(Hat, t, gain),
             MusicKey::Snare => self.drum(Snare, t, gain),
+        }
+    }
+
+    // --- music voices --------------------------------------------------------
+    //
+    // One melodic note of a given `Wave`: the four basic shapes are a single
+    // enveloped oscillator; the darksynth PRESETS are small node graphs built
+    // from the same primitives. Every one targets `melodic_out` (the duck
+    // stage of the bus — the offline sink during a pre-render), so presets
+    // bake per pitch exactly like plain waves.
+
+    /// Play one melodic music voice: dispatch `wave` to its builder.
+    fn music_voice(&self, wave: Wave, f: f64, t: f64, dur: f64, peak: f64, attack: f64) {
+        let out = match self.melodic_out() {
+            Some(o) => o,
+            None => return,
+        };
+        match wave {
+            Wave::Supersaw => self.supersaw_voice(&out, f, t, dur, peak, attack),
+            Wave::DrivenBass => self.driven_voice(&out, f, t, dur, peak, attack),
+            Wave::DarkPad => self.darkpad_voice(&out, f, t, dur, peak, attack.max(0.25 * dur)),
+            w => self.tone_out(&out, f, f, t, dur, peak, attack, osc(w)),
+        }
+    }
+
+    /// SUPERSAW: five sawtooths detuned across ±12 cents (center loudest,
+    /// outer pairs quieter — the "slight spread"), summed into one shared
+    /// envelope gain. The classic wide, hissing darksynth stack.
+    fn supersaw_voice(
+        &self,
+        out: &web_sys::AudioNode,
+        f: f64,
+        t: f64,
+        dur: f64,
+        peak: f64,
+        attack: f64,
+    ) {
+        let ctx = match self.bctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let env = match ctx.create_gain() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let g = env.gain();
+        let _ = g.set_value_at_time(0.0001, t);
+        let _ = g.exponential_ramp_to_value_at_time(peak.max(0.0002) as f32, t + attack.max(0.001));
+        let _ = g.exponential_ramp_to_value_at_time(0.0001, t + dur);
+        if env.connect_with_audio_node(out).is_err() {
+            return;
+        }
+        // (detune cents, level) — normalized so the stack sums to ~1.
+        const SAWS: [(f64, f64); 5] = [
+            (-12.0, 0.18),
+            (-5.0, 0.22),
+            (0.0, 0.28),
+            (5.0, 0.22),
+            (12.0, 0.18),
+        ];
+        for (cents, level) in SAWS {
+            let (osc, mix) = match (ctx.create_oscillator(), ctx.create_gain()) {
+                (Ok(o), Ok(m)) => (o, m),
+                _ => continue,
+            };
+            osc.set_type(OscillatorType::Sawtooth);
+            let detuned = f * 2f64.powf(cents / 1200.0);
+            let _ = osc.frequency().set_value_at_time(detuned as f32, t);
+            let _ = mix.gain().set_value_at_time(level as f32, t);
+            let _ = osc.connect_with_audio_node(&mix);
+            let _ = mix.connect_with_audio_node(&env);
+            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let _ = sched.start_with_when(t);
+            let _ = sched.stop_with_when(t + dur + 0.02);
+        }
+    }
+
+    /// DRIVEN BASS: a sawtooth + a square an octave below it, driven hot
+    /// into a waveshaper-style soft clip ([`Self::soft_clipper`], low knee =
+    /// heavy saturation) and shaped by the envelope AFTER the clipper (so
+    /// the decay stays clean while the tone growls).
+    fn driven_voice(
+        &self,
+        out: &web_sys::AudioNode,
+        f: f64,
+        t: f64,
+        dur: f64,
+        peak: f64,
+        attack: f64,
+    ) {
+        let ctx = match self.bctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let (drive, env) = match (ctx.create_gain(), ctx.create_gain()) {
+            (Ok(d), Ok(e)) => (d, e),
+            _ => return,
+        };
+        // Hot into the clipper: the shaper's curve covers ±2, so ~1.6 of
+        // summed oscillator drive saturates hard without folding.
+        let _ = drive.gain().set_value_at_time(1.6, t);
+        let drive_node: web_sys::AudioNode = AsRef::<web_sys::AudioNode>::as_ref(&drive).clone();
+        let post = Self::soft_clipper(&ctx, &drive_node, 0.25).unwrap_or(drive_node);
+        let g = env.gain();
+        let _ = g.set_value_at_time(0.0001, t);
+        let _ = g.exponential_ramp_to_value_at_time(peak.max(0.0002) as f32, t + attack.max(0.001));
+        let _ = g.exponential_ramp_to_value_at_time(0.0001, t + dur);
+        if post.connect_with_audio_node(&env).is_err() || env.connect_with_audio_node(out).is_err()
+        {
+            return;
+        }
+        for (shape, freq, level) in [
+            (OscillatorType::Sawtooth, f, 0.7),
+            (OscillatorType::Square, f * 0.5, 0.45),
+        ] {
+            let (osc, mix) = match (ctx.create_oscillator(), ctx.create_gain()) {
+                (Ok(o), Ok(m)) => (o, m),
+                _ => continue,
+            };
+            osc.set_type(shape);
+            let _ = osc.frequency().set_value_at_time(freq as f32, t);
+            let _ = mix.gain().set_value_at_time(level, t);
+            let _ = osc.connect_with_audio_node(&mix);
+            let _ = mix.connect_with_audio_node(&drive);
+            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let _ = sched.start_with_when(t);
+            let _ = sched.stop_with_when(t + dur + 0.02);
+        }
+    }
+
+    /// DARK PAD: a detuned sawtooth pair (±7 cents) through a fixed dark
+    /// lowpass (~900 Hz, gentle resonance) under a slow-attack envelope —
+    /// a breathing chord bed that sits under the bus's own bar sweep.
+    fn darkpad_voice(
+        &self,
+        out: &web_sys::AudioNode,
+        f: f64,
+        t: f64,
+        dur: f64,
+        peak: f64,
+        attack: f64,
+    ) {
+        let ctx = match self.bctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let (filt, env) = match (ctx.create_biquad_filter(), ctx.create_gain()) {
+            (Ok(f), Ok(e)) => (f, e),
+            _ => return,
+        };
+        filt.set_type(BiquadFilterType::Lowpass);
+        let _ = filt.frequency().set_value_at_time(900.0, t);
+        let _ = filt.q().set_value_at_time(0.8, t);
+        let g = env.gain();
+        let _ = g.set_value_at_time(0.0001, t);
+        let _ = g.linear_ramp_to_value_at_time(peak.max(0.0002) as f32, t + attack.max(0.001));
+        let _ = g.exponential_ramp_to_value_at_time(0.0001, t + dur);
+        if filt.connect_with_audio_node(&env).is_err() || env.connect_with_audio_node(out).is_err()
+        {
+            return;
+        }
+        for cents in [-7.0f64, 7.0] {
+            let osc = match ctx.create_oscillator() {
+                Ok(o) => o,
+                Err(_) => continue,
+            };
+            osc.set_type(OscillatorType::Sawtooth);
+            let detuned = f * 2f64.powf(cents / 1200.0);
+            let _ = osc.frequency().set_value_at_time(detuned as f32, t);
+            let _ = osc.connect_with_audio_node(&filt);
+            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let _ = sched.start_with_when(t);
+            let _ = sched.stop_with_when(t + dur + 0.02);
         }
     }
 
@@ -3359,6 +3566,22 @@ impl AudioEngine {
             self.destination()
                 .map(|d| AsRef::<web_sys::AudioNode>::as_ref(&d).clone())
         }
+    }
+
+    /// The node MELODIC music voices connect to: the sidechain duck stage
+    /// of the music bus (kicks in a ducked section pump it), falling back
+    /// to the plain bus where the duck node could not be built. During an
+    /// offline pre-render: the offline destination — the duck, like the
+    /// bar filter sweep, is live-bus automation and is reapplied at play
+    /// time, so baked buffers stay duck-free.
+    fn melodic_out(&self) -> Option<web_sys::AudioNode> {
+        if self.render.borrow().is_some() {
+            return self.music_out();
+        }
+        if let Some(duck) = &self.music_duck {
+            return Some(AsRef::<web_sys::AudioNode>::as_ref(duck).clone());
+        }
+        self.music_out()
     }
 
     /// Start time for a freshly-triggered SFX: a hair after "now" so that the
@@ -3525,13 +3748,6 @@ impl AudioEngine {
     fn music_tone(&self, f0: f64, f1: f64, start: f64, dur: f64, peak: f64, wave: OscillatorType) {
         if let Some(out) = self.music_out() {
             self.tone_out(&out, f0, f1, start, dur, peak, 0.005, wave);
-        }
-    }
-
-    /// Music pad tone — slow attack, long release, into the filtered bus.
-    fn music_pad(&self, f: f64, start: f64, dur: f64, peak: f64, wave: OscillatorType) {
-        if let Some(out) = self.music_out() {
-            self.tone_out(&out, f, f, start, dur, peak, 0.06, wave);
         }
     }
 
@@ -3760,6 +3976,17 @@ impl AudioEngine {
         let _ = gain.connect_with_audio_node(&filt);
         let _ = filt.connect_with_audio_node(&ctx.destination());
         (Some(gain), Some(filt))
+    }
+
+    /// Build the SIDECHAIN DUCK stage: one gain node feeding the music bus.
+    /// Melodic voices enter through it; `schedule_step` automates it in
+    /// ducked sections. `None` (melodics fall back to the plain bus) if the
+    /// node cannot be built or wired.
+    fn make_duck(ctx: &AudioContext, bus: &GainNode) -> Option<GainNode> {
+        let duck = ctx.create_gain().ok()?;
+        let _ = duck.gain().set_value_at_time(1.0, 0.0);
+        duck.connect_with_audio_node(bus).ok()?;
+        Some(duck)
     }
 
     /// Build ~0.5s of white noise into an `AudioBuffer` we can reuse forever.
@@ -4029,12 +4256,16 @@ impl AudioEngine {
     }
 }
 
-/// The `web_sys` oscillator shape of a song voice's [`Wave`].
+/// The `web_sys` oscillator shape of a song voice's [`Wave`]. The preset
+/// waves are never dispatched here (`music_voice` builds their node graphs
+/// first), but map to their nearest raw shape as a total fallback.
 fn osc(wave: Wave) -> OscillatorType {
     match wave {
         Wave::Sine => OscillatorType::Sine,
         Wave::Square => OscillatorType::Square,
-        Wave::Sawtooth => OscillatorType::Sawtooth,
+        Wave::Sawtooth | Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad => {
+            OscillatorType::Sawtooth
+        }
         Wave::Triangle => OscillatorType::Triangle,
     }
 }

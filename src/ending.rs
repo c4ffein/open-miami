@@ -388,8 +388,16 @@ mod draw {
             h,
             Color::new(0.015, 0.008, 0.040, 1.0),
         );
+        // Chunky stepped discs, not smooth circles (## Design) — at 12 px
+        // art cells the glow well keeps a faint stair-stepped rim.
         for (r, a) in [(300.0, 0.05), (180.0, 0.06), (90.0, 0.08)] {
-            g.draw_circle(Vec2::new(cx, cy), r, Color::new(0.10, 0.12, 0.30, a));
+            crate::render::draw_pixel_disc(
+                g,
+                Vec2::new(cx, cy),
+                r,
+                12.0,
+                Color::new(0.10, 0.12, 0.30, a),
+            );
         }
         // Passing shaft lights: each lives on a fixed bearing (golden-angle
         // spread) and rushes outward exponentially, drawn as a short radial
@@ -406,8 +414,6 @@ mod draw {
             let r = r0 + curve * (rmax - r0);
             let len = 8.0 + 90.0 * k * k;
             let (dx, dy) = (ang.cos(), ang.sin());
-            let tip = Vec2::new(cx + dx * r, cy + dy * r);
-            let tail = Vec2::new(cx + dx * (r - len), cy + dy * (r - len));
             let a = (k / 0.12).min(1.0); // fade in at spawn, no pop
             let c = match i % 4 {
                 0 => Color::new(0.10, 0.90, 1.00, a),
@@ -415,7 +421,21 @@ mod draw {
                 2 => Color::new(0.25, 0.55, 1.00, a),
                 _ => Color::new(1.00, 0.70, 0.05, a * 0.9),
             };
-            g.draw_line(tail, tip, 2.0 + 3.0 * k, c);
+            // Chunky pixel streak: square cells hopping outward along the
+            // bearing instead of one smooth thin line (## Design) — POSTFX
+            // 10 smears them into radial trails just the same, and the raw
+            // frames read as streaming pixel dashes.
+            let cell = 3.0 + 3.0 * k;
+            let cells = ((len / cell).ceil() as i32).clamp(1, 32);
+            for j in 0..cells {
+                let d = r - len + (j as f32 + 0.5) * cell;
+                g.draw_rectangle(
+                    Vec2::new(cx + dx * d - cell * 0.5, cy + dy * d - cell * 0.5),
+                    cell,
+                    cell,
+                    c,
+                );
+            }
         }
         draw_car(g, cx, cy, t);
     }
@@ -492,15 +512,18 @@ mod draw {
             32.0,
             Color::new(0.16, 0.17, 0.22, 1.0),
         );
+        // Square indicator lamps — chunky rects, not circles (## Design).
         let blink = 0.5 + 0.5 * (t * 2.2).sin();
-        g.draw_circle(
-            Vec2::new(x0 + cw - 6.0, cy - 6.0),
-            2.5,
+        g.draw_rectangle(
+            Vec2::new(x0 + cw - 8.5, cy - 8.5),
+            5.0,
+            5.0,
             Color::new(0.2 + 0.6 * blink, 1.0, 0.4, 1.0),
         );
-        g.draw_circle(
-            Vec2::new(x0 + cw - 6.0, cy + 6.0),
-            2.5,
+        g.draw_rectangle(
+            Vec2::new(x0 + cw - 8.5, cy + 3.5),
+            5.0,
+            5.0,
             Color::new(0.9, 0.35, 0.25, 0.5),
         );
         // CL4-UD3, unarmed, idling — going home.

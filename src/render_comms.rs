@@ -8,7 +8,7 @@ use crate::components::{Elevator, Zone};
 use crate::ecs::World;
 use crate::graphics::Graphics;
 use crate::math::{Color, Vec2};
-use crate::scenario::{ElevatorKind, ScenarioState};
+use crate::scenario::ElevatorKind;
 use crate::systems::elevator::EXTRACT_DWELL_SECS;
 
 /// Approximate VT323 advance as a fraction of the font size (used to wrap
@@ -494,17 +494,18 @@ fn draw_gateway(
         rh,
         Color::new(0.06, 0.06, 0.085, 1.0),
     );
-    // Stop line / threshold marking on the floor side.
+    // Stop line / threshold marking on the floor side (3 wu: survives the
+    // `?pixel=3` art grid).
     graphics.draw_rectangle_lines(
         Vec2::new(e.x, e.y),
         e.w,
         e.h,
-        1.0,
-        Color::new(0.75, 0.72, 0.6, 0.35),
+        3.0,
+        Color::new(0.75, 0.72, 0.6, 0.28),
     );
-    // Scan beam across the threshold, breathing.
+    // Scan beam across the threshold, breathing (3 wu thick, same reason).
     let (a, b) = back_edge_ends(e, side);
-    graphics.draw_line(a, b, 2.0, rgb(accent, 0.25 + 0.25 * pulse));
+    graphics.draw_line(a, b, 3.0, rgb(accent, 0.25 + 0.25 * pulse));
     // Posts (scanner pylons) at both ends, straddling the back edge.
     let post = Color::new(0.62, 0.60, 0.68, 1.0);
     let post_dark = Color::new(0.30, 0.28, 0.36, 1.0);
@@ -519,10 +520,21 @@ fn draw_gateway(
         };
         graphics.draw_rectangle(Vec2::new(px, py), w, h, post_dark);
         graphics.draw_rectangle(Vec2::new(px + 2.0, py + 2.0), w - 4.0, h - 4.0, post);
-        // Scanner light on the inner face.
+        // Scanner light on the inner face: a square lamp + square halo —
+        // chunky rects on the art grid, not smooth circles (## Design).
         let c = Vec2::new(px + w / 2.0, py + h / 2.0);
-        graphics.draw_circle(c, 3.0, rgb(accent, 0.7 + 0.3 * pulse));
-        graphics.draw_circle(c, 6.0, rgb(accent, 0.12 + 0.12 * pulse));
+        graphics.draw_rectangle(
+            Vec2::new(c.x - 3.0, c.y - 3.0),
+            6.0,
+            6.0,
+            rgb(accent, 0.7 + 0.3 * pulse),
+        );
+        graphics.draw_rectangle(
+            Vec2::new(c.x - 6.0, c.y - 6.0),
+            12.0,
+            12.0,
+            rgb(accent, 0.12 + 0.12 * pulse),
+        );
     }
 }
 
@@ -627,23 +639,5 @@ pub fn render_zones_debug(world: &World, graphics: &Graphics) {
     }
 }
 
-/// The current objective line, drawn under the HUD in screen space.
-pub fn render_objective(
-    graphics: &Graphics,
-    scenario: &ScenarioState,
-    accent: (u8, u8, u8),
-    y: f32,
-) {
-    let x = 10.0;
-    graphics.draw_text("> OBJECTIVE", Vec2::new(x, y), 14.0, rgb(accent, 0.9));
-    let mut ty = y + 20.0;
-    for line in wrap_text(&scenario.objective, 60) {
-        graphics.draw_text(
-            &line,
-            Vec2::new(x, ty),
-            17.0,
-            Color::new(0.95, 0.93, 1.0, 0.95),
-        );
-        ty += 19.0;
-    }
-}
+// (The old top-left "> OBJECTIVE" prose block lived here; the top-right
+// message roller — `hud_msg` + `render::render_msg_roller` — replaced it.)

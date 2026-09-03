@@ -4,7 +4,8 @@ const {
   collectErrors,
   loadFloor,
   lastFrameTexts,
-  hudValue,
+  waitForFrameTexts,
+  rogueCount,
   playerPos,
   purgeRogues,
   walkFloor1ToServiceLift,
@@ -20,17 +21,18 @@ test.describe('Open Miami - Level Completion', () => {
     const errors = collectErrors(page);
 
     await loadFloor(page, 1);
-    const texts = await lastFrameTexts(page);
 
-    // The in-game HUD, not the title/level-select screen. (The held weapon
-    // lives in the sliding bottom-left ammo box now, not a WEAPON: line.)
-    expect(texts).toEqual(expect.arrayContaining(['HEALTH:', 'ROGUES:']));
-    expect(Number(hudValue(texts, 'HEALTH:'))).toBeGreaterThan(0);
-    // Floor 1 opens on a passive lobby crowd: bystanders are not rogues
-    // until the scenario alerts them, so the count starts at 0.
-    expect(hudValue(texts, 'ROGUES:')).toBe('0');
-    // Floor 1's objective names its exit.
-    expect(texts.some((s) => s.includes('SERVICE LIFT'))).toBe(true);
+    // The in-game HUD, not the title/level-select screen: the top-right
+    // "N ROGUES" chromatic counter (HEALTH:/ROGUES: rows are gone; the held
+    // weapon lives in the sliding bottom-left ammo box). Floor 1 opens on a
+    // passive lobby crowd: bystanders are not rogues until the scenario
+    // alerts them, so the count starts at 0.
+    const texts = await lastFrameTexts(page);
+    expect(rogueCount(texts)).toBe(0);
+    // Floor 1's opening directive rolls down top-right for ~4 s on load.
+    await waitForFrameTexts(page, (t) => t.includes('PASS THE CHECKPOINT'), {
+      what: "floor 1's PASS THE CHECKPOINT roller",
+    });
 
     await page.screenshot({ path: 'test-results/01-floor1-loaded.png' });
 
@@ -61,17 +63,16 @@ test.describe('Open Miami - Level Completion', () => {
     expect(after.equals(before)).toBe(false);
     await page.screenshot({ path: 'test-results/03-moved.png' });
     let texts = await lastFrameTexts(page);
-    expect(Number(hudValue(texts, 'HEALTH:'))).toBeGreaterThan(0);
-    expect(hudValue(texts, 'ROGUES:')).toBe('0');
+    expect(rogueCount(texts)).toBe(0);
 
     // Through the turnstiles, west along the hall, then north into the open SERVICE LIFT (NW).
     await walkFloor1ToServiceLift(page);
     await page.waitForTimeout(1200); // dwell (0.6s) + the extraction card starts
     await page.screenshot({ path: 'test-results/04-extracting.png' });
 
-    // The card ends -> floor 2 (COLD STORAGE, FREIGHT LIFT objective) loads.
+    // The card ends -> floor 2 (COLD STORAGE, PURGE THE WARDENS roller) loads.
     texts = await expectFloor2(page);
-    expect(Number(hudValue(texts, 'ROGUES:'))).toBeGreaterThan(0);
+    expect(rogueCount(texts)).toBeGreaterThan(0);
     await page.screenshot({ path: 'test-results/05-floor2-loaded.png' });
 
     expect(errors).toEqual([]);

@@ -1,4 +1,4 @@
-.PHONY: help verify verify-all check-test check-clippy check-fmt check-build check-wasm-build build-wasm e2e-prep check-e2e check-render check-coverage gen-levels check-levels gen-props check-props gen-songs check-songs gen-title
+.PHONY: help verify verify-all check-test check-clippy check-fmt check-build check-wasm-build build-wasm e2e-prep check-e2e check-render check-coverage gen-levels check-levels gen-props check-props gen-title
 
 # Colors for output
 RED=\033[0;31m
@@ -25,12 +25,10 @@ help:
 	@echo "  make gen-props       - Regenerate src/props_data.rs from props/props.json"
 	@echo "  make gen-title       - Regenerate the loading-screen title SVG in index.html"
 	@echo "  make check-props     - Validate props/props.json and check props_data.rs is up to date"
-	@echo "  make gen-songs       - Regenerate src/audio/songs_data.rs from songs/*.json"
-	@echo "  make check-songs     - Validate songs/*.json and check songs_data.rs is up to date"
 
 # The core checks: fmt, clippy, tests, release build, wasm compile check,
 # generated-data checks. No browser, no wasm-bindgen.
-CORE_CHECKS = check-fmt check-clippy check-test check-build check-wasm-build check-levels check-props check-songs
+CORE_CHECKS = check-fmt check-clippy check-test check-build check-wasm-build check-levels check-props
 
 # Run all verification checks (the browser suites are excluded by default:
 # they need wasm-bindgen-cli, Bun and a Chromium — see check-e2e / check-render)
@@ -183,18 +181,6 @@ check-props:
 	python3 tools/gen_props.py --check
 	@echo "$(GREEN)✓ Props valid and up to date$(NC)"
 
-# Songs - compile the tracker songs (songs/*.json, see docs/SONGS_FORMAT.md)
-# into static Rust data. Python 3 stdlib only.
-gen-songs:
-	@echo "$(YELLOW)Generating src/audio/songs_data.rs from songs/*.json...$(NC)"
-	python3 tools/gen_songs.py
-	@echo "$(GREEN)✓ Songs generated$(NC)"
-
-# Songs check - validate the JSON and make sure the generated file is current
-check-songs:
-	@echo "$(YELLOW)Validating songs/*.json...$(NC)"
-	python3 tools/gen_songs.py --check
-	@echo "$(GREEN)✓ Songs valid and up to date$(NC)"
 
 # Loading-screen title - the neon OPEN/MIAMI SVG inlined into index.html,
 # generated from src/lib.rs's title glyphs. Python 3 stdlib only.

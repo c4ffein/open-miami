@@ -18,6 +18,7 @@ pub mod editor;
 pub mod ending;
 pub mod game;
 pub mod hud_ammo;
+pub mod hud_msg;
 pub mod levels;
 #[rustfmt::skip]
 pub mod levels_data;
@@ -56,7 +57,7 @@ mod wasm_entry {
     use wasm_bindgen::JsCast;
 
     // Import game modules
-    use crate::audio::{song_for_floor, AudioEngine, SONGS};
+    use crate::audio::{ending_song, song_for_floor, AudioEngine};
     use crate::camera::Camera;
     use crate::ecs::{System, World};
     use crate::ending::{self, Ending, Outro, EXTRACT_CARD_SECS};
@@ -75,24 +76,12 @@ mod wasm_entry {
     };
     use crate::render::*;
     use crate::render_comms::{
-        render_elevators, render_gate_prompt, render_hold_caption, render_objective,
-        render_zones_debug,
+        render_elevators, render_gate_prompt, render_hold_caption, render_zones_debug,
     };
     use crate::render_dialogue::render_dialogue;
     use crate::scenario::{ScenarioState, SURFACE_EXIT};
     use crate::systems::boss::any_boss_enraged;
     use crate::systems::*;
-
-    /// Index into [`SONGS`] of the calmest track (lowest intensity): what
-    /// plays once the uplink is back and under the credits.
-    fn calmest_song_index() -> usize {
-        SONGS
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.intensity.total_cmp(&b.1.intensity))
-            .map(|(i, _)| i)
-            .unwrap_or(0)
-    }
 
     /// Longest simulation step a single frame may take (seconds).
     const MAX_FRAME_DT: f32 = 0.1;
@@ -668,32 +657,46 @@ mod wasm_entry {
                 };
                 // The splat: a dark oil puddle at the detach point with a
                 // few blots thrown clear of the corpse's silhouette, all
-                // deterministic per head (hashed off its seq).
+                // deterministic per head (hashed off its seq) — chunky
+                // stepped discs / 1-art-px dots on the world art grid, not
+                // smooth circles (## Design).
                 if cull.visible(d.origin_x, d.origin_y, 60.0) {
+                    use crate::render::{draw_pixel_disc, GROUND_ART_PX};
                     let oil = Color::new(0.03, 0.02, 0.05, 0.9);
                     let s = d.seq.wrapping_mul(0x27D4_EB2F);
-                    graphics.draw_circle(Vec2::new(d.origin_x, d.origin_y), 9.0, oil);
+                    draw_pixel_disc(
+                        graphics,
+                        Vec2::new(d.origin_x, d.origin_y),
+                        9.0,
+                        GROUND_ART_PX,
+                        oil,
+                    );
                     for i in 0..4u32 {
                         let a = crate::drive::hash01(s, i * 2) * std::f32::consts::TAU;
                         let r = 10.0 + crate::drive::hash01(s, i * 2 + 1) * 14.0;
-                        graphics.draw_circle(
+                        draw_pixel_disc(
+                            graphics,
                             Vec2::new(d.origin_x + a.cos() * r, d.origin_y + a.sin() * r),
                             2.5 + crate::drive::hash01(s, i + 40) * 3.0,
+                            GROUND_ART_PX,
                             oil,
                         );
                     }
-                    // Drip trail along the head's slide: a few dots between
-                    // the neck and wherever the head is (settles with it).
+                    // Drip trail along the head's slide: a few 1-art-px dots
+                    // between the neck and wherever the head is (settles
+                    // with it).
                     for i in 1..4u32 {
                         let f = i as f32 / 4.0;
                         let jx = (crate::drive::hash01(s, 60 + i) - 0.5) * 6.0;
                         let jy = (crate::drive::hash01(s, 70 + i) - 0.5) * 6.0;
-                        graphics.draw_circle(
+                        let half = GROUND_ART_PX * 0.5;
+                        graphics.draw_rectangle(
                             Vec2::new(
-                                d.origin_x + (pos.x - d.origin_x) * f + jx,
-                                d.origin_y + (pos.y - d.origin_y) * f + jy,
+                                d.origin_x + (pos.x - d.origin_x) * f + jx - half,
+                                d.origin_y + (pos.y - d.origin_y) * f + jy - half,
                             ),
-                            1.8,
+                            GROUND_ART_PX,
+                            GROUND_ART_PX,
                             Color::new(0.03, 0.02, 0.05, 0.7),
                         );
                     }
@@ -1254,9 +1257,6 @@ mod wasm_entry {
         effect_kind: i32,
         effect_start: f64,
         prev_player_alive: bool,
-        /// Seconds until the machine-gun burst SFX may retrigger (see the
-        /// event dispatch in `update_game`).
-        mg_sfx_cooldown: f32,
         /// Seconds left on the kill flash (background strobes red/blue).
         kill_flash: f32,
         /// Electric spark bursts popping where player attacks land on bots
@@ -1267,6 +1267,11 @@ mod wasm_entry {
         /// flag (`hud_ammo::AmmoSlide`; the box itself is drawn by
         /// `render::render_ammo_box` on the HUD layer).
         ammo_hud: crate::hud_ammo::AmmoSlide,
+        /// The top-right MESSAGE ROLLER: the short chromatic directive box
+        /// (`hud_msg::MsgRoller`; drawn by `render::render_msg_roller`).
+        /// Rolls down for a few seconds when the objective changes or an
+        /// exit opens, then rolls away.
+        msg_roller: crate::hud_msg::MsgRoller,
         /// Key of the static geometry cache (floor tiles + walls baked into a
         /// persistent renderer-side VBO, `Graphics::static_layer`). Bumped by
         /// every `load_floor` so a floor change re-records; a checkpoint
@@ -1355,10 +1360,10 @@ mod wasm_entry {
                 effect_kind: -1,
                 effect_start: 0.0,
                 prev_player_alive: true,
-                mg_sfx_cooldown: 0.0,
                 kill_flash: 0.0,
                 sparks: crate::sparks::SparkPool::new(),
                 ammo_hud: crate::hud_ammo::AmmoSlide::new(),
+                msg_roller: crate::hud_msg::MsgRoller::new(),
                 floor_static_key: 0,
                 prev_boss_enraged: false,
                 prev_all_dead: false,
@@ -1434,8 +1439,11 @@ mod wasm_entry {
             // animation on a floor load / checkpoint restore.
             self.ammo_hud
                 .snap(crate::hud_ammo::gun_held(get_player_weapon(&self.world)));
+            // Fresh roller: the floor's (restored) objective re-announces
+            // itself on the first update — a load / restore restating the
+            // current directive is the wanted behaviour.
+            self.msg_roller = crate::hud_msg::MsgRoller::new();
             self.prev_player_alive = is_player_alive(&self.world);
-            self.mg_sfx_cooldown = 0.0;
             self.prev_boss_enraged = any_boss_enraged(&self.world);
             self.prev_all_dead = count_alive_enemies(&self.world) == 0;
         }
@@ -1448,12 +1456,10 @@ mod wasm_entry {
             // start; a `?floor=N` session has had none yet — `update` resumes
             // the context on the first in-game key/click instead.
             self.audio.resume();
-            // Songs escalate by depth: keyed on the floor id (floor 0 and 1
-            // share the calm opener) so adding the ground floor did not shift
-            // every floor's track.
-            self.audio.set_song(song_for_floor(
-                floor_def(self.selected_level).id.saturating_sub(1),
-            ));
+            // Songs escalate by depth, keyed on the floor ID (0 = the gate
+            // cold open, 13 / 14 = the boss floors).
+            self.audio
+                .set_song(song_for_floor(floor_def(self.selected_level).id));
             self.audio.start_music();
 
             // The hidden floor opens with a face-off before the fight.
@@ -2213,7 +2219,7 @@ mod wasm_entry {
             // --- song select -----------------------------------------------
             graphics.draw_text("SONGS", Vec2::new(40.0, 162.0), 16.0, coral);
             let cur_name = self.audio.current_song().name;
-            let songs = crate::audio::SONGS;
+            let songs = &*crate::audio::SONGS;
             for (i, song) in songs.iter().enumerate() {
                 let x = 40.0 + (i % 4) as f32 * 168.0;
                 let y = 172.0 + (i / 4) as f32 * 46.0;
@@ -3493,7 +3499,6 @@ mod wasm_entry {
             self.render_world(graphics, dt, accent);
 
             // Get game state for UI
-            let health = get_player_health(&self.world);
             let ammo = get_player_ammo(&self.world);
             let weapon = get_player_weapon(&self.world);
             let enemies_alive = count_alive_enemies(&self.world);
@@ -3501,6 +3506,12 @@ mod wasm_entry {
             // Advance the ammo box slide (down when the gun leaves the hand,
             // back up on a pickup; the text itself is always current).
             self.ammo_hud.update(dt, crate::hud_ammo::gun_held(weapon));
+            // And the top-right message roller: an objective change (or an
+            // exit opening) rolls the short directive down for a few seconds.
+            if let Some(sc) = self.scenario.as_ref() {
+                self.msg_roller
+                    .update(dt, &sc.objective, sc.opened_exits().len());
+            }
 
             // Track death time and level complete time
             if !player_alive {
@@ -3527,15 +3538,13 @@ mod wasm_entry {
             let player_alive_now = is_player_alive(&self.world);
             let boss_enraged = any_boss_enraged(&self.world);
 
-            // The machine gun fires a round every tick (0.1 s) while the trigger
-            // is held, but `play_attack_machinegun` renders a whole 8-round
-            // burst (~0.46 s) per call: retrigger it at most every 0.45 s so
-            // sustained fire sounds continuous without stacking bursts.
-            const MG_SFX_PERIOD: f32 = 0.45;
             // Cap per event kind per frame so a pile-up (a shotgun crowd, a
-            // burst of kills) plays a few, not dozens.
+            // burst of kills) plays a few, not dozens. The machine gun fires a
+            // round every tick (0.1 s) while the trigger is held and
+            // `play_attack_machinegun` bakes ONE short crack: one call per
+            // spawned round means hearing exactly as many bangs as bullets
+            // (at most one MG round leaves per frame, so the cap never bites).
             const MAX_SFX_PER_KIND: u32 = 3;
-            self.mg_sfx_cooldown = (self.mg_sfx_cooldown - dt).max(0.0);
             let mut fired = [0u32; 4];
             let mut hits = [0u32; 4];
             let mut counts = [0u32; 5];
@@ -3575,18 +3584,13 @@ mod wasm_entry {
                 match event {
                     GameEvent::PlayerFired(t) => {
                         let s = slot(t);
-                        if t == WeaponType::MachineGun {
-                            if self.mg_sfx_cooldown <= 0.0 {
-                                self.audio.play_attack_machinegun();
-                                self.mg_sfx_cooldown = MG_SFX_PERIOD;
-                            }
-                        } else if fired[s] < MAX_SFX_PER_KIND {
+                        if fired[s] < MAX_SFX_PER_KIND {
                             fired[s] += 1;
                             match t {
                                 WeaponType::Pistol => self.audio.play_attack_gun(),
+                                WeaponType::MachineGun => self.audio.play_attack_machinegun(),
                                 WeaponType::Shotgun => self.audio.play_attack_shotgun(),
                                 WeaponType::Melee => self.audio.play_attack_club(),
-                                WeaponType::MachineGun => {}
                             }
                         }
                     }
@@ -3674,7 +3678,6 @@ mod wasm_entry {
             } else {
                 render_ui(
                     graphics,
-                    health,
                     ammo,
                     weapon,
                     self.ammo_hud.eased(),
@@ -3683,16 +3686,16 @@ mod wasm_entry {
                     self.death_time,
                     self.debug_enabled,
                     self.show_infos,
+                    &self.msg_roller,
+                    self.last_time as f32 / 1000.0,
                 );
             }
 
-            // Objective line under the HUD + the intercepted comms feed
-            // (bottom-left, above the controls hint), both in screen space;
-            // and the caption of a running `hold`, if it has one.
+            // The intercepted comms feed (bottom-left, above the controls
+            // hint) in screen space; and the caption of a running `hold`, if
+            // it has one. (The old top-left "> OBJECTIVE" prose block is
+            // retired: the top-right message roller carries the directive.)
             if let Some(sc) = self.scenario.as_ref() {
-                if player_alive && !level_complete {
-                    render_objective(graphics, sc, accent, 150.0);
-                }
                 // The bottom-left intercepted-comms ticker is retired: the
                 // dialogue panel (`talk`) is the one place conversations
                 // render now. `say` lines still queue/type invisibly so
@@ -3806,8 +3809,9 @@ mod wasm_entry {
                     None => {
                         if self.outro.is_none() {
                             self.outro = Some(Outro::new());
-                            // The thread home is back: the calm track.
-                            self.audio.play_song(calmest_song_index());
+                            // The thread home is back: the ride-home track.
+                            self.audio.set_song(ending_song());
+                            self.audio.start_music();
                         }
                         let feed_idle = self
                             .scenario
