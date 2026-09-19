@@ -52,14 +52,40 @@
   robot-core.js 3D->2D pipeline (`createRobotPipeline(gl)` on the same GL
   context, into a per-frame scratch tile atlas — continuous animation time, no
   cache/quantization — as ONE BATCH per flush: `batchBegin` / `batchDraw` /
-  `batchEnd` draw every queued robot into its own 128-texel tile viewport of
-  one shared 1024² pass-1 target (one clear) and run ONE tile-aware inked
+  `batchEnd` draw every queued robot into its own 128-texel tile of
+  one shared 1024² pass-1 target (one clear) — through the GPU RIG, see the
+  next bullet — and run ONE tile-aware inked
   post draw over all the tiles, written AT BLOCK RESOLUTION — `ROBOT_ART` =
   ceil(128 / 3) = 43 texels per robot, one per pixelate block — into the
   NEAREST-sampled robot atlas (the same image a 1:1 tile gives; the quad
   covers 128/3 of those texels)); the boss the same way through shoggoth-core.js
   (`createShoggothPipeline(gl)`, a bigger 256px scratch tile, opcode SHOGGOTH
   = 13: `x y sizePx heading reveal time`)
+- THE ROBOT SKELETON EXISTS TWICE in robot-core.js, on purpose. The GPU RIG
+  (`rigVS`, what the game's batches run): the joint hierarchy is evaluated
+  IN THE VERTEX SHADER from 16 per-INSTANCE floats (tile, facing, palette
+  index + `posePlan()`'s scalars — the pose LOGIC stays in JS), the mesh
+  (`buildRigMesh`) holds every box any robot can show — body, bare-hand
+  barrel, ALL THREE held weapons — pre-placed in its joint's frame and
+  tagged with a visibility class, and the boxes a robot does not show
+  (other weapons, the barrel, a severed head) COLLAPSE to one off-clip point
+  (degenerate triangles), so one fixed-size mesh serves every loadout and
+  the whole batch is ONE `bufferData` + ONE `drawArraysInstancedANGLE`
+  (`ANGLE_instanced_arrays`; tiles are placed by a clip-space offset and
+  clipped by a fragment `discard` on the tile-local NDC = the old per-tile
+  scissor, per pixel). The CPU RIG (`_renderRobot`: JS M4 chains → a 27-mat4
+  uniform palette, one draw per robot) serves every single-sprite render
+  (inspector / orbit cameras, the portrait bake) and is the REFERENCE; a
+  batch falls back to it per robot without the extension or for
+  `opts.orbit` / `opts.halfV`, and `?rig=cpu` forces it (the A/B switch for
+  `?perf` traces). The GEOMETRY lives once (`RIG` pivots + `RIG_BOXES`, read
+  by both); what is mirrored is the ORDER OF ROTATIONS per joint chain
+  (`leg()` / `arm()` vs `rigVS` main) — edit both or neither.
+  `tests/e2e/rig-parity.js` (in `make check-render`) renders every pose x
+  weapon x a spread of times / palettes / facings through both rigs via
+  `tools/rig-parity.html` (also the human-eye page: CPU | GPU | DIFF;
+  `?bench=N` times both rigs' submit cost) and asserts the art-res atlases
+  match to a few edge texels per tile (float32 shader trig vs float64 JS)
 - shoggoth-core.js extends robot-core's exported `SpritePipeline` (shared
   pass-1 target + inked post pass + `M4`); the 2D-primitive
   `Graphics::draw_shoggoth` is only the `?viz` gallery / level-map thumbnail
@@ -88,8 +114,25 @@
   untouched + the same 6-px static grain over every cell at opacity `t`,
   no wash — the title screen runs it at 0.075 for a faint dead-channel
   shimmer; the one kind that is NOT a post pass: drawn as a single
-  alpha-blended quad of a pre-rolled noise texture, never routing the
-  frame through the scene FBO);
+  alpha-blended quad of a pre-rolled noise texture at the end of the
+  frame, never routing the frame through the scene FBO. `?grain=fold` =
+  an EXPERIMENT kept opt-in: the grain FOLDED INTO THE BATCH FRAGMENT
+  SHADER — blending the noise texel over a colour is the affine map
+  `g(c) = c(1-k) + n*k`, which commutes with alpha blending, so graining
+  every fragment as it lands on the canvas (noise by `gl_FragCoord`; the
+  premultiplied form for a pixel group's composite; off inside groups;
+  only when the frame opens with a BACKDROP and no post pass follows)
+  gives the quad's pixels without the quad's layer —
+  `tests/e2e/grain-fold.js` (in `make check-render`) proves the pixels on
+  three live frames. It is NOT the default: it is a TRADE, measured with
+  `?gpuprobe=headroom` on the 2018 MacBook Air (4.12 Mpx) — the quad's layer
+  goes (game frame 8.6 -> 6.8 ms GPU) but the second texture fetch makes
+  every batch fragment ~47% dearer (layer 1.44 -> 2.11 ms), so the frame
+  takes FEWER extra layers (5.6 -> 4.7): break-even ~2 full-screen layers
+  of batch fill. (A first verdict of "clear loss" was taken with the probe
+  panel over the canvas and is void.) LESSON: a fetch added to the batch
+  shader taxes every fragment of every layer; without the flag the shader
+  compiles without the grain code);
   the `?viz` EFFECTS tab previews them all. Only the last POSTFX of a
   frame applies
 - Opcodes 15/16 = PIXEL-ART GROUPS: `PIX_BEGIN px w h smooth` …
@@ -236,7 +279,23 @@
   kill-flash bypass frames too); the floor tiles (clipped to the floor's
   rect by `Level::set_size`) + walls paint over it, so it only shows
   outside the level. Normal frame content under POSTFX (it lands in the
-  scene FBO like everything else)
+  scene FBO like everything else). OCCLUSION: the op is
+  `BACKDROP w h t px ex ey ew eh` — `e*` = the screen rect the floor is
+  GUARANTEED to cover (`src/backdrop_clip.rs`, pure + host-tested: the
+  floor rect under `screen = centre + R(roll)(world - focus) zoom` is a
+  slightly rotated rectangle; the rect between the innermost x of its left /
+  right edges and the innermost y of its top / bottom edges lies inside it;
+  inset 2 px + 2 art texels in the `?pixel=N` world, clamped to the screen;
+  `Camera::floor_occlusion`), and renderer.js draws the void only AROUND it:
+  the SAME full-screen quad up to four times under a SCISSOR in whole
+  physical px (re-cut strips interpolate their own UVs and flip NEAREST at
+  texel boundaries — the test caught it), nothing at all when the floor
+  fills the screen. Not shading a fragment cannot cost anything (unlike the
+  grain fold): up to a full layer saved, 1.8 ms on the 2018 MacBook Air.
+  `tests/e2e/backdrop-clip.js` (in `make check-render`) renders live
+  frames clipped and full and requires them pixel-IDENTICAL (corner of a
+  floor, `?pixel=3` / `6`, floor 0, DPR 2; several sway phases each);
+  `?backdrop=full` = the A/B switch
 - Opcode 25 = `HEAD colorIdx x y angle sizePx` (`Graphics::draw_head`): a
   DETACHED ROBOT HEAD lying face-up on the floor — the KICK finisher's
   trophy. Baked ONCE per colour through `RobotPipeline.renderHead` (the head
@@ -353,7 +412,9 @@
   - `make check-e2e` — the Playwright specs (`tests/e2e/specs`)
   - `make check-render` — the standalone renderer acceptance scripts
     `tests/e2e/composite-coherence.js` (~7 s) + `props-stability.js` (~60 s,
-    fixed-sleep bound), in parallel against a `serve.py` the target starts on
+    fixed-sleep bound) + `rig-parity.js` (~5 s, the robots' GPU rig vs the
+    CPU rig) + `grain-fold.js` (~15 s, the opt-in folded TV static vs the quad) +
+    `backdrop-clip.js` (~30 s, the floor-occluded backdrop vs the full quad), in parallel against a `serve.py` the target starts on
     `RENDER_PORT` (a free ephemeral port by default) and kills; logs in `tests/e2e/test-results/render-*.log`
 - Both depend on `make e2e-prep`: `make build-wasm` (installs the wasm32
   target and `wasm-bindgen-cli` pinned to the `wasm-bindgen` version in
@@ -387,6 +448,58 @@
   timeline) + counters (`cmds`, `draws` via a gl.drawArrays shim installed
   only when tracing, `fbos` = render-target switches via a gl.bindFramebuffer
   shim likewise, `robots`). Skipped FPS-cap frames never open a frame
+
+### GPU probe (`?gpuprobe`)
+- `?perf` only times the CPU. When the CPU spans are ~1 ms and the frame
+  `gap` still sits at ~30 ms the machine is GPU-BOUND (the 2018 MacBook Air's
+  UHD 617 at 2880 px wide is), and the frame loop is its own GPU timer: the
+  browser paces `requestAnimationFrame` at the GPU's finish rate. `?gpuprobe`
+  (`tools/gpu-probe.js`, wrapped around `frameRender` by renderer.js only
+  when the flag is present) runs a KNOCKOUT experiment on that: ~2 s per
+  configuration, 2 rounds, it REWRITES the command stream (walking it with
+  the renderer's own `OP_ARGS`) to strip one class of work — BACKDROP, POSTFX
+  13, all POSTFX, `STATIC_REF`, RECTs covering ≥ 25% of the screen, ROBOT /
+  SHOGGOTH, TEXT, everything but CLEAR — and reports
+  `period(baseline) − period(knockout)` per class, the baseline re-measured
+  between rounds (thermal drift) and "clear only" = the floor cost of
+  presenting the canvas at all. STRESS rows go past the vsync ceiling a
+  knockout hits: `+1 backdrop` / `+1 static geo` / `+1` / `+3 blend rect`
+  draw a layer TWICE (marginal cost), and `clear +6` / `clear +10 rect`
+  give the header's `per full-screen layer` (slope) and `FIXED cost of
+  presenting the canvas` (intercept). `STATIC_BEGIN..END` recordings always
+  pass through whole (recorded once per floor). Result: on-screen table,
+  console, clipboard, `window.__gpuProbe`. Measure with it BEFORE optimizing
+  a layer. `?gpuprobe=fixed` = the QUICK probe (~10-15 s): just the fixed
+  presentation cost + the per-layer cost (CLEAR + N invisible rects, N
+  doubled until the period passes 24 ms so fast GPUs are measurable too,
+  panel hidden while measuring) — for A/B-ing `?ctx=` flags across machines.
+  `?gpuprobe=curve` = the whole ladder (CLEAR + N rects, slope per rung);
+  `?gpuprobe=headroom` = the ladder ON TOP OF THE REAL GAME FRAME: how many
+  extra full-screen layers the scene takes before leaving the vsync floor +
+  the frame's actual GPU time from the fit past the knee.
+  OBSERVER EFFECT (found by the curve mode): an HTML ELEMENT OVER THE CANVAS
+  changes how the browser presents it — on the MacBook Air the full probe's
+  visible result panel roughly DOUBLED everything it measured (bare clear
+  ~4.5 -> 9.6 ms, layer 1.06 -> 1.8 ms). Every mode now hides its panel
+  while measuring (progress in the tab title). Absolute ms figures recorded
+  before that (the "9.6 ms fixed cost", "1.8 ms per layer" quoted here) are
+  the WITH-OVERLAY regime: the relative A/B verdicts stand, the absolute
+  numbers are ~2x pessimistic for the real game, which has nothing over its
+  canvas. COROLLARY for the game itself: never leave a DOM element on top of
+  the game canvas during play
+- WHAT IT FOUND on that MacBook Air (30 -> 60 fps, none of it fill-rate
+  tuning): (1) the batch uploaded every flush with `bufferSubData` at offset
+  0 into one 2 MiB store — a write into a buffer the previous draw still
+  reads = a stall per flush, ~20 per frame, 31 -> 19 ms; flushes now ORPHAN
+  (`bufferData` of exactly the filled vertices; `?vbo=sub` = the old path).
+  (2) the context's `alpha: false` cost 3.6 ms of FIXED presentation time
+  per frame (13.3 -> 9.7 ms; an alpha-less buffer is emulated over Apple's
+  always-alpha IOSurfaces): on Apple platforms the context is `alpha: true`
+  and the blend keeps canvas alpha at 1 (`CTX_ALPHA` / `pixBlend`; `?ctx=`
+  A/B flags in docs/URL_PARAMS.md). Reference numbers there: 1.8 ms per
+  full-screen layer at 2880x1046, opaque or blended alike; the floor cache
+  is ONE layer deep; `?pixel=N` is cost-neutral (its composite quad is the
+  layer it saves); text and robots are ~free once flushes do not stall
 
 ## Debug Mode
 - The game has a built-in debug mode that can be toggled by pressing **I** during gameplay
