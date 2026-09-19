@@ -121,11 +121,16 @@ check-e2e: e2e-prep
 	cd tests/e2e && mkdir -p test-results && ulimit -c 0 && $(E2E_ENV) timeout 60 bunx playwright test
 	@echo "$(GREEN)✓ E2E tests passed$(NC)"
 
-# Render Tests - the two standalone renderer acceptance scripts
+# Render Tests - the five standalone renderer acceptance scripts
 # (tests/e2e/composite-coherence.js: the smooth pixel-group composite, at DPR
 # 1 and 2, ~7 s; tests/e2e/props-stability.js: the ?viz PROPS pixel-art
 # stability, ~60 s — it is fixed-sleep bound: ~60 waitForTimeout calls + 9
-# page loads of /?viz). Each launches its own Chromium, so they run IN
+# page loads of /?viz; tests/e2e/rig-parity.js: the robots' GPU rig vs the
+# CPU rig, every pose x weapon, ~5 s; tests/e2e/grain-fold.js: the TV static
+# folded into the batch shader vs the old full-screen quad, pixel diff on
+# three live game frames, ~15 s; tests/e2e/backdrop-clip.js: the void
+# backdrop clipped to where the floor does not cover it vs the full quad,
+# pixel-IDENTICAL on live frames, ~30 s). Each launches its own Chromium, so they run IN
 # PARALLEL against one serve.py started on RENDER_PORT for the duration of
 # the target (killed on exit whatever the outcome), each under its own
 # `timeout`; their output goes to tests/e2e/test-results/render-*.log and is
@@ -148,10 +153,16 @@ check-render: e2e-prep
 	cd tests/e2e && mkdir -p test-results; \
 	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun composite-coherence.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-composite-coherence.log 2>&1 & P1=$$!; \
 	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun props-stability.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-props-stability.log 2>&1 & P2=$$!; \
-	wait $$P1; R1=$$?; wait $$P2; R2=$$?; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun rig-parity.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-rig-parity.log 2>&1 & P3=$$!; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun grain-fold.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-grain-fold.log 2>&1 & P4=$$!; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun backdrop-clip.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-backdrop-clip.log 2>&1 & P5=$$!; \
+	wait $$P1; R1=$$?; wait $$P2; R2=$$?; wait $$P3; R3=$$?; wait $$P4; R4=$$?; wait $$P5; R5=$$?; \
 	echo "--- composite-coherence.js (exit $$R1)"; cat test-results/render-composite-coherence.log; \
 	echo "--- props-stability.js (exit $$R2)"; cat test-results/render-props-stability.log; \
-	[ $$R1 -eq 0 ] && [ $$R2 -eq 0 ]
+	echo "--- rig-parity.js (exit $$R3)"; cat test-results/render-rig-parity.log; \
+	echo "--- grain-fold.js (exit $$R4)"; cat test-results/render-grain-fold.log; \
+	echo "--- backdrop-clip.js (exit $$R5)"; cat test-results/render-backdrop-clip.log; \
+	[ $$R1 -eq 0 ] && [ $$R2 -eq 0 ] && [ $$R3 -eq 0 ] && [ $$R4 -eq 0 ] && [ $$R5 -eq 0 ]
 	@echo "$(GREEN)✓ Render tests passed$(NC)"
 
 # Levels - compile the floor/scenario JSON (levels/*.json, written by the

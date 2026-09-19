@@ -36,12 +36,18 @@ used by `make check-render`):
 ## Renderer acceptance scripts (`make check-render`)
 
 `composite-coherence.js` (the smooth pixel-group composite, numeric
-assertions at DPR 1 and 2, ~7 s) and `props-stability.js` (the `?viz` PROPS
-pixel-art stability, ~60 s — fixed-sleep bound) are standalone Bun scripts,
+assertions at DPR 1 and 2, ~7 s), `props-stability.js` (the `?viz` PROPS
+pixel-art stability, ~60 s — fixed-sleep bound) and `rig-parity.js` (the
+robots' GPU rig vs the CPU reference rig, every pose x weapon, through
+`tools/rig-parity.html`, ~5 s) and `grain-fold.js` (the TV static folded
+into the batch shader vs the old full-screen quad: pixel diff on three live
+game frames, ~15 s) and `backdrop-clip.js` (the void backdrop drawn only
+where the floor does not cover it vs the full quad: pixel-identical on live
+frames, ~30 s) are standalone Bun scripts,
 not Playwright specs. `make check-render` runs them after the same
 `e2e-prep`, in parallel, against a `python3 serve.py 8098` it starts and
 kills itself (`RENDER_PORT` (a free ephemeral port by default) / `RENDER_TIMEOUT` (180 s each) override), and
-prints both logs (`test-results/render-*.log`) once both are done. By hand:
+prints their logs (`test-results/render-*.log`) once all are done. By hand:
 `cd tests/e2e && bun composite-coherence.js [baseURL]` with a server at
 `http://localhost:8098` (each header documents its arguments).
 

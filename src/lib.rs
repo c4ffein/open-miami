@@ -38,6 +38,8 @@ pub mod sparks;
 pub mod static_geo;
 pub mod systems;
 
+// Where the floor hides the void backdrop (pure math, host-tested)
+pub mod backdrop_clip;
 // Camera and level rendering (WASM-only, depend on the canvas Graphics)
 #[cfg(target_arch = "wasm32")]
 pub mod camera;
@@ -3086,11 +3088,27 @@ mod wasm_entry {
             // paint over it; only the outside-the-level area keeps it.
             // ~6 CSS px per art pixel: chunky, and ~1/36th the fragment work
             // of a native-res pass (DRIVE economics — one upscaled quad).
+            // ... minus the part the floor is about to paint over (the floor
+            // is opaque over its whole rect): an exclusion rect, inset by a
+            // safety pixel plus — in the `?pixel=N` world — the art texel the
+            // floor's on-screen edge is quantized to.
+            let (floor_min, floor_max) = self.level.full_bounds();
+            let texel = if self.pixel_world >= 2 {
+                self.pixel_world as f32 * self.camera.zoom()
+            } else {
+                0.0
+            };
+            let occluded = self.camera.floor_occlusion(
+                floor_max.x - floor_min.x,
+                floor_max.y - floor_min.y,
+                2.0 + 2.0 * texel,
+            );
             graphics.backdrop(
                 graphics.width(),
                 graphics.height(),
                 self.last_time as f32 / 1000.0,
                 BACKDROP_ART_PX,
+                occluded,
             );
             let (mut view_min, mut view_max) = self
                 .camera

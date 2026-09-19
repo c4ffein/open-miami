@@ -44,7 +44,7 @@ mod op {
     pub const GUN_PICKUP: f32 = 18.0; // weaponIdx x y angle sizePx  (3D weapon lying flat, pixel-art)
     pub const PIX_BLIT: f32 = 19.0; // sx sy sw sh x y  (re-draw a rect of the LAST-closed pixel group at (x, y))
     pub const DRIVE: f32 = 20.0; // w h t glitch split px dim o0..o8  (the synthwave drive backdrop, one full-shader pass)
-    pub const BACKDROP: f32 = 24.0; // w h t px  (the neon-wave void behind/outside the level, one full-shader pass)
+    pub const BACKDROP: f32 = 24.0; // w h t px ex ey ew eh  (the neon-wave void behind/outside the level, one full-shader pass; e* = the rect the floor covers, not drawn — ew <= 0: none)
     pub const HEAD: f32 = 25.0; // colorIdx x y angle sizePx  (detached robot head lying face-up, pixel-art)
 }
 
@@ -658,8 +658,15 @@ impl Graphics {
     /// `px` is in CSS px (~6: chunky and cheap); `t` animates the waves
     /// (periods 10 s+ — a void, not a light show; peak brightness stays well
     /// below every floor tone in src/palette.rs).
-    pub fn backdrop(&self, w: f32, h: f32, t: f32, px: f32) {
-        self.push(&[op::BACKDROP, w, h, t, px]);
+    ///
+    /// `occluded` = a rect `[x, y, w, h]` (same local units as the quad) that
+    /// OPAQUE content drawn later is guaranteed to cover — the floor, from
+    /// `Camera::floor_occlusion`: the quad is drawn as up to four strips
+    /// around it instead, so the hidden part of the void costs no fill
+    /// (mid-floor that is all of it). `None` = the whole quad.
+    pub fn backdrop(&self, w: f32, h: f32, t: f32, px: f32, occluded: Option<[f32; 4]>) {
+        let [ex, ey, ew, eh] = occluded.unwrap_or([0.0; 4]);
+        self.push(&[op::BACKDROP, w, h, t, px, ex, ey, ew, eh]);
     }
 
     /// Draw a STATIC GEOMETRY LAYER — frame-invariant world geometry (the

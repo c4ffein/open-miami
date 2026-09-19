@@ -412,6 +412,7 @@ function drawSummary() {
 function showMeta() {
   const m = data.meta || {};
   const parts = [];
+  if (m.gpu) parts.push("gpu " + m.gpu);
   if (m.dpr) parts.push("dpr " + m.dpr);
   if (m.canvas) {
     parts.push("canvas " + m.canvas.w + "x" + m.canvas.h + " px (css " + m.canvas.cssW + "x" + m.canvas.cssH + ")");

@@ -416,6 +416,237 @@ const BODY_PART_TAGS = [
   [COL_ACCENT, COL_ACCENT, 0.95],       // 14 bare-hand barrel
 ];
 const BODY_CUBES = 14; // without the barrel; 15 with
+// a weapon box's color -> uColors selector ("accent" = the caller's accent slot)
+const weaponColSel = (c, accentSel) =>
+  c === "accent" ? accentSel :
+  c === GUN_METAL ? COL_METAL :
+  c === GUN_LIGHT ? COL_LIGHT :
+  c === GUN_WOOD  ? COL_WOOD  : COL_DARK;
+
+/* ---------- the RIG: the skeleton's numbers, shared by BOTH rigs ----------
+   The robot's skeleton exists twice, on purpose:
+     - the CPU RIG (`_renderRobot`): JS walks the joint hierarchy with M4 and
+       uploads one pose matrix per box (the 27-mat4 palette) — one draw per
+       robot. It serves every single-sprite render (inspector, portrait /
+       gun / head bakes, orbit cameras) and is the REFERENCE the GPU rig is
+       tested against;
+     - the GPU RIG (`rigVS`): the same hierarchy evaluated IN THE VERTEX
+       SHADER from a dozen per-instance pose scalars, every robot of a batch
+       in ONE instanced draw — what the game runs (see the GPU RIG section).
+   Both read the joint pivots (`RIG`) and the per-box joint / offset / size
+   table (`RIG_BOXES`) below, so the GEOMETRY lives once; what is mirrored is
+   the ORDER OF ROTATIONS per joint chain (`_renderRobot`'s leg() / arm() vs
+   rigVS's main()). tests/e2e/rig-parity.js renders every pose x weapon
+   through both and compares them texel by texel — edit one rig, the test
+   names the pose that diverged. */
+const RIG = {
+  hipX: 0.32, hipY: 0.6,            // hip pivots (left = -hipX)
+  kneeY: -0.6, kneeBend: 0.6,       // knee below the hip; bend = max(0,-swing)*kneeBend
+  shoulderX: 0.62, shoulderY: 1.5,  // shoulder pivots (left = -shoulderX)
+  elbowY: -0.52,                    // elbow below the shoulder
+  aim: -1.35,                       // the gun-hand's forward (aiming) shoulder pitch
+  gripY: -0.42,                     // held weapon's grip anchor below the elbow
+};
+// Joint frames a box can hang from (rigid: rotation + translation, no scale).
+const J_ROOT=0, J_LLEG=1, J_LSHIN=2, J_RLEG=3, J_RSHIN=4,
+      J_LARM=5, J_LFORE=6, J_RARM=7, J_RFORE=8;
+// Per body palette slot (same order as BODY_PART_TAGS): the joint the box
+// hangs from, its centre in that joint's frame and its size.
+const RIG_BOXES = [
+  {j:J_ROOT,  t:[0, 1.15, 0   ], s:[0.9, 1.0, 0.55]},  // 0  torso
+  {j:J_ROOT,  t:[0, 1.95, 0.02], s:[0.62,0.55,0.55]},  // 1  head
+  {j:J_ROOT,  t:[0, 1.98, 0.28], s:[0.5, 0.16,0.08]},  // 2  visor strip
+  {j:J_ROOT,  t:[0, 0.72, 0   ], s:[0.8, 0.3, 0.5 ]},  // 3  hips
+  {j:J_LLEG,  t:[0,-0.28, 0   ], s:[0.3, 0.62,0.32]},  // 4  L thigh
+  {j:J_LSHIN, t:[0,-0.28, 0   ], s:[0.26,0.6, 0.28]},  // 5  L shin
+  {j:J_LSHIN, t:[0,-0.6,  0.06], s:[0.32,0.22,0.5 ]},  // 6  L foot
+  {j:J_RLEG,  t:[0,-0.28, 0   ], s:[0.3, 0.62,0.32]},  // 7  R thigh
+  {j:J_RSHIN, t:[0,-0.28, 0   ], s:[0.26,0.6, 0.28]},  // 8  R shin
+  {j:J_RSHIN, t:[0,-0.6,  0.06], s:[0.32,0.22,0.5 ]},  // 9  R foot
+  {j:J_LARM,  t:[0,-0.26, 0   ], s:[0.24,0.55,0.26]},  // 10 L upper arm
+  {j:J_LFORE, t:[0,-0.24, 0   ], s:[0.2, 0.5, 0.22]},  // 11 L forearm
+  {j:J_RARM,  t:[0,-0.26, 0   ], s:[0.24,0.55,0.26]},  // 12 R upper arm
+  {j:J_RFORE, t:[0,-0.24, 0   ], s:[0.2, 0.5, 0.22]},  // 13 R forearm
+  {j:J_RFORE, t:[0,-0.5,  0   ], s:[0.14,0.5, 0.14]},  // 14 bare-hand barrel
+];
+// the box's own local matrix (translate * scale), for the CPU rig
+function rigBoxLocal(slot){
+  const b = RIG_BOXES[slot];
+  return M4.mul(M4.translate(b.t[0],b.t[1],b.t[2]), M4.scale(b.s[0],b.s[1],b.s[2]));
+}
+
+/* ---------- the GPU RIG: the skeleton in the vertex shader ----------
+   The CPU rig costs, PER ROBOT PER FRAME, ~60 mat4 products in JS, a 432-float
+   uniform upload and viewport + scissor + 1-2 draw calls. The GPU rig moves
+   the joint hierarchy into the vertex shader instead:
+     - the mesh (`buildRigMesh`) holds every box ANY robot can show — body,
+       bare-hand barrel and ALL THREE held weapons — each vertex PRE-PLACED
+       in its joint's frame (box offset + size baked in) and tagged with its
+       joint and a VISIBILITY class; boxes this robot does not show (the
+       weapons it does not hold, the barrel, a severed head) COLLAPSE to one
+       off-clip point — degenerate triangles rasterize nothing (the trick the
+       CPU rig's `headless` already used), so the vertex count is fixed and
+       one draw serves every loadout;
+     - a robot is 16 floats of per-INSTANCE data: its tile, facing, palette
+       and posePlan()'s scalars (the pose LOGIC stays in JS: branchy scalar
+       code, a few dozen flops). The shader walks the vertex's own joint
+       chain — at most 5 rotations — for position and normal;
+     - the tile is placed in the shader (clip-space offset into the batch
+       target, one big viewport) and clipped by a fragment discard on the
+       tile-local NDC — the per-pixel equivalent of the CPU path's per-tile
+       scissor, so a sprawled body is cut at its tile edge exactly as before.
+   => the whole batch is ONE bufferData + ONE drawArraysInstancedANGLE.
+   Needs ANGLE_instanced_arrays (universal on WebGL 1); without it, or for a
+   robot with a camera of its own (opts.orbit / opts.halfV), the batch falls
+   back to the CPU rig per robot. 7 vertex attributes (WebGL 1 guarantees 8),
+   4 + 29 + 1 vertex uniform vectors. */
+const VIS_ALWAYS=0, VIS_HEAD=1, VIS_BARREL=2, VIS_WEAPON0=3; // weapon k (1..3) = VIS_WEAPON0 + k - 1
+const RIG_PALS = 8;          // distinct palettes per instanced draw (more = an early flush)
+const RIG_INST_FLOATS = 16;  // per-instance floats (4 vec4 attributes)
+const glf = (x) => { const s = String(x); return /[.e]/.test(s) ? s : s + ".0"; };
+const rigVS = `
+attribute vec3 aPos;     // box vertex, pre-placed in its JOINT's frame
+attribute vec3 aNormal;
+attribute vec4 aExtra;   // x joint + 16*visibility class, y color sel, z accent sel, w part id
+attribute vec4 aI0;      // per instance: tile col, tile row, facing (rad), palette index
+attribute vec4 aI1;      //   bob, lean, zback, recoil
+attribute vec4 aI2;      //   legA, legB, armLp, armRp
+attribute vec4 aI3;      //   armRaise, armOut, elbow, flags = weapon + 4*forward + 8*headless
+uniform mat4 uVP;
+uniform vec3 uCol[${RIG_PALS*3 + 5}]; // RIG_PALS x (body, accent, trim), then the 5 fixed tones
+uniform float uTileScale;             // 2 / batch columns
+varying vec3 vN;
+varying vec3 vColor;
+varying vec3 vAccent;
+varying float vId;
+varying vec2 vLocal;                  // tile-local NDC (the fragment clip)
+// the M4.rotX / rotY / rotZ conventions, applied to a point and its normal
+void rotX(inout vec3 p, inout vec3 n, float a){
+  float c = cos(a), s = sin(a);
+  p = vec3(p.x, c*p.y - s*p.z, s*p.y + c*p.z);
+  n = vec3(n.x, c*n.y - s*n.z, s*n.y + c*n.z);
+}
+void rotY(inout vec3 p, inout vec3 n, float a){
+  float c = cos(a), s = sin(a);
+  p = vec3(c*p.x + s*p.z, p.y, c*p.z - s*p.x);
+  n = vec3(c*n.x + s*n.z, n.y, c*n.z - s*n.x);
+}
+void rotZ(inout vec3 p, inout vec3 n, float a){
+  float c = cos(a), s = sin(a);
+  p = vec3(c*p.x - s*p.y, s*p.x + c*p.y, p.z);
+  n = vec3(c*n.x - s*n.y, s*n.x + c*n.y, n.z);
+}
+// color selector -> uCol index: 0-2 = this robot's palette, 3-7 = fixed tones
+float colIdx(float sel, float pal){ return sel < 2.5 ? pal*3.0 + sel : ${glf(RIG_PALS*3 - 3)} + sel; }
+void main(){
+  float vis = floor((aExtra.x + 0.5) / 16.0);
+  float joint = aExtra.x - vis*16.0;
+  float fl = aI3.w;
+  float headless = floor((fl + 0.5) / 8.0); fl -= headless*8.0;
+  float forward = floor((fl + 0.5) / 4.0);
+  float weapon = fl - forward*4.0;
+
+  vN = vec3(0.0, 1.0, 0.0); vColor = vec3(0.0); vAccent = vec3(0.0); vId = 0.0; vLocal = vec2(0.0);
+  bool show = vis < 0.5;
+  if(vis > 0.5 && vis < 1.5) show = headless < 0.5;                   // head + visor
+  if(vis > 1.5 && vis < 2.5) show = forward > 0.5 && weapon < 0.5;    // bare-hand barrel
+  if(vis > 2.5) show = abs(vis - ${glf(VIS_WEAPON0 - 1)} - weapon) < 0.5; // the held weapon
+  if(!show){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }        // collapsed: off-clip point
+
+  vec3 p = aPos, n = aNormal;
+  if(joint > 0.5 && joint < 4.5){
+    // legs: [shin/foot: knee bend, drop to the knee,] hip swing, out to the hip
+    bool right = joint > 2.5;
+    float ph = right ? aI2.y : aI2.x;
+    if(abs(joint - 2.0) < 0.5 || abs(joint - 4.0) < 0.5){
+      rotX(p, n, max(0.0, -ph) * ${glf(RIG.kneeBend)});
+      p.y += ${glf(RIG.kneeY)};
+    }
+    rotX(p, n, ph);
+    p += vec3(right ? ${glf(RIG.hipX)} : ${glf(-RIG.hipX)}, ${glf(RIG.hipY)}, 0.0);
+  } else if(joint > 4.5){
+    // arms: [forearm + what the hand holds: elbow bend, drop to the elbow,]
+    // shoulder (the gun-hand AIMS forward; otherwise splay then swing), out
+    // to the shoulder
+    bool right = joint > 6.5;
+    bool aims = right && forward > 0.5;
+    if(abs(joint - 6.0) < 0.5 || abs(joint - 8.0) < 0.5){
+      if(!aims) rotX(p, n, aI3.z);
+      p.y += ${glf(RIG.elbowY)};
+    }
+    if(aims){
+      rotX(p, n, ${glf(RIG.aim)} + aI1.w);
+    } else {
+      rotZ(p, n, right ? aI3.y : -aI3.y);
+      rotX(p, n, (right ? aI2.w : aI2.z) - aI3.x);
+    }
+    p += vec3(right ? ${glf(RIG.shoulderX)} : ${glf(-RIG.shoulderX)}, ${glf(RIG.shoulderY)}, 0.0);
+  }
+  // root: backward lean, facing, bob / shove offsets
+  rotX(p, n, aI1.y);
+  rotY(p, n, aI0.z);
+  p += vec3(0.0, aI1.x, aI1.z);
+
+  vec4 clip = uVP * vec4(p, 1.0);      // ortho cameras only: w = 1
+  vLocal = clip.xy;
+  clip.xy = (clip.xy*0.5 + 0.5 + aI0.xy) * uTileScale - 1.0;
+  gl_Position = clip;
+  vN = normalize(n);
+  vColor = uCol[int(colIdx(aExtra.y, aI0.w) + 0.5)];
+  vAccent = uCol[int(colIdx(aExtra.z, aI0.w) + 0.5)];
+  vId = aExtra.w;
+}
+`;
+// sceneFS + the tile clip (pixel centres never sit ON the tile edge, so the
+// discard cuts exactly where the CPU path's per-tile scissor does)
+const rigFS = `
+precision mediump float;
+varying vec3 vN;
+varying vec3 vColor;
+varying vec3 vAccent;
+varying float vId;
+varying vec2 vLocal;
+void main(){
+  if(abs(vLocal.x) > 1.0 || abs(vLocal.y) > 1.0) discard;
+  vec3 L = normalize(vec3(0.35, 0.9, 0.45));
+  float ndl = max(dot(normalize(vN), L), 0.0);
+  float amb = 0.35;
+  float shade = amb + ndl*0.75;
+  vec3 base = mix(vColor, vAccent, clamp(vN.y*0.5+0.2,0.0,1.0)*0.4);
+  vec3 col = base * shade;
+  gl_FragColor = vec4(col, vId);
+}
+`;
+/* The GPU rig's mesh: every box pre-placed in its joint's frame (10 floats
+   per vertex like the merged mesh: pos3 / nrm3 / extra4), in the CPU rig's
+   DRAW ORDER (body, barrel, then the weapons) so depth-equal ties resolve
+   identically. A box's non-uniform size never touches its normals: they are
+   axis-aligned, and the CPU rig's normalize(mat3(M) * n) drops the scale the
+   same way. */
+function buildRigMesh(){
+  const cube = makeCube();
+  const data = [];
+  function addBox(joint, vis, t, s, colSel, accSel, id){
+    for(let v=0; v<cube.count; v++){
+      data.push(t[0] + s[0]*cube.pos[v*3], t[1] + s[1]*cube.pos[v*3+1], t[2] + s[2]*cube.pos[v*3+2],
+                cube.nrm[v*3], cube.nrm[v*3+1], cube.nrm[v*3+2],
+                joint + 16*vis, colSel, accSel, id);
+    }
+  }
+  RIG_BOXES.forEach((b, slot) => {
+    const [colSel, accSel, id] = BODY_PART_TAGS[slot];
+    const vis = (slot === 1 || slot === 2) ? VIS_HEAD : slot === 14 ? VIS_BARREL : VIS_ALWAYS;
+    addBox(b.j, vis, b.t, b.s, colSel, accSel, id);
+  });
+  WEAPONS.forEach((w, k) => {
+    // (k = 0 is the fist: no boxes) — same tags as the merged mesh's held models
+    WEAPON_MODELS[w].forEach((b) =>
+      addBox(J_RFORE, VIS_WEAPON0 + k - 1, [b.t[0], RIG.gripY + b.t[1], b.t[2]], b.s,
+             weaponColSel(b.c, COL_ACCENT), COL_ACCENT, 0.9));
+  });
+  return {data: new Float32Array(data), count: data.length / 10};
+}
+
 function buildMergedMesh(){
   const cube = makeCube();
   const data = [];
@@ -428,11 +659,6 @@ function buildMergedMesh(){
     }
     cubes++;
   }
-  const weaponColSel = (c, accentSel) =>
-    c === "accent" ? accentSel :
-    c === GUN_METAL ? COL_METAL :
-    c === GUN_LIGHT ? COL_LIGHT :
-    c === GUN_WOOD  ? COL_WOOD  : COL_DARK;
   BODY_PART_TAGS.forEach(([colSel, accSel, id], slot) => addCube(slot, colSel, accSel, id));
   const held = {};
   for(const w of ["pistol", "machinegun", "shotgun"]){
@@ -612,16 +838,6 @@ function posePlan(pose, time, relaxed){
       break;
   }
   return P;
-}
-
-/* compose local = translate * rot * scale, built parent-first (module helper) */
-function part(parent, tx,ty,tz, rx,ry,rz, sx,sy,sz){
-  let m = M4.translate(tx,ty,tz);
-  if(rz) m = M4.mul(m, M4.rotZ(rz));
-  if(ry) m = M4.mul(m, M4.rotY(ry));
-  if(rx) m = M4.mul(m, M4.rotX(rx));
-  const withScale = M4.mul(m, M4.scale(sx,sy,sz));
-  return {node:parent?M4.mul(parent,m):m, draw:parent?M4.mul(parent,withScale):withScale};
 }
 
 /* ---------- SpritePipeline: the shared two-pass skeleton ----------
@@ -862,8 +1078,12 @@ export class SpritePipeline {
 
 /* ---------- the RobotPipeline: box-built robot on the shared skeleton ---------- */
 class RobotPipeline extends SpritePipeline {
-  constructor(gl, rt){
+  constructor(gl, rt, {gpuRig=true} = {}){
     super(gl, rt);
+    // Batches run the GPU rig when it is available; flip to false for the
+    // CPU rig (the `?rig=cpu` A/B switch, the parity test's reference).
+    this.gpuRig = gpuRig;
+    this._initRig();
     this.sceneProg = this._program(sceneVS, sceneFS);
     this.sLoc = {
       aPos: gl.getAttribLocation(this.sceneProg,"aPos"),
@@ -924,10 +1144,7 @@ class RobotPipeline extends SpritePipeline {
     if(plan.lean) root = M4.mul(root, M4.rotX(plan.lean));
 
     // torso / head / visor strip / hips -> palette slots 0-3
-    P.set(part(root, 0,1.15,0, 0,0,0, 0.9,1.0,0.55).draw, 0*S);
-    P.set(part(root, 0,1.95,0.02, 0,0,0, 0.62,0.55,0.55).draw, 1*S);
-    P.set(part(root, 0,1.98,0.28, 0,0,0, 0.5,0.16,0.08).draw, 2*S);
-    P.set(part(root, 0,0.72,0, 0,0,0, 0.8,0.3,0.5).draw, 3*S);
+    for(let slot=0; slot<4; slot++) P.set(M4.mul(root, rigBoxLocal(slot)), slot*S);
     if(plan.headless){
       // decapitated (the "downed_headless" pose): collapse the head + visor
       // cubes to zero — degenerate triangles rasterize nothing, so the one
@@ -937,28 +1154,25 @@ class RobotPipeline extends SpritePipeline {
 
     // legs (pivot at hip, swing around X so they step fwd/back along Z)
     function leg(sideX, ph, slot){
-      const hipPivot = M4.mul(root, M4.translate(sideX,0.6,0));
+      const hipPivot = M4.mul(root, M4.translate(sideX,RIG.hipY,0));
       const swung = M4.mul(hipPivot, M4.rotX(ph));
-      const thigh = M4.mul(swung, M4.mul(M4.translate(0,-0.28,0), M4.scale(0.3,0.62,0.32)));
-      P.set(thigh, slot*S);
-      const knee = M4.mul(swung, M4.translate(0,-0.6,0));
-      const shinRot = M4.mul(knee, M4.rotX(Math.max(0,-ph)*0.6));
-      const shin = M4.mul(shinRot, M4.mul(M4.translate(0,-0.28,0), M4.scale(0.26,0.6,0.28)));
-      P.set(shin, (slot+1)*S);
-      const foot = M4.mul(shinRot, M4.mul(M4.translate(0,-0.6,0.06), M4.scale(0.32,0.22,0.5)));
-      P.set(foot, (slot+2)*S);
+      P.set(M4.mul(swung, rigBoxLocal(slot)), slot*S);             // thigh
+      const knee = M4.mul(swung, M4.translate(0,RIG.kneeY,0));
+      const shinRot = M4.mul(knee, M4.rotX(Math.max(0,-ph)*RIG.kneeBend));
+      P.set(M4.mul(shinRot, rigBoxLocal(slot+1)), (slot+1)*S);     // shin
+      P.set(M4.mul(shinRot, rigBoxLocal(slot+2)), (slot+2)*S);     // foot
     }
-    leg(-0.32, plan.legA, 4);
-    leg( 0.32, plan.legB, 7);
+    leg(-RIG.hipX, plan.legA, 4);
+    leg( RIG.hipX, plan.legB, 7);
 
     // arms (pivot at shoulder); the gun-hand grows the held weapon (slots 15+)
     // or the bare-hand barrel (slot 14)
     let barrelDrawn = false;
     function arm(sideX, ph, forward, gunHand, slot){
-      const shoulder = M4.mul(root, M4.translate(sideX,1.5,0));
+      const shoulder = M4.mul(root, M4.translate(sideX,RIG.shoulderY,0));
       let rot;
       if(forward){
-        rot = M4.mul(shoulder, M4.rotX(-1.35 + recoil));
+        rot = M4.mul(shoulder, M4.rotX(RIG.aim + recoil));
       } else {
         rot = M4.mul(shoulder, M4.rotX(ph - plan.armRaise));
         if(plan.armOut){
@@ -966,33 +1180,30 @@ class RobotPipeline extends SpritePipeline {
           rot = M4.mul(rot, M4.rotZ(sideX > 0 ? plan.armOut : -plan.armOut));
         }
       }
-      const upper = M4.mul(rot, M4.mul(M4.translate(0,-0.26,0), M4.scale(0.24,0.55,0.26)));
-      P.set(upper, slot*S);
-      let elbow = M4.mul(rot, M4.translate(0,-0.52,0));
+      P.set(M4.mul(rot, rigBoxLocal(slot)), slot*S);               // upper arm
+      let elbow = M4.mul(rot, M4.translate(0,RIG.elbowY,0));
       if(!forward && plan.elbow){
         // relaxed hang: a soft natural bend at the elbow
         elbow = M4.mul(elbow, M4.rotX(plan.elbow));
       }
-      const fore = M4.mul(elbow, M4.mul(M4.translate(0,-0.24,0), M4.scale(0.2,0.5,0.22)));
-      P.set(fore, (slot+1)*S);
+      P.set(M4.mul(elbow, rigBoxLocal(slot+1)), (slot+1)*S);       // forearm
       if(gunHand && holdingWeapon){
         // a held weapon replaces the bare-hand barrel; anchored at the grip
-        const anchor = M4.mul(elbow, M4.translate(0, -0.42, 0.0));
+        const anchor = M4.mul(elbow, M4.translate(0, RIG.gripY, 0.0));
         for(let j=0;j<weaponParts.length;j++){
           const b = weaponParts[j];
           P.set(M4.mul(anchor, M4.mul(M4.translate(b.t[0],b.t[1],b.t[2]),
                                       M4.scale(b.s[0],b.s[1],b.s[2]))), (WEAPON_SLOT0+j)*S);
         }
       } else if(forward){
-        const barrel = M4.mul(elbow, M4.mul(M4.translate(0,-0.5,0.0), M4.scale(0.14,0.5,0.14)));
-        P.set(barrel, 14*S);
+        P.set(M4.mul(elbow, rigBoxLocal(14)), 14*S);               // bare-hand barrel
         barrelDrawn = true;
       }
     }
     // the right arm is the gun-hand: force it forward whenever a weapon is held,
     // so the weapon sticks out in front (like the shoot pose) from every pose.
-    arm(-0.62, plan.armLp, false, false, 10);
-    arm( 0.62, plan.armRp, plan.shoot || holdingWeapon, true, 12);
+    arm(-RIG.shoulderX, plan.armLp, false, false, 10);
+    arm( RIG.shoulderX, plan.armRp, plan.shoot || holdingWeapon, true, 12);
 
     this.colorTable.set(pal.body, COL_BODY*3);
     this.colorTable.set(pal.accent, COL_ACCENT*3);
@@ -1050,19 +1261,126 @@ class RobotPipeline extends SpritePipeline {
      target.fbo, B = ceil(rt / px) texels (block resolution). */
   batchBegin(cols, n){
     this._batchBegin(cols, n);
-    this.gl.useProgram(this.sceneProg);
-    this._bindMesh();
+    this._rigN = 0;
+    this._rigPalN = 0;
+    this._cpuBound = false; // the CPU rig's program + mesh: bound by its first robot
   }
   batchDraw(i, opts){
-    this._batchTile(i);
     const pose = (opts.pose || "idle");
     const pal  = opts.pal || PALETTES[(opts.color||"coral")] || PALETTES.coral;
     const weapon = (opts.weapon in WEAPON_MODELS) ? opts.weapon : "fist";
-    this._drawRobotScene(opts, pose, pal, opts.time || 0, weapon, (opts.facingDeg || 0) * Math.PI/180);
+    const facingRad = (opts.facingDeg || 0) * Math.PI/180;
+    if(this.gpuRig && this.rigReady && !opts.orbit && !opts.halfV){
+      // GPU rig: 16 floats into the instance array; drawn by batchEnd
+      this._rigQueue(i, pal, posePlan(pose, opts.time || 0, weapon === "fist"), facingRad, weapon);
+      return;
+    }
+    // CPU rig: this robot right now, into its own tile viewport + scissor
+    if(!this._cpuBound){
+      this.gl.useProgram(this.sceneProg);
+      this._bindMesh();
+      this._cpuBound = true;
+    }
+    this._batchTile(i);
+    this._drawRobotScene(opts, pose, pal, opts.time || 0, weapon, facingRad);
   }
   batchEnd(target, cols, n, px, transparent){
-    this._unbindMesh();
+    if(this._cpuBound) this._unbindMesh();
+    this._rigFlush();
     this._batchEnd(target, cols, n, px, !!transparent);
+  }
+
+  /* ---- the GPU rig's plumbing (see the GPU RIG section above) ---- */
+  _initRig(){
+    const gl=this.gl;
+    this.rigReady = false;
+    this.instExt = gl.getExtension("ANGLE_instanced_arrays");
+    if(!this.instExt) return;
+    this.rigProg = this._program(rigVS, rigFS);
+    const L = (n) => gl.getAttribLocation(this.rigProg, n);
+    this.rLoc = {
+      aPos: L("aPos"), aNormal: L("aNormal"), aExtra: L("aExtra"),
+      inst: [L("aI0"), L("aI1"), L("aI2"), L("aI3")],
+      uVP: gl.getUniformLocation(this.rigProg,"uVP"),
+      uCol: gl.getUniformLocation(this.rigProg,"uCol"),
+      uTileScale: gl.getUniformLocation(this.rigProg,"uTileScale"),
+    };
+    const mesh = buildRigMesh();
+    this.rigMeshBuf = this._staticBuffer(mesh.data);
+    this.rigVerts = mesh.count;
+    this.rigInstBuf = gl.createBuffer();
+    this.rigInst = null;                 // Float32Array, sized by the first batch
+    this.rigCol = new Float32Array((RIG_PALS*3 + 5) * 3);
+    [GUN_METAL, GUN_DARK, GROUND_ACCENT, GUN_LIGHT, GUN_WOOD]
+      .forEach((c, k) => this.rigCol.set(c, (RIG_PALS*3 + k) * 3));
+    this._rigPals = new Array(RIG_PALS).fill(null);
+    this._rigPalN = 0;
+    this._rigN = 0;
+    this.rigReady = true;
+  }
+  // Queue one robot of the current batch: tile i, 16 instance floats.
+  _rigQueue(i, pal, plan, facingRad, weapon){
+    const cols = this.batch.cols;
+    if(!this.rigInst || this.rigInst.length < cols*cols*RIG_INST_FLOATS){
+      this.rigInst = new Float32Array(cols*cols*RIG_INST_FLOATS);
+    }
+    let pi = -1;
+    for(let k=0; k<this._rigPalN; k++) if(this._rigPals[k] === pal){ pi = k; break; }
+    if(pi < 0){
+      if(this._rigPalN === RIG_PALS) this._rigFlush(); // table full: draw what is queued
+      pi = this._rigPalN++;
+      this._rigPals[pi] = pal;
+      this.rigCol.set(pal.body, pi*9);
+      this.rigCol.set(pal.accent, pi*9 + 3);
+      this.rigCol.set(pal.trim, pi*9 + 6);
+    }
+    const w = WEAPONS.indexOf(weapon);             // 0 = fist
+    const forward = (plan.shoot || w > 0) ? 1 : 0; // the gun-hand aims
+    const I = this.rigInst, o = (this._rigN++) * RIG_INST_FLOATS;
+    I[o]    = i % cols;        I[o+1]  = Math.floor(i / cols);
+    I[o+2]  = facingRad;       I[o+3]  = pi;
+    I[o+4]  = plan.bob;        I[o+5]  = plan.lean || 0;
+    I[o+6]  = plan.zback;      I[o+7]  = plan.recoil || 0;
+    I[o+8]  = plan.legA;       I[o+9]  = plan.legB;
+    I[o+10] = plan.armLp;      I[o+11] = plan.armRp;
+    I[o+12] = plan.armRaise;   I[o+13] = plan.armOut || 0;
+    I[o+14] = plan.elbow || 0; I[o+15] = w + 4*forward + (plan.headless ? 8 : 0);
+  }
+  // ONE instanced draw over everything queued, into the whole batch target.
+  _rigFlush(){
+    const n = this._rigN;
+    this._rigN = 0;
+    this._rigPalN = 0;
+    if(!n) return;
+    const gl=this.gl, ext=this.instExt, r=this.rLoc, b=this.batch;
+    if(this._cpuBound){ this._unbindMesh(); this._cpuBound = false; } // (a mid-batch flush)
+    gl.useProgram(this.rigProg);
+    gl.disable(gl.SCISSOR_TEST);         // tiles clip in the fragment shader
+    gl.viewport(0, 0, b.size, b.size);
+    gl.uniformMatrix4fv(r.uVP, false, topDownVP());
+    gl.uniform3fv(r.uCol, this.rigCol);
+    gl.uniform1f(r.uTileScale, 2 / b.cols);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.rigMeshBuf);
+    gl.enableVertexAttribArray(r.aPos);    gl.vertexAttribPointer(r.aPos,   3,gl.FLOAT,false,40,0);
+    gl.enableVertexAttribArray(r.aNormal); gl.vertexAttribPointer(r.aNormal,3,gl.FLOAT,false,40,12);
+    gl.enableVertexAttribArray(r.aExtra);  gl.vertexAttribPointer(r.aExtra, 4,gl.FLOAT,false,40,24);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.rigInstBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, this.rigInst.subarray(0, n*RIG_INST_FLOATS), gl.DYNAMIC_DRAW);
+    for(let k=0; k<4; k++){
+      gl.enableVertexAttribArray(r.inst[k]);
+      gl.vertexAttribPointer(r.inst[k], 4, gl.FLOAT, false, RIG_INST_FLOATS*4, k*16);
+      ext.vertexAttribDivisorANGLE(r.inst[k], 1);
+    }
+    ext.drawArraysInstancedANGLE(gl.TRIANGLES, 0, this.rigVerts, n);
+    // the divisor is CONTEXT state (no VAO here): leave none behind, or the
+    // next program to use these attribute slots would step per instance
+    for(let k=0; k<4; k++){
+      ext.vertexAttribDivisorANGLE(r.inst[k], 0);
+      gl.disableVertexAttribArray(r.inst[k]);
+    }
+    gl.disableVertexAttribArray(r.aNormal);
+    gl.disableVertexAttribArray(r.aExtra);
+    gl.enable(gl.SCISSOR_TEST);          // back to the batch's per-tile state
   }
 
   /* render one WEAPON lying flat on the ground (a pickup, or a thrown weapon
@@ -1142,7 +1460,8 @@ class RobotPipeline extends SpritePipeline {
     // proud of the face so it always wins the depth test in the bake.
     const base = M4.mul(M4.translate(0,0.9,0), M4.rotX(-Math.PI/2 + 0.4));
     const P=this.palette;
-    P.set(M4.mul(base, M4.scale(0.62,0.55,0.55)), 1*16);
+    const hs = RIG_BOXES[1].s;
+    P.set(M4.mul(base, M4.scale(hs[0],hs[1],hs[2])), 1*16);
     P.set(M4.mul(base, M4.mul(M4.translate(0,0.03,0.29), M4.scale(0.5,0.16,0.12))), 2*16);
     this.colorTable.set(pal.body, COL_BODY*3);
     this.colorTable.set(pal.accent, COL_ACCENT*3);
@@ -1164,7 +1483,7 @@ class RobotPipeline extends SpritePipeline {
    rt: pass-1 scene resolution in px (square); the post pass resamples it into
    whatever target rect render() is given, so rt is the detail budget, not the
    output size. */
-export function createRobotPipeline(gl, {rt=128} = {}){ return new RobotPipeline(gl, rt); }
+export function createRobotPipeline(gl, {rt=128, gpuRig=true} = {}){ return new RobotPipeline(gl, rt, {gpuRig}); }
 
 /* ---------- CanvasRenderer: a pipeline bound to one canvas of its own ----------
    makePipeline(gl, rt) builds the pipeline (square target at canvas res). */

@@ -192,6 +192,29 @@ impl Camera {
         ViewCull::new(min, max)
     }
 
+    pub fn zoom(&self) -> f32 {
+        self.zoom
+    }
+
+    /// The screen rect `[x, y, w, h]` the floor `(0,0)..(world_w, world_h)`
+    /// is guaranteed to cover under this frame's `apply()` transform (sway
+    /// included), shrunk by `inset` px — what the backdrop need not draw
+    /// (see [`crate::backdrop_clip`]).
+    pub fn floor_occlusion(&self, world_w: f32, world_h: f32, inset: f32) -> Option<[f32; 4]> {
+        let f = self.focus();
+        let view = crate::backdrop_clip::View {
+            centre: (
+                self.canvas_width / 2.0 + self.sway_dx,
+                self.canvas_height / 2.0 + self.sway_dy,
+            ),
+            roll: self.sway_roll,
+            zoom: self.zoom,
+            focus: (f.x, f.y),
+            screen: (self.canvas_width, self.canvas_height),
+        };
+        crate::backdrop_clip::floor_occlusion(&view, world_w, world_h, inset)
+    }
+
     pub fn screen_to_world(&self, screen_pos: Vec2) -> Vec2 {
         // Exact inverse of apply(): undo drift, roll, zoom, then re-add focus.
         let f = self.focus();

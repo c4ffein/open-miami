@@ -186,6 +186,7 @@
                     meta: {
                         userAgent: navigator.userAgent,
                         dpr: window.devicePixelRatio,
+                        gpu: perf.gpu || null,
                         canvas: c ? { w: c.width, h: c.height, cssW: c.clientWidth, cssH: c.clientHeight } : null,
                         timestamp: new Date().toISOString(),
                     },

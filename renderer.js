@@ -54,7 +54,10 @@
                                                       with the current CPU
                                                       transform applied in
                                                       the vertex shader)
-    24 BACKDROP   w h t px                            (the neon-wave void
+    24 BACKDROP   w h t px ex ey ew eh                (the neon-wave void; e* =
+                                                      the rect the floor will
+                                                      cover, NOT drawn: strips
+                                                      around it — ew <= 0: none;
                                                       behind/outside the
                                                       level: art-res shader
                                                       pass + one upscaled
@@ -79,12 +82,15 @@
    robot-core render. The queued robots run as ONE BATCH inside this same GL
    context right before the batch that samples them is drawn (robot-core's
    batchBegin / batchDraw / batchEnd): pass 1 draws every robot's lit boxes
-   into its own tile viewport of a single 1024² scene target (one clear), and
+   into its own tile of a single 1024² scene target (one clear) — through
+   robot-core's GPU RIG: the skeleton runs in the vertex shader from a dozen
+   per-instance pose scalars, so the whole batch is ONE instanced draw
+   (`?rig=cpu` = the old CPU rig, JS pose matrices + one draw per robot) — and
    pass 2 is ONE tile-aware edge-ink / posterize / pixelate draw over all the
    tiles into the atlas, AT BLOCK RESOLUTION (ROBOT_ART = ceil(128 / 3) = 43
    NEAREST texels per robot — one per pixelate block, the exact image a 1:1
    post pass gives, without the 9 redundant copies of each block). So N robots
-   cost N tiny scene draws + one post draw + N textured quads, with no tile
+   cost one instanced scene draw + one post draw + N textured quads, with no tile
    cache, no quantization of the animation and no CPU readback.
 
    Shoggoth (the boss): the same mechanism through shoggoth-core.js — a SHOGGOTH
@@ -150,6 +156,7 @@
    ========================================================================= */
 
 import { createRobotPipeline } from "./robot-core.js";
+import { wrapGpuProbe } from "./tools/gpu-probe.js";
 import { createShoggothPipeline } from "./shoggoth-core.js";
 
 const TEXT_SEP = "\u001f";
@@ -235,19 +242,69 @@ void main(){
 }
 `;
 
+/* THE FOLDED TV STATIC (uGrainT > 0). The film grain used to be one more
+   alpha-blended full-screen quad over the finished frame — a whole layer of
+   fill (1.8 ms of a 16.7 ms frame on a 2018 MacBook Air) for a 7.5% effect.
+   Blending the noise texel n (straight alpha, opacity k = n.a * t) over a
+   colour c is the AFFINE map  g(c) = c*(1-k) + n.rgb*k , and an affine map
+   with per-pixel constants commutes with alpha blending:
+       g(s)*a + g(d)*(1-a) = g(s*a + d*(1-a))
+   so if EVERY fragment that reaches the canvas is grained as it is written
+   (same n, k for a given screen pixel: looked up by gl_FragCoord), the final
+   pixel is the grained final colour — what the quad produced, minus the
+   layer (to within 8-bit rounding: the quad rounded once, this rounds per
+   blend). For a PREMULTIPLIED source (a pixel group's composite, blended
+   ONE / 1-a) the same identity needs  g(p) = p*(1-k) + n.rgb*k*a .
+   Conditions, enforced by frameRender: the frame opens with an opaque
+   full-screen layer (the BACKDROP — the clear colour itself is never
+   grained), only draws that land ON THE CANVAS are grained (never the inside
+   of a pixel group or the scene FBO), and no post pass follows.
+
+   OPT-IN (`?grain=fold`), NOT the default. The pixels are right
+   (tests/e2e/grain-fold.js); the ECONOMICS are a trade, measured on a 2018
+   MacBook Air with `?gpuprobe=headroom` (4.12 Mpx canvas): the fold removes
+   the quad's layer (game frame 8.6 -> 6.8 ms of GPU time) but its second
+   texture fetch makes EVERY batch fragment ~47% dearer (a full-screen batch
+   layer 1.44 -> 2.11 ms), so the frame tolerates FEWER extra layers (5.6 ->
+   4.7) even though it has more ms to spare: break-even is ~2 full-screen
+   layers of batch fill per frame — a win for today's scenes, a loss for a
+   busier one. (An earlier verdict of "a clear loss, fragments twice as
+   dear" was taken with the probe's panel over the canvas, which distorted
+   every figure — see CLAUDE.md, GPU probe.) With ~8 ms of headroom either
+   way it stays off: the plain shader scales better and is simpler. Without
+   the flag the shader is compiled WITHOUT the grain code: byte-for-byte the
+   plain textured-quad shader. */
 const FS = `
 precision mediump float;
 varying vec2 vUv;
 varying vec4 vColor;
 uniform sampler2D uTex;
+#ifdef GRAIN
+uniform sampler2D uGrain;
+uniform float uGrainT;    // 0 = off, else the static's opacity
+uniform float uGrainPre;  // 1 = this draw's colour is premultiplied
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+uniform highp vec4 uGrainK; // xy = uv per physical px (y negative: v runs top-down), zw = this frame's offset
+#else
+uniform vec4 uGrainK;
+#endif
+#endif
 void main(){
-  gl_FragColor = texture2D(uTex, vUv) * vColor;
+  vec4 c = texture2D(uTex, vUv) * vColor;
+#ifdef GRAIN
+  if (uGrainT > 0.0) {
+    vec4 n = texture2D(uGrain, gl_FragCoord.xy * uGrainK.xy + uGrainK.zw);
+    float k = n.a * uGrainT;
+    c.rgb = c.rgb * (1.0 - k) + n.rgb * (k * mix(1.0, c.a, uGrainPre));
+  }
+#endif
+  gl_FragColor = c;
 }
 `;
 
 /* ---- opcode argument counts (mirror of the table above); used by the POSTFX
    pre-scan, which has to walk the stream without executing it ---- */
-const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1, 4, 5];
+const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1, 8, 5];
 const OP_POSTFX = 14;
 
 /* ---- pixel-art group scratch target ---- */
@@ -609,11 +666,31 @@ void main(){
 `;
 
 export function initRenderer(canvas) {
+  // THE CANVAS PRESENTATION PATH has a fixed per-frame GPU cost of its own —
+  // what the browser + OS spend getting this buffer to the glass, bare clear
+  // included — and it depends on how the context is created. Measured with
+  // `?gpuprobe` ("FIXED cost" line) on a 2018 MacBook Air (Chrome, ANGLE
+  // Metal, UHD 617, 2880x1046): alpha:false = 13.3 ms, alpha:true = 9.7 ms —
+  // 3.6 ms, two full-screen layers' worth, the difference between 52 and a
+  // locked 60 fps. (Apple's IOSurface-backed drawing buffers always carry an
+  // alpha channel; an alpha-less WebGL buffer has to be emulated on top.)
+  // So: on Apple platforms the context HAS alpha and the blend keeps it at 1
+  // (`pixBlend`; every full pass writes alpha 1), i.e. the canvas is still
+  // opaque over the page. Elsewhere alpha:false stays — unmeasured there, and
+  // an opaque buffer is what lets a compositor skip blending the canvas.
+  // `?ctx=` flips the choices for A/B probing: `alpha` / `opaque` force the
+  // buffer kind, `sync` = no desynchronized hint, `lowpower` = no
+  // high-performance GPU request.
+  const ctxFlags = (typeof location !== "undefined"
+    && new URLSearchParams(location.search).get("ctx") || "").split(",");
+  const applePlatform = typeof navigator !== "undefined"
+    && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
+  const CTX_ALPHA = ctxFlags.includes("alpha") || (applePlatform && !ctxFlags.includes("opaque"));
   const gl = canvas.getContext("webgl", {
-    // Opaque canvas: the game paints every pixel every frame, so the
-    // compositor can scan it out directly instead of alpha-blending the
-    // whole buffer over the page background.
-    alpha: false,
+    // Opaque canvas where that is the cheap kind (see CTX_ALPHA above): the
+    // game paints every pixel every frame, so the compositor can scan it
+    // out directly instead of alpha-blending the buffer over the page.
+    alpha: CTX_ALPHA,
     // NO MSAA, ON PURPOSE — the ALIASING is part of the art direction
     // (CLAUDE.md ## Design): tilted geometry stair-stepping under the
     // camera sway is the Hotline-Miami-2 look. (An `?aa=1` MSAA experiment
@@ -632,12 +709,12 @@ export function initRenderer(canvas) {
     preserveDrawingBuffer: false,
     // Dual-GPU laptops: without this Chrome may hand WebGL the INTEGRATED
     // GPU and the game crawls at 30 fps on machines that could do 120.
-    powerPreference: "high-performance",
+    powerPreference: ctxFlags.includes("lowpower") ? "default" : "high-performance",
     // Low-latency canvas: where supported (Chrome + a compositor overlay
     // path) the swap bypasses the compositor queue, saving up to one vsync
     // of input->photon latency. Ignored by other browsers; if a platform
     // ever shows tearing or a black canvas, delete this line.
-    desynchronized: true,
+    desynchronized: !ctxFlags.includes("sync"),
   });
   if (!gl) {
     throw new Error("WebGL is not available; the game cannot render.");
@@ -650,6 +727,10 @@ export function initRenderer(canvas) {
   const PERF = (typeof window !== "undefined" && window.__perf && window.__perf.enabled)
     ? window.__perf : null;
   if (PERF) {
+    // Which GPU actually runs the game (dual-GPU laptops!) — lands in the
+    // dump's meta, next to the canvas size.
+    const dbgInfo = gl.getExtension("WEBGL_debug_renderer_info");
+    PERF.gpu = String(gl.getParameter(dbgInfo ? dbgInfo.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
     // Count every draw call on this context — the batch pipeline, the
     // robot/shoggoth sprite pipelines and the post passes all share `gl`.
     const rawDrawArrays = gl.drawArrays.bind(gl);
@@ -657,6 +738,16 @@ export function initRenderer(canvas) {
       PERF._draws++;
       return rawDrawArrays(mode, first, count);
     };
+    // (the robots' GPU rig draws its whole batch through the instancing
+    // extension — getExtension hands every caller the same object)
+    const instExt = gl.getExtension("ANGLE_instanced_arrays");
+    if (instExt) {
+      const rawInstanced = instExt.drawArraysInstancedANGLE.bind(instExt);
+      instExt.drawArraysInstancedANGLE = function (mode, first, count, n) {
+        PERF._draws++;
+        return rawInstanced(mode, first, count, n);
+      };
+    }
     // ... and every render-target switch (the `fbos` counter: sprite passes,
     // pixel groups, post passes).
     PERF._fbos = 0;
@@ -684,7 +775,10 @@ export function initRenderer(canvas) {
   }
   const prog = gl.createProgram();
   gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
-  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+  // (`?grain=fold`: the TV static folded into this shader — see FS)
+  const GRAIN_FOLD = typeof location !== "undefined"
+    && new URLSearchParams(location.search).get("grain") === "fold";
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, (GRAIN_FOLD ? "#define GRAIN\n" : "") + FS));
   gl.linkProgram(prog);
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
     throw new Error("Program link failed: " + gl.getProgramInfoLog(prog));
@@ -698,7 +792,16 @@ export function initRenderer(canvas) {
     uTex: gl.getUniformLocation(prog, "uTex"),
     uXA: gl.getUniformLocation(prog, "uXA"),
     uXB: gl.getUniformLocation(prog, "uXB"),
+    uGrain: gl.getUniformLocation(prog, "uGrain"),
+    uGrainT: gl.getUniformLocation(prog, "uGrainT"),
+    uGrainPre: gl.getUniformLocation(prog, "uGrainPre"),
+    uGrainK: gl.getUniformLocation(prog, "uGrainK"),
   };
+  if (GRAIN_FOLD) {
+    gl.uniform1i(loc.uGrain, 2); // texture unit 2: the static sheet, bound per folded frame
+    gl.uniform1f(loc.uGrainT, 0);
+    gl.uniform1f(loc.uGrainPre, 0);
+  }
   // Identity: dynamic draws are already CPU-transformed. Only the static
   // geometry cache draw (drawStatic) ever changes these, and it resets them.
   gl.uniform3f(loc.uXA, 1, 0, 0);
@@ -710,14 +813,27 @@ export function initRenderer(canvas) {
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
 
-  /* ---- interleaved dynamic vertex buffer: x y u v r g b a ---- */
+  /* ---- interleaved dynamic vertex buffer: x y u v r g b a ----
+     Every flush hands the GPU only the vertices it filled, as a fresh
+     `bufferData` (buffer ORPHANING), never a `bufferSubData` at offset 0
+     into one big preallocated store: a sub-data write into a buffer the
+     previous draw may still be reading forces the driver to either wait
+     for that draw or copy the store (the whole 2 MiB, on drivers that keep
+     a shadow copy) — per flush, ~20 flushes a frame. On a 2018 MacBook Air
+     (Chrome, ANGLE Metal, UHD 617) `?gpuprobe` showed the frame cost
+     tracking the NUMBER OF FLUSHES rather than the pixels, with "clear
+     only" at vsync: a per-flush stall. Orphaning lets the driver hand out
+     a right-sized pooled buffer and the draws overlap. `?vbo=sub` keeps
+     the old sub-data path for the A/B. */
   const FLOATS_PER_VERT = 8;
   const MAX_VERTS = 65536;
   const verts = new Float32Array(MAX_VERTS * FLOATS_PER_VERT);
   let vCount = 0;
   const vbo = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-  gl.bufferData(gl.ARRAY_BUFFER, verts.byteLength, gl.DYNAMIC_DRAW);
+  const vboSubData = typeof location !== "undefined"
+    && new URLSearchParams(location.search).get("vbo") === "sub";
+  gl.bufferData(gl.ARRAY_BUFFER, vboSubData ? verts.byteLength : 6 * FLOATS_PER_VERT * 4, gl.DYNAMIC_DRAW);
   const STRIDE = FLOATS_PER_VERT * 4;
   gl.enableVertexAttribArray(loc.aPos);
   gl.vertexAttribPointer(loc.aPos, 2, gl.FLOAT, false, STRIDE, 0);
@@ -796,7 +912,12 @@ export function initRenderer(canvas) {
     throw new Error("Robot atlas framebuffer is incomplete; the game cannot render.");
   }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  const robotPipe = createRobotPipeline(gl, { rt: ROBOT_TILE });
+  // `?rig=cpu` = the A/B switch back to the CPU rig (JS pose matrices, one
+  // draw per robot); default = robot-core's GPU rig (the skeleton in the
+  // vertex shader, the whole batch in ONE instanced draw).
+  const robotGpuRig = !(typeof location !== "undefined"
+    && new URLSearchParams(location.search).get("rig") === "cpu");
+  const robotPipe = createRobotPipeline(gl, { rt: ROBOT_TILE, gpuRig: robotGpuRig });
   // Robots queued for the current batch: (colorIdx, poseIdx, weaponIdx, time)
   // per slot, rendered into their tiles by flush() right before the draw.
   const robotQueue = new Float32Array(robotSlots * 4);
@@ -1004,7 +1125,9 @@ export function initRenderer(canvas) {
   // Walk the stream by the opcode table (no execution) and pick up the LAST
   // POSTFX, if any — it must be known before the first draw so the whole
   // frame lands in the scene target.
+  let scanSawBackdrop = false;
   function scanPostfx(cmds) {
+    scanSawBackdrop = false;
     let i = 0;
     const n = cmds.length;
     let found = false;
@@ -1012,6 +1135,7 @@ export function initRenderer(canvas) {
       const op = cmds[i++];
       const args = OP_ARGS[op];
       if (args === undefined) break; // corrupt stream: frameRender reports it
+      if (op === 24) scanSawBackdrop = true; // BACKDROP: the frame has an opaque base layer
       if (op === OP_POSTFX) {
         postfx.kind = cmds[i] | 0;
         postfx.t = cmds[i + 1];
@@ -1606,7 +1730,13 @@ void main() {
     backdropTW = tw;
     backdropTH = th;
   }
-  function drawBackdrop(w, h, t, px) {
+  // `?backdrop=full` = ignore the exclusion rect (the A/B for `?gpuprobe`).
+  const BACKDROP_FULL = typeof location !== "undefined"
+    && new URLSearchParams(location.search).get("backdrop") === "full";
+  function drawBackdrop(w, h, t, px, ex, ey, ew, eh) {
+    // The floor covers the whole screen (mid-level, the common case): there
+    // is no void to see — skip the wave pass and the quad altogether.
+    if (!BACKDROP_FULL && ew > 0 && eh > 0 && ex <= 0 && ey <= 0 && ex + ew >= w && ey + eh >= h) return;
     flush();
     // PASS 1: the waves, one fragment per art pixel, into the tiny target.
     const tw = Math.ceil(w / px), th = Math.ceil(h / px);
@@ -1629,8 +1759,41 @@ void main() {
     bindBatchState(); // restores target, program, blend, attribs, buffers
     // PASS 2: the finished art-pixel image as ONE NEAREST-upscaled quad at
     // the current transform's origin (texel row 0 is the scene's bottom).
+    // Drawn right away, UNBLENDED: an opaque full-screen quad through the
+    // blending batch would still read the whole destination (see drawStatic).
     setTexture(backdropTex);
-    quad(0, 0, w, h, 0, 1, 1, 0, 1, 1, 1, 1);
+    const identity = m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
+    gl.disable(gl.BLEND);
+    if (ew > 0 && eh > 0 && !BACKDROP_FULL && identity && !pix) {
+      // OCCLUSION: (ex, ey, ew, eh) is a rect that opaque content drawn later
+      // (the floor) is guaranteed to cover — src/backdrop_clip.rs. Draw the
+      // void only AROUND it: the SAME full-screen quad four times under a
+      // SCISSOR (above / below / left / right of the rect, whole physical
+      // pixels, the rect rounded INWARD). Same triangles = bit-identical
+      // texel choice for every surviving pixel (re-cut strips interpolate
+      // their own UVs and flip NEAREST at texel boundaries —
+      // tests/e2e/backdrop-clip.js caught exactly that), and fragments the
+      // floor would paint over are never shaded at all.
+      const sx = batchVW / batchW, sy = batchVH / batchH; // CSS px -> physical
+      const x0 = Math.max(0, Math.ceil(ex * sx)), x1 = Math.min(batchVW, Math.floor((ex + ew) * sx));
+      const y0 = Math.max(0, Math.ceil(ey * sy)), y1 = Math.min(batchVH, Math.floor((ey + eh) * sy));
+      gl.enable(gl.SCISSOR_TEST);
+      const strip = (px0, py0, px1, py1) => { // top-down physical px -> GL's bottom-up scissor
+        if (px1 <= px0 || py1 <= py0) return;
+        gl.scissor(px0, batchVH - py1, px1 - px0, py1 - py0);
+        quad(0, 0, w, h, 0, 1, 1, 0, 1, 1, 1, 1);
+        flush();
+      };
+      strip(0, 0, batchVW, y0);         // above
+      strip(0, y1, batchVW, batchVH);   // below
+      strip(0, y0, x0, y1);             // left
+      strip(x1, y0, batchVW, y1);       // right
+      gl.disable(gl.SCISSOR_TEST);
+    } else {
+      quad(0, 0, w, h, 0, 1, 1, 0, 1, 1, 1, 1);
+      flush();
+    }
+    gl.enable(gl.BLEND);
   }
 
   /* ---- pixel-art groups: a NEAREST scratch target per nesting depth ---- */
@@ -1741,6 +1904,7 @@ void main() {
     // over transparent black, coverage accumulated), so composite them with
     // (ONE, 1-a) — into the canvas or into an outer group's texels alike.
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    setGrain(1); // the composite's texels are premultiplied
     setTexture(g.tex);
     // Snap the on-screen origin to whole pixels of the CURRENT target's
     // coordinate space (CSS pixels on the canvas/scene, the outer group's
@@ -1790,6 +1954,7 @@ void main() {
     flush();
     // Same composite + snap as the PIX_END draw.
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    setGrain(1); // the composite's texels are premultiplied
     setTexture(g.tex);
     const tx = m[0] * x + m[2] * y + m[4];
     const ty = m[1] * x + m[3] * y + m[5];
@@ -1808,16 +1973,28 @@ void main() {
     flush();
     pixBlend();
   }
+  // The folded static (see FS): on for draws that land on the CANVAS of a
+  // folded frame, off inside pixel groups; `pre` = 1 for a group's
+  // premultiplied composite quad. Callers flush first (uniforms are per draw).
+  let grainT = 0, grainU0 = 0, grainV0 = 0;
+  function setGrain(pre) {
+    if (!GRAIN_FOLD) return; // (the uniforms do not exist in the plain shader)
+    gl.uniform1f(loc.uGrainT, pix ? 0 : grainT);
+    gl.uniform1f(loc.uGrainPre, pre);
+  }
   // The batch blend for the current target: straight alpha onto the canvas /
   // scene; into a transparent group target straight alpha for colour but
   // accumulated coverage (a = sa + da * (1 - sa)) so the texels come out
   // premultiplied and PIX_END can composite them correctly.
   function pixBlend() {
-    if (pix) {
+    // (CTX_ALPHA: the canvas has an alpha channel — the same separate
+    // blend keeps it at 1, i.e. opaque over the page, whatever is drawn.)
+    if (pix || CTX_ALPHA) {
       gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     } else {
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     }
+    setGrain(0); // (straight-alpha draws; on only when the target is the canvas)
   }
 
   // Re-establish everything the batched pipeline relies on. The robot passes
@@ -1903,7 +2080,8 @@ void main() {
     }
     gl.bindTexture(gl.TEXTURE_2D, boundTex || whiteTex);
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts.subarray(0, vCount * FLOATS_PER_VERT));
+    if (vboSubData) gl.bufferSubData(gl.ARRAY_BUFFER, 0, verts.subarray(0, vCount * FLOATS_PER_VERT));
+    else gl.bufferData(gl.ARRAY_BUFFER, verts.subarray(0, vCount * FLOATS_PER_VERT), gl.DYNAMIC_DRAW);
     gl.drawArrays(gl.TRIANGLES, 0, vCount);
     vCount = 0;
     robotUsed = 0; // the quads sampling this batch's tiles are submitted: recycle
@@ -1970,6 +2148,7 @@ void main() {
   let staticRec = null; // { key, camM } while recording BEGIN..END
   let staticVerts = new Float32Array(4096 * FLOATS_PER_VERT); // grows
   let staticCount = 0;
+  let staticOpaque = true; // every recorded vertex had alpha 1 (see drawStatic)
   let staticWarned = false;
   function staticVert(x, y, u, v, r, g, b, a) {
     if ((staticCount + 1) * FLOATS_PER_VERT > staticVerts.length) {
@@ -1986,6 +2165,7 @@ void main() {
     staticVerts[o + 5] = g;
     staticVerts[o + 6] = b;
     staticVerts[o + 7] = a;
+    if (a < 1) staticOpaque = false;
     staticCount++;
   }
   function staticBegin(key) {
@@ -1993,6 +2173,7 @@ void main() {
     staticRec = { key, camM: m };
     m = [1, 0, 0, 1, 0, 0]; // record in world coordinates
     staticCount = 0;
+    staticOpaque = true;
   }
   function staticEnd() {
     if (!staticRec) return;
@@ -2013,6 +2194,8 @@ void main() {
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
     staticCache.key = key;
     staticCache.count = staticCount;
+    staticCache.opaque = staticOpaque;
+    if (PERF) PERF.staticOpaque = staticOpaque;
     drawStatic(key); // the build frame draws it too
   }
   function drawStatic(key) {
@@ -2032,7 +2215,13 @@ void main() {
     gl.vertexAttribPointer(loc.aPos, 2, gl.FLOAT, false, STRIDE, 0);
     gl.vertexAttribPointer(loc.aUv, 2, gl.FLOAT, false, STRIDE, 8);
     gl.vertexAttribPointer(loc.aColor, 4, gl.FLOAT, false, STRIDE, 16);
+    // FILL-RATE: the floor + walls cover most of the screen, several tiles
+    // deep. With every vertex opaque the blend is a no-op that still makes
+    // the GPU READ the destination for every fragment — on a bandwidth-bound
+    // integrated GPU that is half the cost of the layer. Same pixels without.
+    if (staticCache.opaque) gl.disable(gl.BLEND);
     gl.drawArrays(gl.TRIANGLES, 0, staticCache.count);
+    if (staticCache.opaque) gl.enable(gl.BLEND);
     // Hand the state back to the dynamic batch: identity + the stream VBO.
     gl.uniform3f(loc.uXA, 1, 0, 0);
     gl.uniform3f(loc.uXB, 0, 1, 0);
@@ -2532,6 +2721,21 @@ void main() {
       staticOverlay = postfx.t;
       postfxActive = false;
     }
+    // FOLD the static into the batch shader (see FS) when its conditions
+    // hold; otherwise it stays the end-of-frame quad. One random whole-texel
+    // offset per frame either way (REPEAT wrapping), one texel per 6 px.
+    grainT = 0;
+    if (staticOverlay > 0) {
+      const off = (typeof window !== "undefined" && window.__grainOffset) || null; // (tests: a fixed roll)
+      grainU0 = off ? off[0] : Math.floor(Math.random() * STATIC_SIZE) / STATIC_SIZE;
+      grainV0 = off ? off[1] : Math.floor(Math.random() * STATIC_SIZE) / STATIC_SIZE;
+      const fold = GRAIN_FOLD && scanSawBackdrop
+        && !(typeof window !== "undefined" && window.__grainFold === false);
+      if (fold) {
+        grainT = staticOverlay;
+        staticOverlay = 0; // no quad
+      }
+    }
     if (postfxActive) ensureSceneTarget(pw, ph);
     batchFbo = postfxActive ? sceneFbo : null;
     batchW = w;
@@ -2546,6 +2750,14 @@ void main() {
     staticRec = null; // an unterminated static recording never leaks either
     bindBatchState();
     gl.uniform1i(loc.uTex, 0);
+    if (grainT > 0) {
+      const gs = 1 / (6 * STATIC_SIZE);
+      gl.uniform4f(loc.uGrainK, gs, -gs, grainU0, grainV0 + ph * gs);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, staticTex);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    setGrain(0);
 
     const texts = textArena.length ? textArena.split(TEXT_SEP) : [];
     m = [1, 0, 0, 1, 0, 0];
@@ -2674,9 +2886,10 @@ void main() {
           drawStatic(cmds[i]);
           i += 1;
           break;
-        case 24: // BACKDROP (w h t px)
-          drawBackdrop(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3]);
-          i += 4;
+        case 24: // BACKDROP (w h t px ex ey ew eh)
+          drawBackdrop(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3],
+            cmds[i + 4], cmds[i + 5], cmds[i + 6], cmds[i + 7]);
+          i += 8;
           break;
         case 25: // HEAD
           drawHead(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4]);
@@ -2700,8 +2913,7 @@ void main() {
     if (staticOverlay > 0) {
       const savedM = m;
       m = [1, 0, 0, 1, 0, 0];
-      const u0 = Math.floor(Math.random() * STATIC_SIZE) / STATIC_SIZE;
-      const v0 = Math.floor(Math.random() * STATIC_SIZE) / STATIC_SIZE;
+      const u0 = grainU0, v0 = grainV0;
       setTexture(staticTex);
       quad(
         0, 0, frameW, frameH,
@@ -2711,6 +2923,7 @@ void main() {
       flush();
       m = savedM;
     }
+    if (grainT > 0) { grainT = 0; setGrain(0); }
     const perfTPost = PERF ? performance.now() : 0;
     if (PERF) window.perfSpan("submit", perfTSubmit, perfTPost - perfTSubmit);
     // The post passes work on the final pixels: physical resolution.
@@ -2728,5 +2941,14 @@ void main() {
     }
   }
 
+  // `?gpuprobe`: the GPU knockout experiment (tools/gpu-probe.js) — strips one
+  // class of work at a time from the stream and reads the GPU cost off the
+  // frame period. Off = the raw function, zero overhead.
+  if (typeof location !== "undefined" && new URLSearchParams(location.search).has("gpuprobe")) {
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    const gpuName = String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+    return wrapGpuProbe(frameRender, canvas, OP_ARGS, gpuName,
+      new URLSearchParams(location.search).get("gpuprobe"));
+  }
   return frameRender;
 }
