@@ -1,0 +1,187 @@
+<!doctype html>
+<!-- RIG PARITY: the robot batch rendered twice — through the CPU rig (JS
+     builds the 27-mat4 palette, one draw per robot: the REFERENCE) and
+     through the GPU rig (the skeleton runs in the vertex shader, every robot
+     of the batch in ONE instanced draw) — and compared texel by texel at the
+     art resolution the game samples. Every pose x weapon x a spread of
+     animation times, palettes and facings, in full 64-tile batches so a
+     spill into a neighbour tile shows up as a diff.
+     Headless acceptance: tests/e2e/rig-parity.js reads `window.rigParity`.
+     `?bench=N` also times N batches of 64 robots per rig (CPU submit cost). -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>RIG PARITY</title>
+<style>
+  body { background:#0b0d12; color:#cfd6e4; font:14px/1.4 monospace; margin:16px; }
+  h1 { font-size:16px; letter-spacing:2px; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; }
+  figure { margin:0; }
+  figcaption { margin:4px 0; color:#8b95a7; }
+  canvas.view { width:688px; height:688px; image-rendering:pixelated; border:1px solid #2a3140; background:#000; }
+  #out { white-space:pre; margin-top:12px; }
+  .bad { color:#ff6b6b; } .ok { color:#6bff9a; }
+</style>
+</head>
+<body>
+<h1>RIG PARITY — CPU RIG (REFERENCE) vs GPU RIG (INSTANCED)</h1>
+<div>batch <button id="prev">&lt;</button> <span id="bi">0</span> <button id="next">&gt;</button></div>
+<div class="row">
+  <figure><figcaption>CPU rig</figcaption><canvas class="view" id="vcpu"></canvas></figure>
+  <figure><figcaption>GPU rig</figcaption><canvas class="view" id="vgpu"></canvas></figure>
+  <figure><figcaption>DIFF (red = differing texel)</figcaption><canvas class="view" id="vdiff"></canvas></figure>
+</div>
+<div id="out">running…</div>
+<canvas id="gl" width="16" height="16" style="display:none"></canvas>
+<script type="module">
+import { createRobotPipeline, POSES, WEAPONS, PALETTES } from "../robot-core.js";
+
+const RT = 128, PX = 3, COLS = 8, B = Math.ceil(RT / PX), ATLAS = 512;
+const TIMES = [0, 0.13, 0.31, 0.77, 1.9];
+const COLORS = Object.keys(PALETTES);
+
+const gl = document.getElementById("gl").getContext("webgl", { antialias: false, preserveDrawingBuffer: true });
+const pipe = createRobotPipeline(gl, { rt: RT });
+const hasGpuRig = "gpuRig" in pipe;
+
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, ATLAS, ATLAS, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+const fbo = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+const target = { fbo, x: 0, y: 0 };
+
+// every pose x weapon x time; colour + facing cycle so each shows up with
+// every pose (the game always passes facing 0 — the quad rotates — but the
+// rig supports it, and a turned sprawl is what reaches for a neighbour tile)
+const cases = [];
+let k = 0;
+for (const pose of POSES) for (const weapon of WEAPONS) for (const time of TIMES) {
+  cases.push({ pose, weapon, time, color: COLORS[k % COLORS.length], facingDeg: [0, 0, 90, 180, 270, 33][k % 6], transparent: true });
+  k++;
+}
+const batches = [];
+for (let i = 0; i < cases.length; i += COLS * COLS) batches.push(cases.slice(i, i + COLS * COLS));
+
+function renderBatch(batch, gpu) {
+  if (hasGpuRig) pipe.gpuRig = gpu;
+  // stale texels from the previous batch must never pass for content
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.disable(gl.SCISSOR_TEST);
+  gl.clearColor(1, 0, 1, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  pipe.batchBegin(COLS, batch.length);
+  for (let i = 0; i < batch.length; i++) pipe.batchDraw(i, batch[i]);
+  pipe.batchEnd(target, COLS, batch.length, PX, true);
+}
+function readBatch(batch, gpu) {
+  renderBatch(batch, gpu);
+  const n = COLS * B;
+  const px = new Uint8Array(n * n * 4);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.readPixels(0, 0, n, n, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  return px;
+}
+function fnv(bytes) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) { h ^= bytes[i]; h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+const N = COLS * B;
+const results = { done: false, gpuRig: hasGpuRig, instanced: hasGpuRig && !!pipe.rigReady,
+                  cases: cases.length, tiles: [], totalDiff: 0, maxTileDiff: 0, maxChannelDiff: 0,
+                  emptyTiles: 0, cpuHash: "", gpuHash: "", glErrors: 0 };
+const shots = [];
+let cpuAll = "", gpuAll = "";
+for (const batch of batches) {
+  const cpu = readBatch(batch, false);
+  const gpu = readBatch(batch, true);
+  cpuAll += fnv(cpu); gpuAll += fnv(gpu);
+  const diff = new Uint8Array(N * N);
+  for (let i = 0; i < batch.length; i++) {
+    const tx = (i % COLS) * B, ty = Math.floor(i / COLS) * B;
+    let d = 0, solid = 0;
+    for (let y = 0; y < B; y++) for (let x = 0; x < B; x++) {
+      const o = ((ty + y) * N + tx + x) * 4;
+      let m = 0;
+      for (let c = 0; c < 4; c++) m = Math.max(m, Math.abs(cpu[o + c] - gpu[o + c]));
+      if (m > 0) { d++; diff[(ty + y) * N + tx + x] = 1; }
+      if (m > results.maxChannelDiff) results.maxChannelDiff = m;
+      if (cpu[o + 3] > 0) solid++;
+    }
+    const c = batch[i];
+    results.tiles.push({ name: `${c.pose}/${c.weapon}/t${c.time}/${c.color}/f${c.facingDeg}`, diff: d, solid });
+    results.totalDiff += d;
+    if (d > results.maxTileDiff) results.maxTileDiff = d;
+    if (solid < 50) results.emptyTiles++;
+  }
+  shots.push({ cpu, gpu, diff });
+}
+results.cpuHash = fnv(new TextEncoder().encode(cpuAll));
+results.gpuHash = fnv(new TextEncoder().encode(gpuAll));
+for (let e = gl.getError(); e !== gl.NO_ERROR; e = gl.getError()) results.glErrors++;
+
+// ---- optional bench: the CPU cost of SUBMITTING a 64-robot batch ----
+const benchN = parseInt(new URLSearchParams(location.search).get("bench") || "0", 10);
+if (benchN > 0) {
+  const full = [];
+  for (let i = 0; i < COLS * COLS; i++) full.push(cases[(i * 7) % cases.length]);
+  results.bench = {};
+  for (const [name, gpu] of [["cpu", false], ["gpu", true], ["cpu2", false], ["gpu2", true]]) {
+    renderBatch(full, gpu); gl.finish();
+    const t0 = performance.now();
+    for (let i = 0; i < benchN; i++) renderBatch(full, gpu);
+    const tSubmit = performance.now();
+    gl.finish();
+    const t1 = performance.now();
+    results.bench[name] = { submitMsPerBatch: (tSubmit - t0) / benchN, totalMsPerBatch: (t1 - t0) / benchN };
+  }
+}
+
+// ---- the human-eye view ----
+function paint(id, rgba, mask) {
+  const c = document.getElementById(id);
+  c.width = c.height = N;
+  const g = c.getContext("2d");
+  const img = g.createImageData(N, N);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const s = ((N - 1 - y) * N + x), o = (y * N + x) * 4; // GL rows are bottom-up
+    if (mask) {
+      const on = mask[s];
+      img.data[o] = on ? 255 : 12; img.data[o + 1] = on ? 40 : 14; img.data[o + 2] = on ? 40 : 20; img.data[o + 3] = 255;
+    } else {
+      const a = rgba[s * 4 + 3] / 255;
+      img.data[o] = rgba[s * 4] * a + 30 * (1 - a); img.data[o + 1] = rgba[s * 4 + 1] * a + 34 * (1 - a);
+      img.data[o + 2] = rgba[s * 4 + 2] * a + 44 * (1 - a); img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+}
+let cur = 0;
+function show() {
+  document.getElementById("bi").textContent = `${cur + 1} / ${shots.length}`;
+  paint("vcpu", shots[cur].cpu); paint("vgpu", shots[cur].gpu); paint("vdiff", null, shots[cur].diff);
+}
+document.getElementById("prev").onclick = () => { cur = (cur + shots.length - 1) % shots.length; show(); };
+document.getElementById("next").onclick = () => { cur = (cur + 1) % shots.length; show(); };
+show();
+
+const worst = results.tiles.slice().sort((a, b) => b.diff - a.diff).slice(0, 8);
+const out = document.getElementById("out");
+out.className = results.totalDiff === 0 ? "ok" : "";
+out.textContent =
+  `gpu rig: ${results.gpuRig ? (results.instanced ? "INSTANCED" : "present, NOT ready (no ANGLE_instanced_arrays?)") : "absent (old robot-core)"}\n` +
+  `cases: ${results.cases} · differing texels: ${results.totalDiff} (worst tile ${results.maxTileDiff} / ${B * B}, max channel delta ${results.maxChannelDiff})\n` +
+  `cpu hash ${results.cpuHash} · gpu hash ${results.gpuHash} · gl errors ${results.glErrors} · empty tiles ${results.emptyTiles}\n` +
+  `worst tiles:\n` + worst.map((t) => `  ${String(t.diff).padStart(4)}  ${t.name}`).join("\n") +
+  (results.bench ? `\n\nbench (${benchN} x 64 robots), ms per batch:\n` + Object.entries(results.bench)
+    .map(([n, b]) => `  ${n.padEnd(5)} submit ${b.submitMsPerBatch.toFixed(3)}  total(+finish) ${b.totalMsPerBatch.toFixed(3)}`).join("\n") : "");
+results.done = true;
+window.rigParity = results;
+</script>
+</body>
+</html>
