@@ -69,11 +69,15 @@ const ROBOT_COLOR_PLAYER = 0; // CL4-UD3, coral (src/render/robots.rs ROBOT_COLO
  *   player  - {x, y} world position of the player robot in the last frame
  *             (the ROBOT command with the player's colour; null if not drawn)
  *   robots  - number of ROBOT commands in the last frame
+ *   cmds    - number of floats in the last frame's command stream
+ *   malformed - STICKY: null, or why a frame's stream did not decode (an
+ *             unknown opcode, or a command running past the end) — the
+ *             browser-side twin of `graphics::stream::walk` (cargo test)
  */
 async function installFrameProbe(page) {
   await page.addInitScript(
     ({ OP_ARGS, OP_ROBOT, ROBOT_COLOR_PLAYER }) => {
-      const om = { frames: 0, texts: '', player: null, robots: 0 };
+      const om = { frames: 0, texts: '', player: null, robots: 0, cmds: 0, malformed: null };
       window.__om = om;
       function scan(cmds) {
         let player = null;
@@ -83,7 +87,10 @@ async function installFrameProbe(page) {
         while (i < n) {
           const op = cmds[i++] | 0;
           const args = OP_ARGS[op];
-          if (args === undefined) break; // unknown opcode: stop scanning
+          if (args === undefined) { // unknown opcode: stop scanning
+            om.malformed = om.malformed || `frame ${om.frames}: unknown opcode ${cmds[i - 1]} at float ${i - 1}`;
+            break;
+          }
           if (op === OP_ROBOT) {
             robots += 1;
             if ((cmds[i] | 0) === ROBOT_COLOR_PLAYER) {
@@ -92,8 +99,10 @@ async function installFrameProbe(page) {
           }
           i += args;
         }
+        if (i > n) om.malformed = om.malformed || `frame ${om.frames}: the last command runs ${i - n} float(s) past the end`;
         om.player = player;
         om.robots = robots;
+        om.cmds = n;
       }
       let real = undefined;
       Object.defineProperty(window, 'frameRender', {

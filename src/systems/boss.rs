@@ -17,7 +17,7 @@ pub const BOSS_ATTACK_RANGE: f32 = 62.0;
 /// enrages.
 const MASK_CRACK_FRACTION: f32 = 0.5;
 /// Seconds the mask-off animation takes (`Boss::reveal` 0 -> 1) once the mask
-/// cracks. Mirrors `MASK_OFF_SECS` in shoggoth-core.js.
+/// cracks. Mirrors `MASK_OFF_SECS` in web/shoggoth-core.js (test-pinned below).
 pub const BOSS_MASK_OFF_SECS: f32 = 3.4;
 
 /// System that drives the shoggoth boss: relentless pursuit (ignoring the normal
@@ -154,6 +154,24 @@ mod tests {
     use super::*;
     use crate::components::{Enemy, Radius};
     use crate::math::Vec2;
+
+    /// The mask-off duration exists on both sides of the wasm boundary (the
+    /// sim's reveal clock here, the mask-crack animation in shoggoth-core.js)
+    /// until the boss's placement moves to Rust (docs/ARCHITECTURE.md roadmap).
+    #[test]
+    fn mask_off_secs_matches_shoggoth_core_js() {
+        let src = include_str!("../../web/shoggoth-core.js");
+        let decl = "export const MASK_OFF_SECS = ";
+        let at = src
+            .find(decl)
+            .expect("MASK_OFF_SECS in web/shoggoth-core.js");
+        let rest = &src[at + decl.len()..];
+        let js: f32 = rest[..rest.find(';').expect("a terminated const")]
+            .trim()
+            .parse()
+            .expect("a number");
+        assert_eq!(js, BOSS_MASK_OFF_SECS);
+    }
 
     fn spawn_test_boss(world: &mut World, pos: Vec2) -> Entity {
         let e = world.spawn();

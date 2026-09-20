@@ -1,3 +1,14 @@
+## Where things are documented
+- This file = the RULES + a short map, loaded into every session: keep it
+  short. Detail lives in `docs/` — read the relevant page BEFORE working in
+  an area, and update it (not this file) when detail changes:
+  `ARCHITECTURE.md` (the four layers, where code goes, known debt, roadmap) ·
+  `RENDERING.md` (every opcode, the why, the GPU measurements) ·
+  `PIPELINE.md` (one frame, as a diagram) · `CODEMAP.md` (what lives where) ·
+  `TESTING.md` (the four suites; where a new test belongs) · `TOOLS.md`
+  (`?viz`, the level editor) · `ECS.md` · `URL_PARAMS.md` ·
+  `SCENARIO_FORMAT.md` · `PROPS_FORMAT.md` · `MUSIC_CODE.md` + `music/`
+
 ## Development Constraints
 - NEVER add any additional dependency
 - TOOLING LANGUAGE: NEW tooling (generators, checkers, build / deploy
@@ -78,388 +89,116 @@
   `cargo test`, app-layer code needs a ~50 s browser round trip. Keep the
   app layer thin
 
-## Rendering Architecture
-- The Rust/wasm engine owns the simulation only; **all rendering is WebGL in JS**
-- Each frame, `Graphics` (src/graphics.rs) records a flat f32 command stream
-  (rects, circles, lines, arcs, text, transforms, robots, the shoggoth) and
-  hands it to `window.frameRender` once per frame — a single zero-copy
-  wasm->JS crossing
-- `renderer.js` owns the canvas/GPU: one batched triangle pipeline, VT323 text
-  via a lazily-built glyph atlas, robots rendered LIVE every frame through the
-  robot-core.js 3D->2D pipeline (`createRobotPipeline(gl)` on the same GL
-  context, into a per-frame scratch tile atlas — continuous animation time, no
-  cache/quantization — as ONE BATCH per flush: `batchBegin` / `batchDraw` /
-  `batchEnd` draw every queued robot into its own 128-texel tile of
-  one shared 1024² pass-1 target (one clear) — through the GPU RIG, see the
-  next bullet — and run ONE tile-aware inked
-  post draw over all the tiles, written AT BLOCK RESOLUTION — `ROBOT_ART` =
-  ceil(128 / 3) = 43 texels per robot, one per pixelate block — into the
-  NEAREST-sampled robot atlas (the same image a 1:1 tile gives; the quad
-  covers 128/3 of those texels)); the boss the same way through shoggoth-core.js
-  (`createShoggothPipeline(gl)`, a bigger 256px scratch tile, opcode SHOGGOTH
-  = 13: `x y sizePx heading reveal time`)
-- THE ROBOT SKELETON EXISTS TWICE in robot-core.js, on purpose. The GPU RIG
-  (`rigVS`, what the game's batches run): the joint hierarchy is evaluated
-  IN THE VERTEX SHADER from 16 per-INSTANCE floats (tile, facing, palette
-  index + `posePlan()`'s scalars — the pose LOGIC stays in JS), the mesh
-  (`buildRigMesh`) holds every box any robot can show — body, bare-hand
-  barrel, ALL THREE held weapons — pre-placed in its joint's frame and
-  tagged with a visibility class, and the boxes a robot does not show
-  (other weapons, the barrel, a severed head) COLLAPSE to one off-clip point
-  (degenerate triangles), so one fixed-size mesh serves every loadout and
-  the whole batch is ONE `bufferData` + ONE `drawArraysInstancedANGLE`
-  (`ANGLE_instanced_arrays`; tiles are placed by a clip-space offset and
-  clipped by a fragment `discard` on the tile-local NDC = the old per-tile
-  scissor, per pixel). The CPU RIG (`_renderRobot`: JS M4 chains → a 27-mat4
-  uniform palette, one draw per robot) serves every single-sprite render
-  (inspector / orbit cameras, the portrait bake) and is the REFERENCE; a
-  batch falls back to it per robot without the extension or for
-  `opts.orbit` / `opts.halfV`, and `?rig=cpu` forces it (the A/B switch for
-  `?perf` traces). The GEOMETRY lives once (`RIG` pivots + `RIG_BOXES`, read
-  by both); what is mirrored is the ORDER OF ROTATIONS per joint chain
-  (`leg()` / `arm()` vs `rigVS` main) — edit both or neither.
-  `tests/e2e/render/rig-parity.js` (in `make check-render`) renders every pose x
-  weapon x a spread of times / palettes / facings through both rigs via
-  `tools/rig-parity.html` (also the human-eye page: CPU | GPU | DIFF;
-  `?bench=N` times both rigs' submit cost) and asserts the art-res atlases
-  match to a few edge texels per tile (float32 shader trig vs float64 JS)
-- shoggoth-core.js extends robot-core's exported `SpritePipeline` (shared
-  pass-1 target + inked post pass + `M4`); the 2D-primitive
-  `Graphics::draw_shoggoth` is only the `?viz` gallery / level-map thumbnail
-- SIZING: the canvas backing buffer is CSS size x devicePixelRatio
-  (`Graphics::sync_size`, polled ~1/s by the game loop — window resizes,
-  browser zoom and monitor-DPR changes are picked up live); the wasm records
-  every frame in CSS-pixel coordinates and publishes the ratio as `data-dpr`
-  on the canvas, renderer.js keeps `uRes` in CSS px while the viewport is the
-  physical buffer, so primitives rasterize at real screen pixels (no browser
-  rescale/blur on HiDPI). The camera derives its zoom from the viewport
-  (`REF_VIEW_W/H`, `ZOOM_SCALE_MIN/MAX` in src/camera.rs: ~constant visible
-  area whatever the window size/aspect, clamped for legibility)
-- Opcode 14 = `POSTFX kind t r g b`: when present anywhere in a frame,
-  renderer.js renders the whole frame into an offscreen scene FBO and draws it
-  through a full-screen post shader. Kinds 0-9 (table mirrored in renderer.js
-  and `Graphics::postfx`): 0 blur-out/dissolve toward the colour, 1 synthwave
-  CRT, 2 VHS tape, 3 drunk sway, 4 CRT tube (barrel + grille), 5 acid trip
-  (hue cycling), 6 datamosh glitch, 7 neon bloom, 8 pixel mosaic, 9 tunnel
-  rush, 10 warp trails (FEEDBACK: a persistent ping-pong accumulator in
-  renderer.js, pulled toward the centre + faded each frame and re-fed the
-  scene's bright saturated pixels = radial long-exposure light trails; the
-  accumulator is cleared whenever the previous frame did not use kind 10),
-  11 UI grey (the modal wash), 12 modal static (colour.rg = a centred
-  panel's half extents: inside passes through, outside blurred + buried
-  under `t` coverage of hard 6-px static), 13 TV static (the frame
-  untouched + the same 6-px static grain over every cell at opacity `t`,
-  no wash — the title screen runs it at 0.075 for a faint dead-channel
-  shimmer; the one kind that is NOT a post pass: drawn as a single
-  alpha-blended quad of a pre-rolled noise texture at the end of the
-  frame, never routing the frame through the scene FBO. `?grain=fold` =
-  an EXPERIMENT kept opt-in: the grain FOLDED INTO THE BATCH FRAGMENT
-  SHADER — blending the noise texel over a colour is the affine map
-  `g(c) = c(1-k) + n*k`, which commutes with alpha blending, so graining
-  every fragment as it lands on the canvas (noise by `gl_FragCoord`; the
-  premultiplied form for a pixel group's composite; off inside groups;
-  only when the frame opens with a BACKDROP and no post pass follows)
-  gives the quad's pixels without the quad's layer —
-  `tests/e2e/render/grain-fold.js` (in `make check-render`) proves the pixels on
-  three live frames. It is NOT the default: it is a TRADE, measured with
-  `?gpuprobe=headroom` on the 2018 MacBook Air (4.12 Mpx) — the quad's layer
-  goes (game frame 8.6 -> 6.8 ms GPU) but the second texture fetch makes
-  every batch fragment ~47% dearer (layer 1.44 -> 2.11 ms), so the frame
-  takes FEWER extra layers (5.6 -> 4.7): break-even ~2 full-screen layers
-  of batch fill. (A first verdict of "clear loss" was taken with the probe
-  panel over the canvas and is void.) LESSON: a fetch added to the batch
-  shader taxes every fragment of every layer; without the flag the shader
-  compiles without the grain code);
-  the `?viz` EFFECTS tab previews them all. Only the last POSTFX of a
-  frame applies
-- Opcodes 15/16 = PIXEL-ART GROUPS: `PIX_BEGIN px w h smooth` …
-  `PIX_END x y` (`Graphics::pixel_begin` / `pixel_end`; `smooth` = 1 via
-  `pixel_begin_smooth`). The principle: never average or
-  point-sample a hi-res image — RASTERIZE AT THE ART RESOLUTION and upscale
-  NEAREST. BEGIN flushes, redirects the batch into a `ceil(w/px) x ceil(h/px)`
-  texel region of a 1024² NEAREST scratch FBO (cleared transparent) and
-  installs the transform `scale(1/px)` so group-local `0..w x 0..h` maps to
-  texels, drawn with hard coverage (no MSAA, no smoothing); inside a group
-  line/outline thickness is clamped ≥ 1 texel and circle radius ≥ 0.5 texel.
-  `px` is in the caller's CURRENT local units (open a group under a scale /
-  rotation and the art pixels scale / rotate with the object). END flushes,
-  restores the outer target + transform (unbalanced saves are discarded) and
-  draws the group as a `(w, h)` quad at `(x, y)` in the outer transform
-  (a rotation in force at BEGIN rotates the finished pixel image), origin
-  snapped to whole pixels of the target it lands in. With `smooth` = 1 the
-  composite skips the origin snap (for a pixel image that moves / rotates
-  continuously — the world group): the quad places SUB-PIXEL so the
-  motion glides, while sampling stays plain NEAREST — hard aliased texel
-  edges, per the art direction (## Design). The composite's v flip is
-  anchored at the INTEGER texel row count (a fractional `h/px` would
-  shift sampling by the ceil remainder, which changes as a camera-sized
-  group resizes — content would swim row by row while panning).
-  `tests/e2e/render/composite-coherence.js` (standalone bun script, like
-  props-stability) asserts the composite numerically at DPR 1 and 2:
-  edge position matches the analytic expectation (incl. FRACTIONAL group
-  sizes — the v-flip regression), slope matches the requested angle,
-  texel interiors stay pure and rigid, and the smooth flag's sub-pixel
-  placement tracks fractional motion while the snapped one quantizes it;
-  `/render-tests/<name>` (serve.py route to render-tests.html) is the
-  human-eye version of the same scenes. Groups NEST up to 4
-  deep (`PIX_DEPTH`): each depth owns its own scratch texture + FBO
-  (lazily created), an inner END composites into the enclosing group's
-  texels (premultiplied), whose grid it snaps to. Groups over 1024 texels
-  per side or past the depth cap fall back to pass-through (their END is a
-  no-op). Robots / the boss can be drawn inside a group (they get quantized
-  twice: their tile px, then the group px). Inside a group renderer.js
-  applies the PIXEL-ART RULE at rasterization time: axis-aligned rects get a
-  whole-texel size (rounded once, min 1) + whole-texel origin, circles of
-  radius ≤ 2 texels a half-texel radius + grid-snapped centre, lines a
-  whole-texel thickness + texel-centre endpoints (a moving shape keeps one
-  stamp and hops texel by texel); circles are always tessellated in target
-  space so a circle under a rotating transform (fan well / hub) is
-  frame-stable. `tests/e2e/render/props-stability.js` (standalone bun script) is the
-  headless acceptance test for this on the PROPS page (rotating layers of
-  DATACENTER, OUTDOOR and LOBBY props: only their boxes may differ between
-  frozen clocks)
-- Opcodes 17/18 = PIXEL SPRITES at ART resolution, upscaled by their quads —
-  never smoothed. 17 PORTRAIT `colorIdx x y sizePx time mode` (screen space,
-  `Graphics::draw_robot_portrait`): the dialogue portrait — BAKED ONCE per
-  (colorIdx, mode) through robot-core (fixed 3/4 camera, frozen neutral idle
-  frame, 64-texel art) into a PERSISTENT NEAREST cache atlas in renderer.js
-  (512², 64px tiles, Map keyed colorIdx*2+mode — NOT the per-frame scratch
-  atlas), then drawn every frame as that rigid pixel image on a quad that
-  gently ROCKS in 2D (~±5° at 1.5 rad/s of `time`, phase also offset by draw
-  position — the Hotline-Miami portrait look; `time` only drives the rock);
-  `mode` 0 = the full-body bust (slightly-elevated camera), 1 = HEADSHOT
-  (camera pushed in and raised to head height — near-eye-level, head +
-  shoulders fill the tile; the dialogue frame's borderless face);
-  render/dialogue.rs draws the JRPG letterbox (a ~52 px black bar at the
-  top, a ~170 px one at the bottom carrying the name + typewriter line
-  from the left edge) plus a RIGHT-SIDE FACE SLAB between the bars — a
-  dark translucent panel with a diagonal-cut left border (accent edge
-  lines; narrow at the top, wide where it meets the bottom bar) carrying
-  the BIG live headshot (mode 1 for robot speakers; SWARM = three small
-  headshots out of phase down the diagonal, CORRUPTOR = the live
-  shoggoth, UPLINK = its glyph). 18 GUNPICKUP
-  `weaponIdx x y angle sizePx` (world space, `Graphics::draw_gun_pickup`,
-  weaponIdx 0 bar/1 pistol/2 machinegun/3 shotgun = robot-core's
-  `GROUND_WEAPON_MODELS`): a weapon lying flat as its 3D model
-  (`RobotPipeline.renderGun`, top-down, laid on its side), BAKED ONCE per
-  weaponIdx at angle 0 (32-texel art, `GUN_ART`) into the same persistent
-  cache atlas as the portraits (negative Map keys) and drawn as that rigid
-  pixel sprite on a quad rotated in 2D by `angle` — equivalent to spinning
-  the model, since the top-down ortho camera only sees up-facing normals;
-  render.rs draws pickups with a stable position-hashed
-  resting angle and thrown weapons with their spin. Unarmed robots
-  (weapon = fist) get a RELAXED pose variant in robot-core's `posePlan`
-  (arms hanging loose w/ splay + elbow bend, easy walk swing); combat poses
-  and armed robots are unchanged
-- Opcode 19 = `PIX_BLIT sx sy sw sh x y` (`Graphics::pixel_blit`): re-draw
-  the rect `(sx, sy)..(sx+sw, sy+sh)` — in the group's local units — of the
-  LAST-closed pixel group as a `(sw, sh)` quad at `(x, y)` in the current
-  transform (NEAREST, origin snapped like PIX_END). The group's texels
-  persist until the next PIX_BEGIN, so a scene rasterized once can be
-  re-placed many times for one textured quad each. (No in-game caller right
-  now: drive.rs's tear bands used it until the drive went full-shader)
-- Opcode 20 = `DRIVE w h t glitch split px dim o0..o8` (`Graphics::drive`):
-  the synthwave drive backdrop (title screen, `?viz` MUSICS preview) as one
-  full-shader pass AT ART RESOLUTION — renderer.js's DRIVE_FS computes
-  every art pixel (sky bands, cut-band sun, stars, digital rain, road
-  rows, palms, tear bands, red/cyan channel split, neon debris)
-  shadertoy-style into a tiny `ceil(w/px) x ceil(h/px)` NEAREST target
-  (~84K fragment evaluations whatever the canvas/DPR; the quantization
-  comes free), then draws it as ONE upscaled textured quad — so
-  fill-rate-poor GPUs pay a texture fetch per screen pixel instead of
-  stacked full-screen layers. src/drive.rs stays the
-  source of truth for the deterministic glitch schedules (unit-tested
-  natively) and ships them as the op args; palm slots / debris blocks are
-  placed per frame in renderer.js (same integer hash as Rust's `hash01`)
-  and handed to the shader as uniforms; the scene geometry constants are
-  MIRRORED between drive.rs's tunables and the shader — edit both or
-  neither. The canvas context is created with `antialias: false`
-  (ALWAYS — aliasing is the art direction, see ## Design): sprites/text/groups
-  are texture quads, and a multisampled
-  default framebuffer ~4x-es the bandwidth of every full-screen layer
-- Opcodes 21/22/23 = the STATIC GEOMETRY CACHE: `STATIC_BEGIN key` …
-  `STATIC_END` / `STATIC_REF key` (`Graphics::static_layer(key, content)`;
-  op values + framing host-tested in `src/static_geo.rs`). Frame-invariant
-  world geometry — the floor TILES + WALLS only — is tessellated ONCE by
-  renderer.js into a persistent VBO under `key`, in WORLD coordinates (the
-  transform in force at the BEGIN is the camera and is excluded: BEGIN swaps
-  the CPU transform for identity, END restores it), uploaded with one
-  STATIC_DRAW bufferData and drawn that frame; every later frame the wasm
-  emits just `STATIC_REF key` (2 floats — `static_layer` skips its closure
-  entirely) and the renderer draws the cached VBO with its then-current CPU
-  transform (the camera: pan/zoom/sway) applied IN THE VERTEX SHADER via the
-  batch program's `uXA`/`uXB` affine uniforms (identity for all dynamic
-  draws — one shader). ONE key live at a time: a new key evicts (deletes)
-  the old buffer; `load_floor` bumps the key (`floor_static_key`), a
-  checkpoint restore keeps it (same floor = same tiles/walls; a death
-  restart re-records — always correct). Sections must be SOLID primitives
-  only (everything samples the white texture — no text/sprites), recorded
-  UNCULLED (`Level::full_bounds`: the cache must hold for every camera
-  position, the GPU clips), and frame-invariant: `update_game`'s world path
-  BYPASSES the cache (plain per-frame draws, no static ops) during the
-  kill flash (per-frame floor tint) and with debug overlays on (I: walls
-  interleave their inflated-boundary outlines); the cached VBO survives
-  bypass frames. The cache DOES work inside the `?pixel=N` world group
-  (punt lifted): the world-space VBO draws into the group's texels through
-  the same vertex-shader affine (there the CPU transform is the group's
-  world->texel mapping — still affine), one buffer serving both modes. Props, elevators, actors, HUD stay dynamic
-  (draw-order safe), and the editor / `?viz` map never records sections
-- Opcode 24 = `BACKDROP w h t px` (`Graphics::backdrop`): the NEON-WAVE
-  VOID behind/outside the level — slow interference waves (periods 10 s+)
-  of heavily-darkened hot pink / cyan / violet over near-black, peak
-  brightness below every floor tone in src/palette.rs (a void, not a light
-  show). DRIVE economics: renderer.js's BACKDROP_FS computes every ART
-  pixel (`px` ~6 CSS px) into its own tiny `ceil(w/px) x ceil(h/px)`
-  NEAREST target, then ONE upscaled opaque quad at the current transform's
-  origin. Drawn FIRST in `render_world`, full-screen in SCREEN space
-  (before the camera / the `?pixel=N` scenery group — both modes, and the
-  kill-flash bypass frames too); the floor tiles (clipped to the floor's
-  rect by `Level::set_size`) + walls paint over it, so it only shows
-  outside the level. Normal frame content under POSTFX (it lands in the
-  scene FBO like everything else). OCCLUSION: the op is
-  `BACKDROP w h t px ex ey ew eh` — `e*` = the screen rect the floor is
-  GUARANTEED to cover (`src/backdrop_clip.rs`, pure + host-tested: the
-  floor rect under `screen = centre + R(roll)(world - focus) zoom` is a
-  slightly rotated rectangle; the rect between the innermost x of its left /
-  right edges and the innermost y of its top / bottom edges lies inside it;
-  inset 2 px + 2 art texels in the `?pixel=N` world, clamped to the screen;
-  `Camera::floor_occlusion`), and renderer.js draws the void only AROUND it:
-  the SAME full-screen quad up to four times under a SCISSOR in whole
-  physical px (re-cut strips interpolate their own UVs and flip NEAREST at
-  texel boundaries — the test caught it), nothing at all when the floor
-  fills the screen. Not shading a fragment cannot cost anything (unlike the
-  grain fold): up to a full layer saved, 1.8 ms on the 2018 MacBook Air.
-  `tests/e2e/render/backdrop-clip.js` (in `make check-render`) renders live
-  frames clipped and full and requires them pixel-IDENTICAL (corner of a
-  floor, `?pixel=3` / `6`, floor 0, DPR 2; several sway phases each);
-  `?backdrop=full` = the A/B switch
-- Opcode 25 = `HEAD colorIdx x y angle sizePx` (`Graphics::draw_head`): a
-  DETACHED ROBOT HEAD lying face-up on the floor — the KICK finisher's
-  trophy. Baked ONCE per colour through `RobotPipeline.renderHead` (the head
-  + visor cubes only, true top-down, tipped ~0.4 rad so the visor band and
-  crown both read, 16-texel art `HEAD_ART`) into the same persistent cache
-  atlas as portraits/guns (Map keys `-10 - colorIdx`) and drawn as that
-  rigid pixel sprite on a quad ROTATED in 2D by `angle` — the physics' live
-  spin glides at native res, actor-layer (after the `?pixel=N` group
-  closes). The sim side is `src/systems/head.rs` (host-tested): the KICK
-  finisher's impact decapitates its victim — the corpse gets `Headless`
-  (rendered as robot-core pose `downed_headless`, head cubes collapsed) and
-  a `DetachedHead` launches along the kick (deterministic jitter/spin from
-  a hash seed), mirrors the thrown-weapon/knockback physics (friction
-  slide to rest, damped wall bounces, sub-stepped vs walls), then persists
-  as a corpse detail under a `MAX_HEADS` oldest-first ring cap; render/robots.rs
-  draws an oil splat + drip trail at the detach point. FINISHER VARIETY:
-  `FinisherSystem::kind_for(weapon, seed)` picks per victim by a
-  deterministic hash — unarmed = POUND / STOMP (two-hit quick stomp) /
-  KICK, bar or empty gun = OVERHEAD / KICK, loaded gun always EXECUTE; the
-  player poses `kick` / `stomp` in robot-core's `posePlan` run on the
-  finisher's own timer (choreographed to `FinisherKind::impacts`)
-- THE OPCODE TABLE exists twice, pinned together: Rust (`mod op` in
-  src/graphics.rs + `OP_ARGS` in `src/graphics/stream.rs`; ops 21-23's
-  values in `src/static_geo.rs`) and JS (`web/ops.js` — read by
-  renderer.js, gpu-probe.js, and parsed from disk by the CommonJS
-  tests/e2e/specs/helpers.js). ENFORCED by `cargo test`
-  (`src/graphics/stream.rs`): `web_ops_js_matches_the_rust_table` (every
-  row's name, position = value, arity), `renderer_js_dispatch_matches_the_table`
-  (every `case N: // NAME` of the renderer's switch, and every opcode has a
-  case) and `every_draw_method_emits_its_declared_arity`. A new opcode = a
-  Rust const + arity, a `web/ops.js` row, a renderer `case` — the tests
-  fail until all three agree
-- `Graphics` is a RECORDER with two surfaces: the browser one (canvas
-  sizing + `flush` -> `window.frameRender`, wasm-only) and the HEADLESS one
-  (`Graphics::new_headless(w, h)` + `take_frame()`, native). Every draw
-  method is plain Rust, so everything that only records — `camera`,
-  `level`, `render` + `render/*`, the `draw` submodules of `props` /
-  `drive` / `ending`, `sparks::render_sparks` — builds and is TESTED
-  natively. Only `input`, `editor_ui`, `audio/engine` and the `app`
-  module are `cfg(target_arch = "wasm32")`: do not gate a module just
-  because it takes a `&Graphics`. `graphics::stream` reads a frame back
-  (`walk`, `check` = the structural validator: arity, finite floats,
-  balanced SAVE/RESTORE + pixel groups ≤ `PIX_DEPTH`, static sections
-  framed + solid-only, TEXT indices; `Affine` / `final_transform` = the
-  mirror of renderer.js's `tTranslate` / `tScale` / `tRotate`).
-  `tests/render_stream.rs` runs the REAL `render::world::render_world`
-  over EVERY floor (cached frame, `REF` frame, debug + kill-flash bypass
-  frames, `?pixel=2|3|6`: one smooth whole-texel group holding the static
-  floor, robots outside it) and every prop at every px; src/camera.rs's
-  tests check `screen_to_world` against the transform `apply()` records. A
-  new draw path gets a stream test there first — ~1 s, vs ~50 s for a
-  browser round trip
+## Rendering (RULES — the full reference is docs/RENDERING.md: read the relevant part BEFORE changing the renderer, a shader or an opcode)
+- The Rust/wasm engine owns the simulation only; **all rendering is WebGL in
+  JS** (`web/`). Each frame `Graphics` (src/graphics.rs) records a flat f32
+  command stream + a text arena and hands both to `window.frameRender` ONCE
+  — a single zero-copy wasm->JS crossing. Coordinates are CSS px; the canvas
+  buffer is CSS x devicePixelRatio (`Graphics::sync_size`, `data-dpr`), so
+  primitives rasterize at real screen pixels
+- `Graphics` is a RECORDER with two surfaces: the browser canvas (wasm-only:
+  `new`, `sync_size`, `flush`) and HEADLESS (`Graphics::new_headless(w, h)` +
+  `take_frame()`, native). Every draw method is plain Rust, so everything
+  that only records builds and is TESTED natively — do NOT gate a module
+  `cfg(target_arch = "wasm32")` just because it takes a `&Graphics`.
+  `src/graphics/stream.rs` reads a frame back (`walk`; `check` = arity,
+  finite floats, balanced SAVE/RESTORE + pixel groups <= `PIX_DEPTH`, static
+  sections framed + solid-only, TEXT indices; `Affine` = renderer.js's
+  transform stack). `tests/render_stream.rs` runs the REAL
+  `render::world::render_world` on every floor + every prop at every px. A
+  new draw path gets a stream test there FIRST (~1 s vs ~50 s in a browser)
+- THE OPCODE TABLE (26 ops; what each does: docs/RENDERING.md) exists twice,
+  PINNED by `cargo test` (`src/graphics/stream.rs`): Rust (`mod op` in
+  graphics.rs + `OP_ARGS` in stream.rs; ops 21-23 in `src/static_geo.rs`) and
+  JS (`web/ops.js`: `["NAME", args]` rows, row index = opcode — read by
+  renderer.js + gpu-probe.js, parsed from disk by the CommonJS
+  tests/e2e/specs/helpers.js). A new opcode = a Rust const + arity, an
+  `ops.js` row, a `case N: // NAME` in renderer.js: the tests fail until all
+  three agree
+- MIRRORED ACROSS THE BOUNDARY — edit both or neither (pinned where noted):
+  the POSTFX kind table (`Graphics::postfx` doc <-> renderer.js + the `?viz`
+  EFFECTS list in src/app/viz/effects.rs); the DRIVE scene geometry
+  (`src/drive.rs` tunables <-> `DRIVE_FS`) and its integer hash (`hash01` <->
+  `driveHash`); the robot index tables (src/render/robots.rs <-> renderer.js
+  `ROBOT_COLORS` / `ROBOT_POSES` / `ROBOT_WEAPONS`); the rig's ROTATION ORDER
+  per joint chain inside web/robot-core.js (`leg()` / `arm()`, the CPU rig =
+  the reference <-> `rigVS`, the GPU rig; `tests/e2e/render/rig-parity.js`);
+  `PIX_DEPTH` (stream.rs <-> renderer.js); `BOSS_MASK_OFF_SECS` <->
+  `MASK_OFF_SECS` (PINNED, src/systems/boss.rs)
+- PIXEL-ART GROUPS (`pixel_begin` / `pixel_end`, ops 15/16): never average or
+  point-sample a hi-res image — RASTERIZE AT THE ART RESOLUTION, upscale
+  NEAREST. Groups nest <= 4 deep, <= 1024 texels a side (beyond = pass-through).
+  `smooth` = sub-pixel PLACEMENT only, never soft sampling. A camera-sized
+  group must be a WHOLE number of texels (the composite's v flip is anchored
+  at the integer row count — a fractional height makes content swim;
+  `composite-coherence.js` + `the_pixel_world_is_one_smooth_group…`). Actors
+  draw AFTER the `?pixel=N` world group closes: never re-quantize a moving
+  sprite onto the world grid
+- THE STATIC GEOMETRY CACHE (`Graphics::static_layer`, ops 21-23; floor tiles
+  + walls only): content must be SOLID primitives (no text / sprites),
+  recorded UNCULLED (`Level::full_bounds`) and FRAME-INVARIANT — anything
+  that varies per frame (kill-flash tint, debug overlays) must BYPASS it and
+  draw plainly. One key live; `load_floor` bumps it
+- THE BACKDROP's occlusion rect (`src/backdrop_clip.rs`, op 24) must stay
+  CONSERVATIVE (only what the floor is guaranteed to cover); `backdrop-clip.js`
+  requires clipped == full, pixel for pixel
+- PERF RULES, each one measured on the 2018 MacBook Air (numbers + method in
+  docs/RENDERING.md): `antialias: false` ALWAYS; never add a texture fetch to
+  the batch fragment shader (it taxes every fragment of every layer — the
+  `?grain=fold` lesson); a full-screen layer is the unit of GPU cost (~1-2 ms
+  there) — prefer computing at ART resolution into a tiny target + ONE
+  upscaled quad (DRIVE / BACKDROP economics); batch flushes ORPHAN the buffer
+  (`bufferData`, never `bufferSubData` into a live store); the context is
+  `alpha: true` on Apple; NEVER leave a DOM element over the game canvas
+  during play (it changes how the browser presents the canvas and ~doubled
+  GPU cost in measurements); `initRenderer` stays ONE closure (decision +
+  evidence: docs/ARCHITECTURE.md). MEASURE with `?gpuprobe` BEFORE optimizing
+  a layer; `?perf` + **P** = the CPU trace (viewer: tools/perf.html)
+- Robots render LIVE every frame through web/robot-core.js as ONE instanced
+  batch (the GPU rig); the boss through web/shoggoth-core.js; portraits, guns
+  and heads are baked ONCE into a persistent NEAREST atlas and drawn as rigid
+  pixel sprites rotated in 2D. Where their animation should live long-term:
+  the Roadmap in docs/ARCHITECTURE.md
 
-## Repo layout (post-`proto/`)
-- `web/` = the hand-written JS RUNTIME (plain ES modules, no build step in dev — edit + refresh; "renderer.js" / "robot-core.js" anywhere in this file mean these): `renderer.js` (the WebGL renderer: `initRenderer` is ONE closure ON PURPOSE — its ~30 mutable vars (`m`, `vCount`, `pix`, `batch*`, …) are read by nearly every inner function and by the per-vertex hot path, so it is not split into a shared-context object; only its pure DATA is factored out), `renderer/shaders.js` (every GLSL source, ~600 lines, no runtime string building), `ops.js` (THE one JS copy of the opcode table: `["NAME", args]` rows, row index = opcode → `OP`, `OP_ARGS`, `TEXT_SEP`; dependency-free), `robot-core.js` (the 3D->2D robot pipeline), `shoggoth-core.js` (the boss pipeline, built on robot-core), `gpu-probe.js` (`?gpuprobe`). `open_miami.js` + `open_miami_bg.wasm` at the root are GENERATED by wasm-bindgen (gitignored). DEPLOY ONLY: `make bundle` (`bun build`, no dependency) follows `web/renderer.js`'s imports into ONE minified module written at the same relative path (261 KB of sources → ~109 KB, one request; index.html unchanged); `.github/workflows/wasm-build.yml` stages it + copies `robot-core.js` / `shoggoth-core.js` unbundled because `tools/inspector.html` / `tools/rig-parity.html` import them directly
-- Root: `index.html`, `serve.py` (dev server, no-store + level-editor write API + the `/render-tests/<name>` route), `docs.html` (the `/docs` page: the RENDERING PIPELINE map — hand-built HTML/CSS mirroring the mermaid source in `docs/PIPELINE.md`, which GitHub renders — plus the persistent-vs-per-frame table, the cost model and links to every doc; serve.py routes `/docs` to it, `/docs/*.md` stay real files), `render-tests.html` (RENDER TESTS: a renderer-only harness — no wasm, no game — that drives `initRenderer`/`frameRender` with hand-built command streams so the smooth pixel-group composite can be eyeballed in isolation on any GPU; tests `square` (rocking black square), `sway` (the exact game sway over a checker/walls scene), `split` (smooth vs hard composite side by side); tweak via `?px=&amp=&period=&smooth=&zoom=`)
-- `tools/`: the `?viz` panels — `inspector.html` (character inspector: `?kind=robot&color=…` / `?kind=shoggoth&phase=masked|enraged`, `&embed=1` for the SPRITES tab; 3D orbit + 2D top-down views), `levels.html` + `levels-editor*.js` (level + scenario editor, LEVELS tab) — and `gen_levels.py`, `gen_props.py`
-- `levels/`: `floor_00.json` (the ground-level cold open: gate / parking lot, passive crowd), `floor_01..13.json`, `floor_13h.json`, `index.json` — the floors' single source of truth (format: `docs/SCENARIO_FORMAT.md`). Level *index* = position in `index.json` (sorted by id: index 0 = floor 0); `?floor=N` takes the floor **id** A floor may carry `"props": [{ "kind", "x", "y", "rot" (deg, cw), "size" (world units, default 100) }]` = placed set dressing (`kind` = a `PROP_NAMES` snake_case id, validated by `gen_levels.py` → `FloorDef.props: &[PropPlacement]`); DECORATION ONLY — drawn in-game by `src/render/floor_props.rs` (`render_floor_props`, called in `update_game` after the walls and before the actors, inside the `?pixel=N` world group), no collision
-- `src/lib.rs` is just the module list. THE BROWSER APP is `src/app.rs` + `src/app/` (wasm-only): `app.rs` = `GameState` (its fields are private to the `app` tree), the screen dispatch `update`, floor load / checkpoints, `start()` + the rAF loop; submodules `use super::*` and add their own `impl GameState` blocks — `game_loop` (`update_game`: input → `sim::GameSystems::step` → scenario bridge → HUD; boss intro; ending), `world_render` (the WRAPPER of `render::world::render_world`: owns the kill-flash / spark-expiry mutations, samples the fire input, builds the `WorldView`), `menus` (level select, modal chrome, SETTINGS / ABOUT / PAUSE), `viz` + `viz/{effects,props_page,musics}` (the `?viz` toolbox), `url`, `perf`. Drawing modules live in `src/render.rs` + `src/render/{world,robots,comms,dialogue,floor_props,title}.rs` (`world` = the real `render_world` over a read-only `WorldView`; `robots` = the actors layer, pose / colour tables; `title` = the neon glyphs — `tools/gen_title.py` parses `title_glyph` out of THAT file); `hud_ammo.rs` / `hud_msg.rs` are pure HUD STATE machines (host-tested), drawn by `render.rs`
-- `src/levels_data.rs` is GENERATED from `levels/*.json` by `make gen-levels`; `make check-levels` validates + checks it is current. Never hand-edit it.
-- MUSIC IS CODE: one song = one Rust file in `src/audio/songs/` — the
-  SOUNDTRACK is 7 tracks with ROLES (`docs/music/TRACKS.md`): NEON
-  CHECKSUM (`title_song`), WALK DON'T RUN (floor 0), SERVICE CORRIDOR
-  (1–4), THERMAL MASS (5–8), SIGNAL ROT (9–12), CROWN OF STATIC (13 +
-  13½) via `song_for_floor(floor_id)`, COAST HOME (`ending_song`, the
-  calmest); 2:00–4:34 each, test-pinned (`tracks_run_the_briefed_length`,
-  `soundtrack_roles_follow_the_briefs`, `the_duck_follows_the_genre`).
-  Written with the authoring API in `src/audio/compose.rs` (host-tested)
-  — riffs are FUNCTIONS (`steps("0 . 3 .")` lanes, `transpose` / `repeat`
-  / `cat` / `every_other_bar` / `stretch` / seeded `sparsify`
-  combinators, `section(label, parts)`, `SongBuilder::arrange`, refrains
-  as functions called again with `Intensity` args; songs can share
-  material — the ending quotes `neon_checksum::motif()`); `build()`
-  produces the `SongSpec` structures the sequencer plays (`SONGS` is a
-  LazyLock in songs.rs). No JSON, no generator — `docs/MUSIC_CODE.md`
-  documents the API AND the engine's limits for composers (fixed note
-  lengths per channel, 3 drums, straight 16ths, no reverb on the music
-  bus, per-song intensity, per-section-channel velocity); genre guides
-  (each with an "Engine reality" section) + track briefs in
-  `docs/music/`. Voice presets incl. darksynth's `Wave::{Supersaw,
-  DrivenBass, DarkPad}` and a host-tested SIDECHAIN DUCK (`Section::duck`:
-  melodic bus gain dips to 0.35 on each kick, 0.3 s linear recovery;
-  drums bypass; baked buffers stay duck-free — it's bus automation). Bake
-  budget: each song's `music_keys` voice set stays ≤ 64 (test-pinned; the
-  tracks use 15–34). The audio module tree: `src/audio.rs` (root) →
-  `audio/songs.rs` (song types, `Wave`, in-key pitch math, the pure
-  `Playhead` sequencer + `music_keys`, the role pickers; host-tested),
-  `audio/compose.rs`, `audio/songs/*.rs`, `audio/sfx.rs` (SFX catalogue +
-  bake specs, host-tested), `audio/engine.rs` (the WebAudio
-  `AudioEngine`, wasm-only: the struct, consts, lifecycle + small helpers)
-  + `audio/engine/{sfx_play,bake,voices,music,bus,sms_tables}.rs` — one
-  `impl AudioEngine` block per concern (the `play_*` / `synth_*` recipes;
-  the offline pre-render queue; the SFX building blocks + tone / noise
-  primitives; the tracker transport + look-ahead scheduler + note voices;
-  the persistent music / SFX buses + impulse responses; the generated SMS
-  resynthesis tables)
-- Cold-open engine bits (floor 0): `src/systems/passive.rs` — passive civilians (`"type": "passive"` spawns → `AIState::Passive`, brief in `AI.passive: PassiveAI`; the AI system delegates to `passive::update_passive`; `alert_passives` / any damage flips them hostile; un-alerted passives are BYSTANDERS, not rogues: `scenario::count_rogues` / `game::count_alive_enemies` skip them, so the HUD count and `kills` ignore them and `all_dead` — which also needs at least one kill — cannot fire on an un-alerted crowd); scenario actions `alert` / `hold` / `look_at` (`scenario.rs` `AlertTarget` / `HoldDef` / `LookAtDef`; `ScenarioState::hold_active/hold_caption/look_at`; `app/game_loop.rs` `update_game` skips player input + `stop_player` while held, `render_hold_caption`, `Camera::set_cinematic`); `FloorDef.surface` (`src/level.rs` renders checker|asphalt|marble|concrete|grating); `ElevatorKind` lift|door|gate on entry/exits (`render/comms.rs` `draw_doorway` / `draw_gateway`); `"to": "surface"` → `scenario::SURFACE_EXIT` (floor id 0 is real now)
-- `src/props.rs` + `src/props/` (split BY FAMILY — `props.rs` keeps `PROP_NAMES` (which `tools/gen_props.py` parses), the families, the layer / pixel types, settings + snapping and the tests; `props/layers.rs` = `PROP_LAYERS`, joined at compile time by a `const fn` from `props/layers/{datacenter,outdoor,lobby}.rs`; `props/draw.rs` = the shared palette + primitives, the `draw_prop_ex` driver and the `draw_prop_layer` dispatcher, with the props themselves in `props/draw/{datacenter,outdoor,lobby}.rs` — a NEW prop = a name in `PROP_NAMES`, a table entry + a draw fn in its family's two files, a dispatcher arm): the PROP library, 60 props in three FAMILIES (`PROP_FAMILIES` = contiguous id ranges: DATACENTER 0–23 the server-floor set, OUTDOOR 24–41 the gate / parking lot for the planned floor 00 — cars, charge pad, main gate with its swing arm, guard booth, bollards, planter, lamp post, road decals, drone pad, scooter rack, drain, holo billboard, dumpster —, LOBBY 42–59 the welcome hall — reception desk, turnstiles, scanner arch, benches, plant, lobby holo, directory totem, vending, coffee corner, charge lockers, floor logo, call panel, velvet rope, extinguisher, credit kiosk, holo clock, welcome mat; `family_range` / `prop_family`; new props are APPENDED, ids are persisted in props/props.json) drawn imperatively from primitives as LAYERS (`PROP_LAYERS`: `LayerDef { name, pivot, bounds, rot: LayerRot::{None, Static(deg), Spin{hz}, Sway{deg,hz}, Anim(fn)}, pixel: PixelMode::{Before, After} }`; `draw_prop_layer(g, kind, layer, t)` draws one layer in its own frame; `draw_prop_ex(g, kind, center, size, t, px, &PropDrawOpts{visible, modes})` is the driver — per layer `translate(pivot)` then, with `px >= 2` (design units of the 100-box), a pixel group per layer either BEFORE its rotation (rotate, then group: the pixel image turns as a whole) or AFTER (group in the parent frame, rotate inside: re-rasterized on the parent grid); `px <= 1` = plain drawing, identical to the pre-layer look; `draw_prop` = `draw_prop_ex` with the saved settings — what `render/floor_props.rs` calls for a floor's placed props)
-- `props/props.json` = the SAVED per-prop `px` + per-layer before/after (format: `docs/PROPS_FORMAT.md`), written by the `?viz` PROPS page SAVE (`PUT /props/props.json`, serve.py, same token as levels) and compiled by `make gen-props` into `src/props_data.rs` (`PROP_SETTINGS`; GENERATED — never hand-edit); `make check-props` (in `make verify`) validates + checks it is current. `tools/gen_props.py` reads `PROP_NAMES` from props.rs for the order / kind ids (`snake_case` of the display name); layer names are checked by a props.rs unit test
-
-## `?viz` toolbox (one entry point)
-- `/?viz` tabs: SPRITES (two pages: CHARACTERS — click one → 3D/2D inspector
-  iframe — and PROPS — the animated prop library from
-  `src/props.rs`, wasm-drawn grid + big preview, one page per FAMILY
-  (DATACENTER / OUTDOOR / LOBBY buttons right of SAVE; the 4-column grid is
-  sized by the largest family, switching pages selects that family's first
-  prop): PIXEL − / + edits the
-  SELECTED prop's art-pixel size (1 = off … 10, design units; every tile
-  draws at its own prop's px; tiles + preview are drawn at
-  `props::snap_size` = an integer texel→device-pixel magnification), GRID overlays the prop's art grid on the
-  preview, the LAYERS list under the preview has per layer an eye (hide in
-  the preview), S (solo) and a BEFORE / AFTER pixel-mode toggle, SAVE PUTs
-  `props/props.json` via `window.vizSaveProps` (index.html; token prompt +
-  result toast) — then run `make gen-props`), MUSICS (two pages,
-  TRACKER / SOUNDS buttons like SPRITES': TRACKER — songs + the live
-  step-sequencer — and SOUNDS — the one-shot SFX board),
-  LEVELS (the NATIVE level editor, see below), EFFECTS (previews
-  every POSTFX shader kind + the 2D shoggoth glitch)
-- `/?floor=N` starts the game directly on floor id N (0 = the gate / parking lot cold open, 14 = 13½); music starts on the first key/click. Add `&pixel=N` (N ≥ 2 WORLD units per art pixel, no gameplay change) to rasterize the SCENERY of `update_game` (floor, walls, props, elevators) at art resolution the vibe's way: the group's texel grid is WORLD-ANCHORED (its origin snaps to whole art pixels of the world, so panning never re-phases the texels) with a bleed margin, only `translate(-focus)`-style placement lands inside the group, and the camera's composite half (`Camera::apply_composite`: centre + drift + roll + zoom) sits OUTSIDE it — the sway moves/rotates the finished pixel image at native res through the sub-pixel composite (`pixel_begin_smooth`: no origin snap — gliding motion, NEAREST sampling, hard aliased edges per the art direction). The MOVING actors (robots, boss, bullets, weapons, gate arrow) draw AFTER the group closes, straight under the camera transform: they are already baked pixel sprites and must MOVE SMOOTHLY at native resolution — re-quantizing them onto the world grid makes a walking robot hop world-texel by world-texel and the whole scene FEEL snapped even though the backdrop glides. HUD/comms stay crisp (`pixel_world` in GameState); the static geometry cache stays active inside the group. Add `&noise=0` to turn the TV-static film grain off (title + in-game — the clean-image A/B switch). ALL url params: `docs/URL_PARAMS.md`. Add `&debug` (`/?floor=14&debug`) to enable the debug tooling: with debug overlays on (I), **K** purges all rogues (incl. the boss; debug/e2e helper) and **B** cracks the boss's mask (drops it to the enrage threshold so the live mask-off / raw form can be previewed)
-- The ending (`src/ending.rs`): extracting through a `"to": "surface"` exit (`scenario::SURFACE_EXIT`; 13½'s car) → EXFILTRATED card → the `extracted` scenario step's UPLINK comms until the feed idles → 2.5 s blur-out (POSTFX 0) → `GameScreen::Ending` credits (the `CREDITS` const list) over the ELEVATOR RIDE HOME (`ending::render_ride`: the car top-down at dead centre, the live coral robot idling in it, shaft lights streaking outward) under POSTFX 10 WARP TRAILS (`Ending::warp_t` ramps in over ~6 s, holds, eases to an idle glow as the roll settles); Enter/Esc → level select
-- Level editor SAVE = `PUT /levels/<file>.json` to serve.py, guarded by the `X-Editor-Token` header (token from `$EDITOR_TOKEN` or the gitignored `.editor-token`, printed at server start): the native editor through `window.vizSaveLevel(file, json)` (index.html, same token prompt + toast as `vizSaveProps`; then `make gen-levels`), the web editor directly (its COPY DIFF gives a `patch -p1` unified diff).
-
-## Native level editor (`/?viz` → LEVELS)
-- `src/editor.rs` (host-testable, no browser): the DOCUMENT — `EditableFloor` (`from_def(&FloorDef)`; owned strings / Vecs for entry + exits (`Car`), walls, `Room`s, `Zone`s, `Spawn`s, `Pickup`s, `PropPlacement`s; the `scenario` steps are carried through VERBATIM as `&'static [StepDef]` — the web editor owns those), `Item` (what is selectable: `Entry | Exit(i) | Wall(i) | Room(i) | Zone(i) | Spawn(i) | Pickup(i) | Prop(i)`; `rect_of` / `set_rect` / `translate` / `delete` / `hit_test` (smallest zone/room wins, props on top) / `add_*` (unique `room1`/`zone1`/`exit1` ids)), `validate(known_ids)` (what `gen_levels.py` rejects + spawns in walls + scenario refs to zones / exits), `EditorDoc` (undo / redo snapshot stacks, `UNDO_DEPTH` = 100, `begin_edit()` before every user-level mutation, `dirty()` vs the last-saved baseline), and the hand-written JSON writer (`Json` tree, `to_json()`: the documented key order, `props` omitted when empty, 2-space indent, small containers inlined ≤ 100 columns) — `levels_round_trip_byte_for_byte` proves every checked-in floor re-saves identically (so does the web editor's `stringify`), i.e. both editors can round-trip each other's files. No serde, no crates.
-- `src/editor_ui.rs` (wasm-only): the immediate-mode UI, one `Editor` in `GameState` (`update(graphics, mouse, click, now)` from `update_visualizer` when the LEVELS tab is active, drawn UNDER the tab bar). Layout: tab bar (y 14..60) → row 1 (`<` FLOOR `>` picker, FIT, GRID, SNAP, UNDO, REDO, SAVE (lit when dirty), SCENARIO (web) → `viz_inspect("levels")` iframe positioned at `MAP_TOP` = 150 by index.html) → row 2 (tools `1 SELECT … 9 PROP` + the active tool's option) → the map pane (view = `pan + world * zoom`; the floor through the REAL renderer: `Level` tiles clipped to the floor, `render::draw_wall`, `render::comms::draw_elevator_car` (`CarView` + `car_back_side`), `render::floor_props::draw_placed_prop` live at their px; screen-space overlays: room washes / labels, cyan zone outlines + ids, spawn diamonds by type colour, gold weapon pickups, coral player start, selection + 8 resize handles, hover, rubber band, prop ghost) → the right panel (`PANEL_W` = 260: SELECTION properties strip — geometry, `id` / `label` text fields (click, type, Enter commits, Esc cancels; `input::typed_text()`), exit `to` −/+ and OPEN/CLOSED, spawn type, weapon, prop rot ±90 / size ±10, DELETE — then the PROP PALETTE (family pages from `PROP_FAMILIES`, live `draw_prop` thumbnails, click to pick + brush rot / size) or the KEYS map) → the status line (`validate()` result or the counts, transient notes, cursor world position + zoom).
-- Keys: `1-9` tools · wheel zoom (`input::wheel_delta()`, canvas `wheel` listener) · `F` fit · middle / right drag or Space+drag = pan · `G` grid · `N` snap (10 u) · click / drag = select + move, handles resize · arrows nudge (Shift = 1 u) · `Del` / `Backspace` delete · `T` / `Q` cycle spawn type / weapon · `R` (Shift = −90) rotate the selected prop or the brush, `[` `]` size ±10 · `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` undo / redo · `Esc` cancel drag / deselect / back to SELECT.
-- SAVE = `validate` (refuses with the first problem on the status line) → `vizSaveLevel(file, to_json())` → toast "SAVED … — now run: make gen-levels". Floors keep their edits while you switch between them (one `EditorDoc` per floor, loaded lazily).
+## Code map (short — the detailed tour is docs/CODEMAP.md; tools + editor: docs/TOOLS.md)
+- `src/lib.rs` is just the module list. SIM: `ecs/`, `components/`,
+  `systems/` (incl. `passive.rs` bystanders, `head.rs`, `finisher.rs`),
+  `scenario.rs`, `game.rs`, `sim.rs` (the SHARED tick `GameSystems::step` +
+  the headless `Simulation`), `pathfinding.rs`, `collision.rs`. RENDER:
+  `render.rs` + `render/{world,robots,comms,dialogue,floor_props,title}.rs`,
+  `level.rs`, `camera.rs`, `props.rs` + `props/` (by FAMILY:
+  `layers/{datacenter,outdoor,lobby}.rs` + `draw/…`), `drive.rs`,
+  `ending.rs`, `sparks.rs`; `hud_ammo.rs` / `hud_msg.rs` are HUD STATE
+  machines. APP (wasm-only): `app.rs` + `app/{game_loop,world_render,menus,
+  viz,viz/*,url,perf}.rs`, `editor_ui.rs`, `input.rs`. AUDIO: `audio/`
+  (music is CODE: one song = one Rust file in `audio/songs/`, authoring API
+  `audio/compose.rs`, docs/MUSIC_CODE.md; the WebAudio engine =
+  `audio/engine.rs` + `audio/engine/*`, wasm-only, not host-tested)
+- `web/` = the hand-written JS runtime (plain ES modules, no build step in
+  dev): `renderer.js` + `renderer/shaders.js`, `ops.js`, `robot-core.js`,
+  `shoggoth-core.js`, `gpu-probe.js`. Root `open_miami.js` / `_bg.wasm` are
+  GENERATED (gitignored). `make bundle` (`bun build`) = DEPLOY ONLY: one
+  minified `web/renderer.js` at the same path (.github/workflows/wasm-build.yml)
+- GENERATED RUST — never hand-edit: `src/levels_data.rs` from `levels/*.json`
+  (`make gen-levels`; format docs/SCENARIO_FORMAT.md; level INDEX = position
+  in `levels/index.json`, `?floor=N` takes the floor ID) and
+  `src/props_data.rs` from `props/props.json` (`make gen-props`;
+  docs/PROPS_FORMAT.md). `make check-levels` / `check-props` are in `verify`
+- FILES THAT TOOLS PARSE (moving / renaming breaks a generator):
+  `PROP_NAMES` in `src/props.rs` (tools/gen_props.py), `title_glyph` in
+  `src/render/title.rs` (tools/gen_title.py -> index.html's loading SVG),
+  the `TABLE` rows of `web/ops.js` + `MASK_OFF_SECS` in
+  `web/shoggoth-core.js` + the `case N: // NAME` labels of `web/renderer.js`
+  (cargo tests)
+- NEW PROPS are APPENDED (ids are persisted in props/props.json): a name in
+  `PROP_NAMES`, a table entry + a draw fn in its family's two files, a
+  dispatcher arm in `props/draw.rs`
+- TOOLS: `/?viz` (SPRITES / MUSICS / LEVELS / EFFECTS — docs/TOOLS.md),
+  `/?floor=N[&pixel=N][&debug][&noise=0][&precompute=0]` (ALL flags:
+  docs/URL_PARAMS.md), `serve.py` (dev server :8080, no-store, the editor
+  write API guarded by `X-Editor-Token`), `/docs`, `/render-tests/<name>`
+  (renderer-only harness), `tools/` (the `?viz` panels, generators, perf
+  viewer). Editor SAVE -> then run `make gen-levels` / `make gen-props`
 
 ## Verification Requirements
 - ALWAYS run `make verify` before declaring any task complete or saying "we're done"
@@ -481,7 +220,10 @@
 - Two browser suites, both excluded from `make verify` and run by
   `make verify-all` (= `verify` + `check-e2e` + `check-render`) and by
   `.github/workflows/e2e-tests.yml` (one matrix job each):
-  - `make check-e2e` — the Playwright specs (`tests/e2e/specs`)
+  - `make check-e2e` — the Playwright specs (`tests/e2e/specs`: floor-1
+    gameplay + the lift to floor 2, and `all-floors.spec.js` = EVERY floor
+    boots, keeps rendering well-formed frames and logs no error — the JS
+    side of what `tests/render_stream.rs` proves natively)
   - `make check-render` — the standalone renderer acceptance scripts (in
     `tests/e2e/render/`, apart from the Playwright specs; they share
     `tests/e2e/node_modules`)
@@ -501,79 +243,13 @@
 - Prefer running the suites via `make check-e2e` / `make check-render` — they
   wire up the toolchain, `ulimit -c 0` (no GB-sized Chromium core dumps in
   tests/e2e/) and the timeouts for you
-- Both the Makefile and the Playwright config enforce a 60-second timeout so
-  a run cannot hang indefinitely; the render scripts get `timeout
+- Timeouts so a run cannot hang: Playwright caps each TEST at 60 s, the
+  Makefile caps the whole run at `E2E_TIMEOUT` (180 s — measured: the 3
+  gameplay specs ~32 s + `all-floors.spec.js`, one smoke test per floor of
+  levels/index.json, ~42 s serially; it loads floors with `?precompute=0` so
+  they skip the audio pre-render gate, while the gameplay specs keep the
+  real boot path); the render scripts get `timeout
   $(RENDER_TIMEOUT)` (180 s) each
-
-## Perf Tracing (`?perf`)
-- Opt-in per-frame trace across engine / boundary / renderer: add `perf` to
-  the URL (e.g. `/?floor=2&debug&perf`), play a bit, press **P** — the last
-  300 frames are logged to the console as one JSON blob (and copied to the
-  clipboard, best-effort). Paste (or drag-drop) it into `tools/perf.html`
-  for a stacked per-frame chart (with the vsync GAP band + 16.7/33.3 ms
-  guides), a click-to-open single-frame flame timeline, and avg/p95/max
-  summaries. `window.__perfDump()` returns the same JSON string
-- Pieces: the collector `window.__perf` (index.html plain script:
-  `perfSpan`/`perfCount`/`perfFrameStart`/`perfFrameEnd`, all no-ops without
-  the flag), the wasm `perf` module in src/app/perf.rs (drop-guard spans `sim`,
-  `scenario`, `record`, `flush`; the Rust-side `enabled()` guard means a
-  disabled run never crosses the boundary), and renderer.js sub-spans
-  (`walk`, `sprites`, `submit`, `postfx` — they nest inside `flush` on the
-  timeline) + counters (`cmds`, `draws` via a gl.drawArrays shim installed
-  only when tracing, `fbos` = render-target switches via a gl.bindFramebuffer
-  shim likewise, `robots`). Skipped FPS-cap frames never open a frame
-
-### GPU probe (`?gpuprobe`)
-- `?perf` only times the CPU. When the CPU spans are ~1 ms and the frame
-  `gap` still sits at ~30 ms the machine is GPU-BOUND (the 2018 MacBook Air's
-  UHD 617 at 2880 px wide is), and the frame loop is its own GPU timer: the
-  browser paces `requestAnimationFrame` at the GPU's finish rate. `?gpuprobe`
-  (`tools/gpu-probe.js`, wrapped around `frameRender` by renderer.js only
-  when the flag is present) runs a KNOCKOUT experiment on that: ~2 s per
-  configuration, 2 rounds, it REWRITES the command stream (walking it with
-  the renderer's own `OP_ARGS`) to strip one class of work — BACKDROP, POSTFX
-  13, all POSTFX, `STATIC_REF`, RECTs covering ≥ 25% of the screen, ROBOT /
-  SHOGGOTH, TEXT, everything but CLEAR — and reports
-  `period(baseline) − period(knockout)` per class, the baseline re-measured
-  between rounds (thermal drift) and "clear only" = the floor cost of
-  presenting the canvas at all. STRESS rows go past the vsync ceiling a
-  knockout hits: `+1 backdrop` / `+1 static geo` / `+1` / `+3 blend rect`
-  draw a layer TWICE (marginal cost), and `clear +6` / `clear +10 rect`
-  give the header's `per full-screen layer` (slope) and `FIXED cost of
-  presenting the canvas` (intercept). `STATIC_BEGIN..END` recordings always
-  pass through whole (recorded once per floor). Result: on-screen table,
-  console, clipboard, `window.__gpuProbe`. Measure with it BEFORE optimizing
-  a layer. `?gpuprobe=fixed` = the QUICK probe (~10-15 s): just the fixed
-  presentation cost + the per-layer cost (CLEAR + N invisible rects, N
-  doubled until the period passes 24 ms so fast GPUs are measurable too,
-  panel hidden while measuring) — for A/B-ing `?ctx=` flags across machines.
-  `?gpuprobe=curve` = the whole ladder (CLEAR + N rects, slope per rung);
-  `?gpuprobe=headroom` = the ladder ON TOP OF THE REAL GAME FRAME: how many
-  extra full-screen layers the scene takes before leaving the vsync floor +
-  the frame's actual GPU time from the fit past the knee.
-  OBSERVER EFFECT (found by the curve mode): an HTML ELEMENT OVER THE CANVAS
-  changes how the browser presents it — on the MacBook Air the full probe's
-  visible result panel roughly DOUBLED everything it measured (bare clear
-  ~4.5 -> 9.6 ms, layer 1.06 -> 1.8 ms). Every mode now hides its panel
-  while measuring (progress in the tab title). Absolute ms figures recorded
-  before that (the "9.6 ms fixed cost", "1.8 ms per layer" quoted here) are
-  the WITH-OVERLAY regime: the relative A/B verdicts stand, the absolute
-  numbers are ~2x pessimistic for the real game, which has nothing over its
-  canvas. COROLLARY for the game itself: never leave a DOM element on top of
-  the game canvas during play
-- WHAT IT FOUND on that MacBook Air (30 -> 60 fps, none of it fill-rate
-  tuning): (1) the batch uploaded every flush with `bufferSubData` at offset
-  0 into one 2 MiB store — a write into a buffer the previous draw still
-  reads = a stall per flush, ~20 per frame, 31 -> 19 ms; flushes now ORPHAN
-  (`bufferData` of exactly the filled vertices; `?vbo=sub` = the old path).
-  (2) the context's `alpha: false` cost 3.6 ms of FIXED presentation time
-  per frame (13.3 -> 9.7 ms; an alpha-less buffer is emulated over Apple's
-  always-alpha IOSurfaces): on Apple platforms the context is `alpha: true`
-  and the blend keeps canvas alpha at 1 (`CTX_ALPHA` / `pixBlend`; `?ctx=`
-  A/B flags in docs/URL_PARAMS.md). Reference numbers there: 1.8 ms per
-  full-screen layer at 2880x1046, opaque or blended alike; the floor cache
-  is ONE layer deep; `?pixel=N` is cost-neutral (its composite quad is the
-  layer it saves); text and robots are ~free once flushes do not stall
 
 ## Debug Mode
 - The game has a built-in debug mode that can be toggled by pressing **I** during gameplay

@@ -182,6 +182,6 @@ boss TOGETHER — moving only one leaves two conventions, which is worse than
 either.
 
 Interim guard until step 3: `BOSS_MASK_OFF_SECS` (src/systems/boss.rs) and
-`MASK_OFF_SECS` (web/shoggoth-core.js) are kept equal by a comment only; a
-`cargo test` parsing the JS constant (the `web/ops.js` pattern) closes that.
-
+`MASK_OFF_SECS` (web/shoggoth-core.js) are PINNED by a `cargo test` that
+parses the JS constant (`mask_off_secs_matches_shoggoth_core_js`, the
+`web/ops.js` pattern).

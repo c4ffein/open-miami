@@ -56,8 +56,8 @@ way to run it:
 
 ```bash
 make build-wasm        # wasm32 build + wasm-bindgen glue (open_miami.js / open_miami_bg.wasm)
-python3 serve.py       # dev server (no-store caching, level-editor write API)
-# then open http://localhost:8000  (?viz = tool panels, ?floor=N = start on floor N)
+python3 serve.py       # dev server on :8080 (no-store caching, level-editor write API)
+# then open http://localhost:8080  (?viz = tool panels, ?floor=N = start on floor N)
 ```
 
 ### Testing
@@ -65,11 +65,12 @@ python3 serve.py       # dev server (no-store caching, level-editor write API)
 ```bash
 make verify            # fmt, clippy, tests (incl. doc tests), release build, wasm build, level + prop data checks
 make check-e2e         # browser e2e tests (Playwright on Bun) — see tests/e2e/README.md
-make check-render      # renderer acceptance scripts (composite-coherence + props-stability), same toolchain
+make check-render      # renderer pixel-acceptance scripts (tests/e2e/render/), same toolchain
 make verify-all        # verify + check-e2e + check-render
 ```
 
 CI (`.github/workflows/`) runs exactly these Makefile targets, one job each.
+What each suite covers, and where a new test belongs: [docs/TESTING.md](docs/TESTING.md).
 
 ### Building for the Web (WASM)
 
@@ -113,41 +114,36 @@ Then open `http://localhost:8000` in your browser.
 
 ## Development
 
-The project is structured using a custom Entity-Component-System (ECS) architecture:
+The Rust engine (a custom ECS, zero native dependencies) owns the simulation
+and records each frame as a flat command stream; hand-written JS draws it
+with WebGL. Four layers, one question each — the full picture is
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md):
 
 ```
 open-miami/
-├── src/
-│   ├── main.rs              # Main game loop
-│   ├── lib.rs               # Library exports
-│   ├── ecs/                 # Custom ECS engine
-│   │   ├── entity.rs        # Entity (unique IDs)
-│   │   ├── component.rs     # Component trait system
-│   │   ├── world.rs         # World/storage management
-│   │   ├── query.rs         # Query system for entities
-│   │   └── system.rs        # System trait
-│   ├── components/          # Game data components
-│   │   └── mod.rs           # Position, Health, Weapon, AI, etc.
-│   ├── systems/             # Game logic systems
-│   │   ├── movement.rs      # Movement logic
-│   │   ├── ai.rs            # Enemy AI
-│   │   ├── combat.rs        # Combat and damage
-│   │   ├── weapon.rs        # Weapon updates
-│   │   └── input.rs         # Player input handling
-│   ├── game.rs              # Entity spawning helpers
-│   ├── render.rs            # Rendering system
-│   └── legacy/              # Deprecated OOP code (reference)
-├── tests/
-│   └── integration_tests.rs # 89 comprehensive tests
-├── index.html               # Web interface
-├── Makefile                 # verify / build-wasm / check-* targets (CI calls these)
-├── Cargo.toml               # Rust dependencies
-├── ECS_ARCHITECTURE.md      # Detailed ECS documentation
-├── TESTING.md               # Testing strategy guide
-└── README.md                # This file
+├── src/                     # the Rust engine (compiles to wasm; most of it also natively, for tests)
+│   ├── ecs/ components/ systems/   # SIM: the custom ECS, game data, gameplay systems
+│   ├── scenario.rs game.rs sim.rs  #      scripted floors, spawning, the shared tick + headless Simulation
+│   ├── render.rs render/           # RENDER: state -> draw commands (world, robots, comms, dialogue, …)
+│   ├── props.rs props/             #         the prop library, split by family
+│   ├── graphics.rs graphics/       #         the frame RECORDER (+ headless recording for tests)
+│   ├── app.rs app/                 # APP (wasm-only): game loop, menus, the ?viz toolbox
+│   ├── audio.rs audio/             # music as code + the WebAudio engine
+│   └── editor.rs editor_ui.rs      # the native level editor
+├── web/                     # RENDERER: hand-written JS / WebGL (renderer, shaders, opcode table,
+│                            #           robot + boss 3D->2D pipelines)
+├── levels/  props/          # floor + prop data (JSON) -> generated Rust (make gen-levels / gen-props)
+├── tools/                   # ?viz panels, generators, the perf viewer
+├── tests/                   # native integration tests + tests/e2e (Playwright specs, render scripts)
+├── docs/                    # ARCHITECTURE, PIPELINE, TESTING, ECS, formats, URL params, music
+├── index.html  serve.py     # the page and the dev server
+└── Makefile                 # verify / build-wasm / check-* / bundle (CI calls these)
 ```
 
-For detailed information about the ECS architecture and design decisions, see [ECS_ARCHITECTURE.md](ECS_ARCHITECTURE.md).
+Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (where code goes and
+why), then [docs/PIPELINE.md](docs/PIPELINE.md) (one frame, end to end),
+[docs/ECS.md](docs/ECS.md) (the engine) and [docs/TESTING.md](docs/TESTING.md).
+`CLAUDE.md` is the detailed working reference.
 
 ## Roadmap
 

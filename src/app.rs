@@ -172,6 +172,8 @@ struct GameState {
     /// first screen shows (works for any entry, `?floor=N` included).
     /// Ends on completion or at the [`PRECOMPUTE_CAP_MS`] safety cap.
     precomputing: bool,
+    /// `?precompute=0`: end the PRECOMPUTING gate immediately.
+    skip_precompute: bool,
     precompute_started: f64,
     /// FPS counter (`?debug` only): frames counted since `fps_window`
     /// started, the window's start time (ms), and the last readout.
@@ -287,6 +289,16 @@ impl GameState {
             music_frozen: false,
             pause_in_settings: false,
             precomputing: true,
+            // `?precompute=0`: do not WAIT for the audio pre-render — the gate
+            // ends on its first frame (so the loading overlay still hides
+            // through the normal path), the bake continues in the background
+            // and unbaked sounds use live synthesis, the designed fallback.
+            // For the browser test suites, which otherwise pay the gate (up
+            // to `PRECOMPUTE_CAP_MS`) on every page load.
+            skip_precompute: matches!(
+                url_param("precompute").as_deref(),
+                Some("0") | Some("false") | Some("off")
+            ),
             precompute_started: 0.0,
             fps_frames: 0,
             fps_window: 0.0,
@@ -477,7 +489,8 @@ impl GameState {
             self.audio.update(current_time / 1000.0);
             let (done, total) = self.audio.bake_progress();
             loading_progress(done, total);
-            if self.audio.bake_complete()
+            if self.skip_precompute
+                || self.audio.bake_complete()
                 || current_time - self.precompute_started >= PRECOMPUTE_CAP_MS
             {
                 self.precomputing = false;

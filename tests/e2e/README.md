@@ -8,7 +8,8 @@ debug helpers, ride the exit elevator to the next floor.
 
 Always from the repository root, through the Makefile (it builds the wasm,
 generates the wasm-bindgen glue, installs the browser, and wraps the run in a
-60-second `timeout` so a hung browser cannot hang the shell):
+wall-clock `timeout` (`E2E_TIMEOUT`, 180 s) so a hung browser cannot hang the
+shell):
 
 ```bash
 make check-e2e
@@ -116,10 +117,12 @@ depend on the headless frame rate.
 
 ## Timeouts
 
-- 60 s per test (`timeout` in `playwright.config.js`) — the number the
-  Makefile / CLAUDE.md promise; the Makefile additionally wraps the whole run
-  in `timeout 60`, so keep the specs short (a full floor-1 playthrough is
-  ~15 s, the three tests run in parallel locally).
+- 60 s per test (`timeout` in `playwright.config.js`); the Makefile
+  additionally wraps the whole run in `timeout $(E2E_TIMEOUT)` (180 s —
+  measured: the gameplay specs ~32 s, `all-floors.spec.js` ~42 s serially),
+  so keep specs short (a floor-1 playthrough is ~15 s, a per-floor smoke
+  test ~3 s). More workers do NOT help: software GL is multi-threaded and
+  parallel pages contend for the CPU.
 - 10 min `globalTimeout`, 1 retry and a single worker on CI.
 
 ## Chromium flags

@@ -149,8 +149,8 @@ struct Enemy;   // Marks entity as enemy
 
 ### System Execution Order (`src/sim.rs`, `GameSystems::step`)
 
-Input is applied first by the game loop (`wasm_entry::GameState::update_game`
-in `src/lib.rs`: `InputSystem::update_player_rotation` / `update_player_movement`
+Input is applied first by the game loop (`GameState::update_game` in
+`src/app/game_loop.rs`: `InputSystem::update_player_rotation` / `update_player_movement`
 / `handle_shoot_input`, skipped while the player is dead or held by a
 scenario `hold`), then one engine tick runs the twelve gameplay systems in a
 fixed order:
@@ -173,7 +173,8 @@ pub fn step(&mut self, world: &mut World, dt: f32) {
 ```
 
 Rendering is not a system: the game loop records the frame afterwards
-(`render_entities` and friends, see `CLAUDE.md` for the renderer split).
+(`render::world::render_world` and friends — see [ARCHITECTURE.md](ARCHITECTURE.md)
+for the sim / render / app / renderer layers).
 
 ### System Details
 

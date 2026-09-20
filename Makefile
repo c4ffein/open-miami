@@ -17,7 +17,7 @@ help:
 	@echo "  make check-wasm-build - Build for wasm32 target (compilation check only)"
 	@echo "  make build-wasm      - Build WASM and generate JavaScript glue (for local testing)"
 	@echo "  make e2e-prep        - Build the wasm + glue, bun install, install Chromium (shared by check-e2e / check-render)"
-	@echo "  make check-e2e       - Run the Playwright end-to-end specs (tests/e2e/specs, 60 s timeout)"
+	@echo "  make check-e2e       - Run the Playwright end-to-end specs (tests/e2e/specs; 60 s per test, E2E_TIMEOUT for the run)"
 	@echo "  make check-render    - Run the renderer acceptance scripts (composite-coherence + props-stability)"
 	@echo "  make check-coverage  - Generate code coverage report (requires cargo-tarpaulin)"
 	@echo "  make gen-levels      - Regenerate src/levels_data.rs from levels/*.json"
@@ -125,6 +125,11 @@ e2e-prep: build-wasm
 
 # The rootless browser's extracted system libs (tests/e2e/playwright-deps/),
 # prepended to LD_LIBRARY_PATH for every browser launch (run from tests/e2e).
+# Wall-clock cap of the whole Playwright run, so it can never hang (each TEST
+# keeps its own 60 s cap in playwright.config.js). Measured: the 3 gameplay
+# specs take ~32 s, the 15 per-floor smoke tests ~42 s serially (~2.8 s a
+# floor under software GL) — ~75-80 s in all, so 180 s leaves CI headroom.
+E2E_TIMEOUT ?= 180
 E2E_ENV = LD_LIBRARY_PATH="$$(find "$$PWD/playwright-deps/libs" -name '*.so*' -printf '%h\n' 2>/dev/null | sort -u | paste -sd:):$${LD_LIBRARY_PATH:-}"
 
 # E2E Tests - end-to-end tests with Playwright
@@ -132,8 +137,8 @@ E2E_ENV = LD_LIBRARY_PATH="$$(find "$$PWD/playwright-deps/libs" -name '*.so*' -p
 # Running tests directly without timeout can cause Claude Code instances to hang
 # `ulimit -c 0`: a crashing Chromium must not leave GB-sized core dumps in tests/e2e/.
 check-e2e: e2e-prep
-	@echo "$(YELLOW)Running end-to-end tests with 60-second timeout...$(NC)"
-	cd tests/e2e && mkdir -p test-results && ulimit -c 0 && $(E2E_ENV) timeout 60 bunx playwright test
+	@echo "$(YELLOW)Running end-to-end tests ($(E2E_TIMEOUT) s wall-clock cap, 60 s per test)...$(NC)"
+	cd tests/e2e && mkdir -p test-results && ulimit -c 0 && $(E2E_ENV) timeout $(E2E_TIMEOUT) bunx playwright test
 	@echo "$(GREEN)✓ E2E tests passed$(NC)"
 
 # Render Tests - the five standalone renderer acceptance scripts

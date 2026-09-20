@@ -1,8 +1,9 @@
 const { defineConfig, devices } = require('@playwright/test');
 
 // Run through `make check-e2e` (repo root): it builds the wasm, installs the
-// browser and wraps the whole run in a 60 s `timeout`, so specs must stay
-// short (a full floor-1 playthrough is ~15 s).
+// browser and wraps the whole run in a wall-clock `timeout` (E2E_TIMEOUT,
+// 180 s), so specs must stay short (a full floor-1 playthrough is ~15 s, a
+// per-floor smoke test ~3 s).
 module.exports = defineConfig({
   testDir: './specs',
   fullyParallel: true,
