@@ -58,6 +58,7 @@ const OPS_ROWS = [...require('fs')
   .matchAll(/^\s*\["([A-Z_]+)",\s*(\d+)\]/gm)];
 if (OPS_ROWS.length === 0) throw new Error('helpers.js: no opcode rows found in web/ops.js');
 const OP_ARGS = OPS_ROWS.map((r) => Number(r[2]));
+const OP_POSTFX = OPS_ROWS.findIndex((r) => r[1] === 'POSTFX'); // kind t r g b
 const OP_ROBOT = OPS_ROWS.findIndex((r) => r[1] === 'ROBOT'); // colorIdx poseIdx weaponIdx x y angle sizePx time
 const ROBOT_COLOR_PLAYER = 0; // CL4-UD3, coral (src/render/robots.rs ROBOT_COLOR_CORAL)
 
@@ -70,18 +71,23 @@ const ROBOT_COLOR_PLAYER = 0; // CL4-UD3, coral (src/render/robots.rs ROBOT_COLO
  *             (the ROBOT command with the player's colour; null if not drawn)
  *   robots  - number of ROBOT commands in the last frame
  *   cmds    - number of floats in the last frame's command stream
+ *   postfx  - the POSTFX kind the last frame ends up with (-1 = none): only
+ *             the last POSTFX of a frame applies
+ *   log     - one {cmds, postfx} entry per frame (capped), for asserting
+ *             that NO frame of a sequence was missing something
  *   malformed - STICKY: null, or why a frame's stream did not decode (an
  *             unknown opcode, or a command running past the end) — the
  *             browser-side twin of `graphics::stream::walk` (cargo test)
  */
 async function installFrameProbe(page) {
   await page.addInitScript(
-    ({ OP_ARGS, OP_ROBOT, ROBOT_COLOR_PLAYER }) => {
-      const om = { frames: 0, texts: '', player: null, robots: 0, cmds: 0, malformed: null };
+    ({ OP_ARGS, OP_ROBOT, OP_POSTFX, ROBOT_COLOR_PLAYER }) => {
+      const om = { frames: 0, texts: '', player: null, robots: 0, cmds: 0, postfx: -1, log: [], malformed: null };
       window.__om = om;
       function scan(cmds) {
         let player = null;
         let robots = 0;
+        let postfx = -1;
         const n = cmds.length;
         let i = 0;
         while (i < n) {
@@ -91,6 +97,7 @@ async function installFrameProbe(page) {
             om.malformed = om.malformed || `frame ${om.frames}: unknown opcode ${cmds[i - 1]} at float ${i - 1}`;
             break;
           }
+          if (op === OP_POSTFX) postfx = cmds[i] | 0;
           if (op === OP_ROBOT) {
             robots += 1;
             if ((cmds[i] | 0) === ROBOT_COLOR_PLAYER) {
@@ -103,6 +110,8 @@ async function installFrameProbe(page) {
         om.player = player;
         om.robots = robots;
         om.cmds = n;
+        om.postfx = postfx;
+        if (om.log.length < 5000) om.log.push({ cmds: n, postfx });
       }
       let real = undefined;
       Object.defineProperty(window, 'frameRender', {
@@ -120,7 +129,7 @@ async function installFrameProbe(page) {
         },
       });
     },
-    { OP_ARGS, OP_ROBOT, ROBOT_COLOR_PLAYER },
+    { OP_ARGS, OP_ROBOT, OP_POSTFX, ROBOT_COLOR_PLAYER },
   );
 }
 

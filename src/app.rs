@@ -28,11 +28,8 @@ use crate::props::{
     settings_json, snap_size, PixelMode, PropDrawOpts, MAX_LAYERS, MAX_PX, PROP_COUNT,
     PROP_FAMILIES, PROP_NAMES,
 };
-use crate::render::comms::{render_gate_prompt, render_hold_caption};
-use crate::render::dialogue::render_dialogue;
 use crate::render::title::draw_neon_title;
 use crate::render::world::KILL_FLASH_SECS;
-use crate::render::*;
 use crate::scenario::{ScenarioState, SURFACE_EXIT};
 use crate::systems::boss::any_boss_enraged;
 use crate::systems::*;

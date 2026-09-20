@@ -72,8 +72,9 @@
 - THE TEST for render code: a function from state to draw commands — reads
   NO input, MUTATES nothing, calls NO browser API. If it passes, it goes in
   the render layer, takes plain arguments / a view struct
-  (`render::world::WorldView`) and gets a native stream test. So: render
-  code never samples input (the app passes `player_firing: bool`) and never
+  (`render::world::WorldView`, `render::hud::HudView` — an in-game frame is
+  exactly those two) and gets a native stream test. So: render code never
+  samples input (the app passes `player_firing: bool`, `cursor: Vec2`) and never
   advances a timer (the kill flash / spark expiry count down in
   `GameState::render_world`, the app-side wrapper). Immediate-mode UI (a
   button = draw + click test in one call: menus, `?viz`, `editor_ui`) is
@@ -85,6 +86,12 @@
   boss (instanced spheres in JS behind a pixel-parity page, THEN placement
   in Rust). Do not move only one of the two; do not add new animation logic
   to JS that gameplay timers depend on without noting it there
+- EVERY FRAME DRAWS A SCREEN: a screen switch (`self.screen = …`, a modal
+  flag) takes effect AFTER the current screen is drawn — record the intent,
+  draw, then switch. Never `switch; return;` before drawing (a one-frame
+  flash of neither screen — from PAUSED, the raw world with no modal), and
+  never re-dispatch to the new screen in the same frame (it would see the
+  same key press). Pinned by `tests/e2e/specs/menu-transitions.spec.js`
 - WHY: it is the test boundary — render-layer code verifies in ~1 s under
   `cargo test`, app-layer code needs a ~50 s browser round trip. Keep the
   app layer thin
@@ -105,7 +112,8 @@
   finite floats, balanced SAVE/RESTORE + pixel groups <= `PIX_DEPTH`, static
   sections framed + solid-only, TEXT indices; `Affine` = renderer.js's
   transform stack). `tests/render_stream.rs` runs the REAL
-  `render::world::render_world` on every floor + every prop at every px. A
+  `render::world::render_world` + `render::hud::render_hud` on every floor
+  and every prop at every px. A
   new draw path gets a stream test there FIRST (~1 s vs ~50 s in a browser)
 - THE OPCODE TABLE (26 ops; what each does: docs/RENDERING.md) exists twice,
   PINNED by `cargo test` (`src/graphics/stream.rs`): Rust (`mod op` in
@@ -165,7 +173,7 @@
   `systems/` (incl. `passive.rs` bystanders, `head.rs`, `finisher.rs`),
   `scenario.rs`, `game.rs`, `sim.rs` (the SHARED tick `GameSystems::step` +
   the headless `Simulation`), `pathfinding.rs`, `collision.rs`. RENDER:
-  `render.rs` + `render/{world,robots,comms,dialogue,floor_props,title}.rs`,
+  `render.rs` + `render/{world,hud,robots,comms,dialogue,floor_props,title}.rs`,
   `level.rs`, `camera.rs`, `props.rs` + `props/` (by FAMILY:
   `layers/{datacenter,outdoor,lobby}.rs` + `draw/…`), `drive.rs`,
   `ending.rs`, `sparks.rs`; `hud_ammo.rs` / `hud_msg.rs` are HUD STATE
@@ -221,7 +229,8 @@
   `make verify-all` (= `verify` + `check-e2e` + `check-render`) and by
   `.github/workflows/e2e-tests.yml` (one matrix job each):
   - `make check-e2e` — the Playwright specs (`tests/e2e/specs`: floor-1
-    gameplay + the lift to floor 2, and `all-floors.spec.js` = EVERY floor
+    gameplay + the lift to floor 2, `menu-transitions.spec.js` = no menu /
+    sub-menu switch ever ships a frame without its POSTFX, and `all-floors.spec.js` = EVERY floor
     boots, keeps rendering well-formed frames and logs no error — the JS
     side of what `tests/render_stream.rs` proves natively)
   - `make check-render` — the standalone renderer acceptance scripts (in

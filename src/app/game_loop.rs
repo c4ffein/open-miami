@@ -31,11 +31,11 @@ impl GameState {
             || input::is_mouse_button_pressed(input::mouse_buttons::LEFT)
         {
             self.boss_intro_line += 1;
-            if self.boss_intro_line >= lines.len() {
-                self.screen = GameScreen::InGame;
-                return;
-            }
         }
+        // Past the last line = start the fight — AFTER this frame is drawn (a
+        // switch + early return would ship one bare CLEAR frame; the card
+        // below clamps to the full text).
+        let done = self.boss_intro_line >= lines.len();
 
         let screen_width = graphics.width();
         let screen_height = graphics.height();
@@ -58,6 +58,9 @@ impl GameState {
             16.0,
             Color::GRAY,
         );
+        if done {
+            self.screen = GameScreen::InGame;
+        }
     }
 
     /// The credits roll (see `ending.rs`): the elevator RIDE HOME under
@@ -68,13 +71,14 @@ impl GameState {
     /// settles). Enter / Esc returns to the level select.
     pub(crate) fn update_ending(&mut self, graphics: &Graphics, dt: f32) {
         self.ending.tick(dt);
-        if input::is_key_pressed("Enter") || input::is_key_pressed("Escape") {
-            self.screen = GameScreen::LevelSelect;
-            return;
-        }
+        let leave = input::is_key_pressed("Enter") || input::is_key_pressed("Escape");
         ending::render_ride(graphics, &self.ending);
         ending::draw_credits(graphics, &self.ending);
         graphics.postfx(10, self.ending.warp_t(graphics.height()), ending::WARP_TINT);
+        // Switch AFTER drawing: never a frame of neither screen.
+        if leave {
+            self.screen = GameScreen::LevelSelect;
+        }
     }
 }
 
@@ -469,137 +473,39 @@ impl GameState {
         self.prev_boss_enraged = boss_enraged;
         self.prev_all_dead = all_dead;
 
-        // Render UI — or, once extracted, the "EXFILTRATED // FLOOR N"
-        // card (which the outro fades out on the last floor).
-        if level_complete {
-            let card_alpha = self.outro.map(|o| o.card_alpha()).unwrap_or(1.0);
-            let home = self.extracting == Some(SURFACE_EXIT);
-            ending::draw_extract_card(
-                graphics,
-                &floor_title(self.selected_level),
-                self.level_complete_time,
-                card_alpha,
-                home,
-            );
-        } else {
-            render_ui(
-                graphics,
+        // The screen-space layer (HUD or extraction card, scenario overlays,
+        // restart bar, crosshair, TV static): `render::hud::render_hud`, a
+        // pure function of this view. The app's part is sampling the mouse
+        // and turning its timers into what the frame should show. The TV
+        // static is emitted inside, BEFORE the outro's blur-out below: last
+        // POSTFX wins, so the dissolve replaces it during the exfil fade.
+        {
+            let title = floor_title(self.selected_level);
+            let view = crate::render::hud::HudView {
+                extract_card: level_complete.then(|| crate::render::hud::ExtractCard {
+                    floor_title: &title,
+                    t: self.level_complete_time,
+                    alpha: self.outro.map(|o| o.card_alpha()).unwrap_or(1.0),
+                    home: self.extracting == Some(SURFACE_EXIT),
+                }),
                 ammo,
                 weapon,
-                self.ammo_hud.eased(),
+                ammo_slide: self.ammo_hud.eased(),
                 enemies_alive,
                 player_alive,
-                self.death_time,
-                self.debug_enabled,
-                self.show_infos,
-                &self.msg_roller,
-                self.last_time as f32 / 1000.0,
-            );
-        }
-
-        // The intercepted comms feed (bottom-left, above the controls
-        // hint) in screen space; and the caption of a running `hold`, if
-        // it has one. (The old top-left "> OBJECTIVE" prose block is
-        // retired: the top-right message roller carries the directive.)
-        if let Some(sc) = self.scenario.as_ref() {
-            // The bottom-left intercepted-comms ticker is retired: the
-            // dialogue panel (`talk`) is the one place conversations
-            // render now. `say` lines still queue/type invisibly so
-            // `hold.until_comms_idle` timing and the epilogue's feed-idle
-            // detection keep working.
-            if let Some(text) = sc.hold_caption() {
-                if player_alive && !level_complete {
-                    render_hold_caption(graphics, text, accent, sc.time());
-                }
-            }
-            // The tutorial gate prompt ("LEFT CLICK — PUNCH"): a centred
-            // lower-third caption while the world is frozen on a gate.
-            if let Some(g) = sc.gate_view() {
-                if player_alive && !level_complete {
-                    render_gate_prompt(graphics, &g, accent, self.last_time as f32 / 1000.0);
-                }
-            }
-            // The visual-novel dialogue panel (`talk` conversations),
-            // over everything else on the HUD layer.
-            if let Some(view) = sc.dialogue_view() {
-                if player_alive && !level_complete {
-                    render_dialogue(graphics, &view, accent, self.last_time as f32 / 1000.0);
-                }
-            }
-        }
-
-        // The hold-R restart load bar, centre screen (see the input
-        // handling below): outline + accent fill by progress.
-        if self.restart_hold > 0.05 && player_alive {
-            let (w, h) = (graphics.width(), graphics.height());
-            let (bw, bh) = (220.0, 10.0);
-            let (bx, by) = ((w - bw) / 2.0, (h - bh) / 2.0 - 40.0);
-            graphics.draw_rectangle(
-                Vec2::new(bx - 2.0, by - 2.0),
-                bw + 4.0,
-                bh + 4.0,
-                Color::new(0.0, 0.0, 0.0, 0.55),
-            );
-            graphics.draw_rectangle_lines(
-                Vec2::new(bx, by),
-                bw,
-                bh,
-                1.0,
-                Color::new(0.9, 0.9, 0.9, 0.8),
-            );
-            let t = (self.restart_hold / RESTART_HOLD_SECS).min(1.0);
-            graphics.draw_rectangle(
-                Vec2::new(bx + 2.0, by + 2.0),
-                (bw - 4.0) * t,
-                bh - 4.0,
-                Color::new(
-                    accent.0 as f32 / 255.0,
-                    accent.1 as f32 / 255.0,
-                    accent.2 as f32 / 255.0,
-                    0.95,
-                ),
-            );
-            graphics.draw_text(
-                "RESTARTING",
-                Vec2::new(bx + bw / 2.0 - 92.0, by - 44.0),
-                36.0,
-                Color::new(0.95, 0.95, 0.95, 0.9),
-            );
-        }
-
-        // The pixel crosshair replacing the OS cursor: a 7x7 cross with
-        // an empty centre cell, drawn last so it sits over everything.
-        {
-            let m = input::mouse_position();
-            let cell = 3.0;
-            let origin = Vec2::new((m.x - 3.5 * cell).floor(), (m.y - 3.5 * cell).floor());
-            let c = Color::new(1.0, 1.0, 1.0, 0.92);
-            for i in 0..7 {
-                if i == 3 {
-                    continue; // empty centre pixel
-                }
-                graphics.draw_rectangle(
-                    Vec2::new(origin.x + 3.0 * cell, origin.y + i as f32 * cell),
-                    cell,
-                    cell,
-                    c,
-                );
-                graphics.draw_rectangle(
-                    Vec2::new(origin.x + i as f32 * cell, origin.y + 3.0 * cell),
-                    cell,
-                    cell,
-                    c,
-                );
-            }
-        }
-
-        // The title screen's faint TV-static shimmer, over every in-game
-        // frame (world + HUD alike — POSTFX is frame-level) at half the
-        // title's opacity. Emitted BEFORE the outro's blur-out below:
-        // last POSTFX wins, so the dissolve replaces the static during
-        // the exfil fade. `?noise=0` turns it off (A/B switch).
-        if self.noise_enabled {
-            graphics.postfx(13, TV_STATIC_GAME_T, Color::WHITE);
+                death_time: self.death_time,
+                debug_enabled: self.debug_enabled,
+                show_infos: self.show_infos,
+                roller: &self.msg_roller,
+                scenario: self.scenario.as_ref(),
+                restart_progress: (self.restart_hold > 0.05 && player_alive)
+                    .then(|| (self.restart_hold / RESTART_HOLD_SECS).min(1.0)),
+                cursor: input::mouse_position(),
+                tv_static: self.noise_enabled.then_some(TV_STATIC_GAME_T),
+                accent,
+                now: self.last_time as f32 / 1000.0,
+            };
+            crate::render::hud::render_hud(graphics, &view);
         }
 
         // Extraction card done -> ride to the next floor (13's car jams

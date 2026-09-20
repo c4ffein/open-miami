@@ -2,13 +2,15 @@
 //
 // Submodules: `comms` (elevators / doorways, the hold caption + gate
 // prompt, zone debug), `dialogue` (the letterbox + face slab),
-// `floor_props` (a floor's placed set dressing), `robots` (the actors layer),
+// `floor_props` (a floor's placed set dressing), `hud` (`render_hud`: the
+// screen-space layer of an in-game frame, from a read-only `HudView`), `robots` (the actors layer),
 // `title` (the neon glyphs), `world` (`render_world`: one whole world frame
 // from a read-only `WorldView`). All of it only RECORDS
 // into `Graphics`, so it builds and is tested natively.
 pub mod comms;
 pub mod dialogue;
 pub mod floor_props;
+pub mod hud;
 pub mod robots;
 pub mod title;
 pub mod world;

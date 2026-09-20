@@ -24,7 +24,7 @@ flowchart LR
 | Layer | Question | May touch | May NOT touch | Where |
 |---|---|---|---|---|
 | **sim** | What is the state of the world? | the `World`, its components, `dt` | `Graphics`, input, the browser, wall-clock time | `ecs/`, `components/`, `systems/`, `scenario.rs`, `game.rs`, `sim.rs`, `pathfinding.rs`, `collision.rs`, `hud_ammo.rs` / `hud_msg.rs` (HUD *state*), `editor.rs` (the editor *document*) |
-| **render** | What does this state look like? | state READ-ONLY + `&Graphics` | input, mutation of game state, the browser, audio | `render.rs`, `render/` (`world`, `robots`, `comms`, `dialogue`, `floor_props`, `title`), `level.rs`, `camera.rs`, the `draw` submodules of `props.rs` / `drive.rs` / `ending.rs`, `sparks::render_sparks` |
+| **render** | What does this state look like? | state READ-ONLY + `&Graphics` | input, mutation of game state, the browser, audio | `render.rs`, `render/` (`world`, `hud`, `robots`, `comms`, `dialogue`, `floor_props`, `title`), `level.rs`, `camera.rs`, the `draw` submodules of `props.rs` / `drive.rs` / `ending.rs`, `sparks::render_sparks` |
 | **app** | What happens THIS FRAME? | everything: input, the clock, audio, settings, the URL, `&mut GameState` | — (but it should hold no drawing of its own, see below) | `app.rs`, `app/` (wasm-only), `editor_ui.rs`, `input.rs`, `audio/engine.rs` |
 | **renderer** | How do commands become pixels? | the GPU | game state (it only ever sees the stream) | `web/`: `renderer.js` + `renderer/shaders.js`, `ops.js`, `robot-core.js`, `shoggoth-core.js`, `gpu-probe.js` |
 
@@ -42,6 +42,8 @@ Two consequences worth stating, because both were real bugs of layering once:
 
 - **Render code never samples input.** The player's SHOOT pose depends on
   the fire button; the app samples it and passes `player_firing: bool`.
+- **Render code never reads the mouse either.** The pixel crosshair is drawn
+  at `HudView::cursor`; the app samples `input::mouse_position()`.
 - **Render code never advances a timer.** The kill flash counts down in the
   app (`GameState::render_world`, the wrapper); the renderer receives the
   seconds left. Same for spark expiry.
@@ -62,7 +64,9 @@ native side of the diagram runs under `cargo test`:
   valid TEXT indices) and mirrors the JS transform stack (`Affine`). Its
   tests also pin the Rust opcode table to `renderer.js` and the e2e helpers.
 - `tests/render_stream.rs` records the REAL `render_world` on every floor
-  (cached / referenced / debug / kill-flash frames, `?pixel=2|3|6`) and
+  (cached / referenced / debug / kill-flash frames, `?pixel=2|3|6`), the
+  REAL `render_hud` (every floor's opening scenario — dialogue, captions,
+  gate prompts —, death / debug / restart / extraction-card states) and
   every prop at every art-pixel size.
 
 So the rule is not aesthetic: **code in the render layer costs ~1 s to
@@ -84,11 +88,22 @@ their own `impl GameState` blocks:
 
 | Module | Holds |
 |---|---|
-| `game_loop` | `update_game`: input → `sim::GameSystems::step` → scenario bridge → HUD / comms; the boss intro; the ending |
+| `game_loop` | `update_game`: input → `sim::GameSystems::step` → scenario / event / audio bridge → builds the `HudView` → transitions; the boss intro; the ending |
 | `world_render` | the WRAPPER around `render::world::render_world`: the frame's two state changes + building the `WorldView` |
 | `menus` | level select, the modal chrome, SETTINGS / ABOUT / PAUSE |
 | `viz`, `viz/{effects,props_page,musics}` | the `?viz` toolbox |
 | `url`, `perf` | query parameters, the `?perf` spans |
+
+**Every frame must draw a screen.** A screen's `update_*` handles input AND
+draws; a transition (`self.screen = …`, `pause_in_settings = …`) takes effect
+AFTER the current screen has been drawn — record the intent, draw, then
+switch. Switching and returning early ships a frame of NEITHER screen: a bare
+CLEAR on the title, or — from PAUSED, where the world is already recorded —
+the raw world with no modal and no static, a visible one-frame flash. Do not
+"fix" that by re-dispatching to the new screen in the same frame: it would
+see the same key press (Esc would pause and un-pause at once).
+`tests/e2e/specs/menu-transitions.spec.js` drives the menus and requires
+that no frame of the sequence lacks its POSTFX.
 
 The simulation tick itself is shared, not duplicated: the browser loop and
 the headless `sim::Simulation` both call `sim::GameSystems::step` /
@@ -97,9 +112,13 @@ ships.
 
 ## Known debt (honest list)
 
-- `update_game` is still one ~600-line function (input, tick, event bridge
-  and HUD drawing in sequence). Its HUD / comms drawing half is render code
-  by the test above and should move behind a view struct like the world did.
+- `update_game` (src/app/game_loop.rs) is still one long function, but it
+  no longer DRAWS: input -> the shared tick -> the event / audio bridge ->
+  building `WorldView` + `HudView` -> screen transitions. Both frames it
+  shows are pure render-layer functions (`render::world::render_world`,
+  `render::hud::render_hud`). What is left to split is orchestration
+  (input handling, the event-to-sound bridge) — app code by nature, only
+  reachable by Playwright.
 - `web/renderer.js`'s `initRenderer` is one ~1,650-line closure, and that is
   a DECISION, not debt to pay down blindly. The dependency graph was
   measured before deciding: ~30 mutable closure variables (`m` — which

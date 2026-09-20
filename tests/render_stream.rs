@@ -8,17 +8,20 @@
 //! STREAM on every floor and every prop, in well under a second.
 
 use open_miami::camera::{Camera, ViewCull};
-use open_miami::components::{Enemy, Headless, Health};
+use open_miami::components::{Enemy, Headless, Health, WeaponType};
 use open_miami::ecs::World;
 use open_miami::game::{get_player_position, initialize_game};
 use open_miami::graphics::stream::{check, Cmd};
 use open_miami::graphics::{op, Graphics};
+use open_miami::hud_msg::MsgRoller;
 use open_miami::level::Level;
 use open_miami::levels::{floor_def, LEVEL_COUNT};
 use open_miami::math::Vec2;
 use open_miami::props::{draw_prop, draw_prop_ex, PropDrawOpts, MAX_PX, PROP_COUNT, PROP_NAMES};
 use open_miami::render::floor_props::render_floor_props;
+use open_miami::render::hud::{render_hud, ExtractCard, HudView};
 use open_miami::render::world::{render_world, WorldView, KILL_FLASH_SECS};
+use open_miami::scenario::ScenarioState;
 use open_miami::sparks::SparkPool;
 use open_miami::static_geo::{OP_STATIC_BEGIN, OP_STATIC_END, OP_STATIC_REF};
 
@@ -315,4 +318,163 @@ fn culled_props_cost_no_commands() {
     let nowhere = ViewCull::new(Vec2::new(-9e5, -9e5), Vec2::new(-8e5, -8e5));
     render_floor_props(&g, floor_def(level).props, 0.0, &nowhere);
     assert!(g.take_frame().cmds.is_empty());
+}
+
+/// A plain in-game HUD view: alive, a pistol, no scenario, grain on.
+fn hud<'a>(roller: &'a MsgRoller, scenario: Option<&'a ScenarioState>) -> HudView<'a> {
+    HudView {
+        extract_card: None,
+        ammo: 7,
+        weapon: Some(WeaponType::Pistol),
+        ammo_slide: 0.0,
+        enemies_alive: 3,
+        player_alive: true,
+        death_time: 0.0,
+        debug_enabled: false,
+        show_infos: false,
+        roller,
+        scenario,
+        restart_progress: None,
+        cursor: Vec2::new(640.0, 400.0),
+        tv_static: Some(0.04),
+        accent: (255, 80, 160),
+        now: 1.5,
+    }
+}
+
+fn record_hud(v: &HudView) -> open_miami::graphics::Frame {
+    let g = Graphics::new_headless(VIEW.0, VIEW.1);
+    render_hud(&g, v);
+    g.take_frame()
+}
+
+#[test]
+fn every_floors_opening_hud_records_a_valid_frame() {
+    // Each floor's scenario, run through its opening seconds: dialogue panels
+    // (robot headshots, the swarm, the corruptor), hold captions, gate
+    // prompts — whatever the floor opens on — over the HUD.
+    for level in 0..LEVEL_COUNT {
+        let mut world = World::new();
+        initialize_game(&mut world, level);
+        let mut sc = ScenarioState::new(floor_def(level));
+        let mut roller = MsgRoller::new();
+        let mut overlays = 0;
+        for frame in 0..600 {
+            sc.tick(&mut world, 1.0 / 60.0);
+            roller.update(1.0 / 60.0, "PURGE THE FLOOR", 0);
+            if frame % 20 != 0 {
+                continue;
+            }
+            let mut view = hud(&roller, Some(&sc));
+            view.now = frame as f32 / 60.0;
+            let f = record_hud(&view);
+            checked(&f, &format!("floor index {level}, HUD frame {frame}"));
+            overlays += (sc.dialogue_view().is_some()
+                || sc.hold_caption().is_some()
+                || sc.gate_view().is_some()) as usize;
+        }
+        // Floor 0 opens on a conversation: make sure that path really ran.
+        if level == 0 {
+            assert!(overlays > 0, "floor 0 showed no scenario overlay in 10 s");
+        }
+    }
+}
+
+#[test]
+fn the_hud_states_all_record_valid_frames() {
+    let roller = MsgRoller::new();
+    let dead = HudView {
+        player_alive: false,
+        death_time: 2.0,
+        ..hud(&roller, None)
+    };
+    let debug = HudView {
+        debug_enabled: true,
+        show_infos: true,
+        ..hud(&roller, None)
+    };
+    let unarmed = HudView {
+        weapon: None,
+        ammo: 0,
+        ammo_slide: 1.0,
+        ..hud(&roller, None)
+    };
+    let restarting = HudView {
+        restart_progress: Some(0.6),
+        ..hud(&roller, None)
+    };
+    for (what, view) in [
+        ("dead", dead),
+        ("debug", debug),
+        ("unarmed", unarmed),
+        ("restarting", restarting),
+    ] {
+        let f = record_hud(&view);
+        checked(&f, what);
+    }
+    for home in [false, true] {
+        let card = ExtractCard {
+            floor_title: "FLOOR 3 // INFERENCE PIT",
+            t: 1.2,
+            alpha: 0.8,
+            home,
+        };
+        let f = record_hud(&HudView {
+            extract_card: Some(card),
+            ..hud(&roller, None)
+        });
+        checked(&f, "extraction card");
+        // The card REPLACES the HUD: no rogue counter under it.
+        assert!(
+            !f.texts.contains("ROGUES"),
+            "the HUD drew under the card: {}",
+            f.texts
+        );
+    }
+    let f = record_hud(&hud(&roller, None));
+    assert!(
+        f.texts.contains("ROGUES"),
+        "no rogue counter in: {}",
+        f.texts
+    );
+    let f = record_hud(&HudView {
+        restart_progress: Some(0.6),
+        ..hud(&roller, None)
+    });
+    assert!(f.texts.contains("RESTARTING"));
+}
+
+#[test]
+fn the_tv_static_is_the_frames_last_command_and_optional() {
+    let roller = MsgRoller::new();
+    let f = record_hud(&hud(&roller, None));
+    let cmds = checked(&f, "grain on");
+    let last = cmds.last().unwrap();
+    // Emitted LAST so the outro's blur-out, recorded after it, replaces it.
+    assert_eq!(
+        (last.op, last.args[0], last.args[1]),
+        (op::POSTFX, 13.0, 0.04)
+    );
+    let f = record_hud(&HudView {
+        tv_static: None,
+        ..hud(&roller, None)
+    });
+    assert_eq!(count(&checked(&f, "grain off"), op::POSTFX), 0);
+}
+
+#[test]
+fn the_crosshair_follows_the_cursor_and_nothing_else_does() {
+    let roller = MsgRoller::new();
+    let a = record_hud(&hud(&roller, None));
+    let b = record_hud(&HudView {
+        cursor: Vec2::new(640.0 + 30.0, 400.0),
+        ..hud(&roller, None)
+    });
+    assert_eq!(a.cmds.len(), b.cmds.len());
+    let moved: Vec<usize> = (0..a.cmds.len())
+        .filter(|&i| a.cmds[i] != b.cmds[i])
+        .collect();
+    // 6 + 6 cells of the 7x7 cross (empty centre), one x each.
+    assert_eq!(moved.len(), 12, "only the crosshair's 12 rects move");
+    assert!(moved.iter().all(|&i| b.cmds[i] - a.cmds[i] == 30.0));
 }

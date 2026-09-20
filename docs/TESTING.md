@@ -59,7 +59,10 @@ the browser, sets the library path and the timeouts.
   any change to `web/`.
 - **`make check-e2e`** — Playwright: floor 1 loads and draws its HUD, the
   player purges the floor and rides the lift to floor 2 (the real boot path,
-  audio pre-render gate included), and `all-floors.spec.js`: EVERY floor of
+  audio pre-render gate included); `menu-transitions.spec.js`: driving the
+  title and pause menus, no frame of the sequence lacks its POSTFX (a
+  screen switch that returns without drawing = a one-frame flash); and
+  `all-floors.spec.js`: EVERY floor of
   `levels/index.json` boots, keeps rendering well-formed frames and logs no
   error (with `?precompute=0`, ~3 s a floor).
 

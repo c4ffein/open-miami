@@ -38,24 +38,20 @@ impl GameState {
                 MenuOption::About => MenuOption::Settings,
             };
         }
-        if input::is_key_pressed("Enter") {
-            match self.selected_menu_option {
-                MenuOption::Play => {
-                    self.start_game();
-                    return;
-                }
-                MenuOption::Settings => {
-                    self.screen = GameScreen::Settings;
-                    return;
-                }
-                MenuOption::About => {
-                    self.screen = GameScreen::About;
-                    return;
-                }
-            }
-        }
+        // A screen switch takes effect AFTER this frame is drawn: switching
+        // and returning early would ship a frame of neither screen (a bare
+        // CLEAR — a one-frame flash), and re-dispatching to the new screen
+        // would hand it the same Enter press. `menu-transitions.spec.js`.
+        let chosen = input::is_key_pressed("Enter").then_some(self.selected_menu_option);
 
         self.draw_level_select(graphics);
+
+        match chosen {
+            Some(MenuOption::Play) => self.start_game(),
+            Some(MenuOption::Settings) => self.screen = GameScreen::Settings,
+            Some(MenuOption::About) => self.screen = GameScreen::About,
+            None => {}
+        }
     }
 
     /// The title screen's drawing (no input): the drive backdrop, neon
@@ -329,20 +325,18 @@ impl GameState {
     }
 
     pub(crate) fn update_settings(&mut self, graphics: &Graphics) {
-        if input::is_key_pressed("Escape") {
-            self.screen = GameScreen::LevelSelect;
-            return;
-        }
+        let back = input::is_key_pressed("Escape");
         self.draw_level_select(graphics);
         let p = self.draw_modal_chrome(graphics, "SETTINGS", 564.0, 312.0, "ESC — BACK");
         self.settings_modal_body(graphics, p, 564.0);
+        // Switch AFTER drawing (see `update_level_select`).
+        if back {
+            self.screen = GameScreen::LevelSelect;
+        }
     }
 
     pub(crate) fn update_about(&mut self, graphics: &Graphics) {
-        if input::is_key_pressed("Escape") || input::is_key_pressed("Enter") {
-            self.screen = GameScreen::LevelSelect;
-            return;
-        }
+        let back = input::is_key_pressed("Escape") || input::is_key_pressed("Enter");
         let p = self.draw_menu_modal(graphics, "ABOUT", 660.0, 498.0);
         const LINES: [&str; 11] = [
             "THIS STARTED AS A VIBE CODED EXPERIMENT",
@@ -391,6 +385,10 @@ impl GameState {
             22.0,
             Color::WHITE,
         );
+        // Switch AFTER drawing (see `update_level_select`).
+        if back {
+            self.screen = GameScreen::LevelSelect;
+        }
     }
 
     pub(crate) fn update_paused(&mut self, graphics: &Graphics) {
@@ -409,22 +407,25 @@ impl GameState {
         // layer at a time (settings -> pause -> game). Both panels draw;
         // only the topmost POSTFX applies, so the pause panel behind
         // melts into the static.
+        //
+        // EVERY switch below takes effect AFTER the frame is drawn: the world
+        // is already recorded at this point, so switching and returning early
+        // shipped a frame of the RAW WORLD — no modal, no static — for one
+        // frame (`menu-transitions.spec.js`).
         if self.pause_in_settings {
-            if input::is_key_pressed("Escape") {
-                self.pause_in_settings = false;
-                return;
-            }
+            let close = input::is_key_pressed("Escape");
             let pp = self.draw_modal_chrome(graphics, "PAUSED", 420.0, 340.0, "");
             self.draw_pause_rows(graphics, pp, false);
             let p = self.draw_modal_chrome(graphics, "SETTINGS", 564.0, 312.0, "ESC — BACK");
             self.settings_modal_body(graphics, p, 564.0);
+            if close {
+                self.pause_in_settings = false;
+            }
             return;
         }
 
-        if input::is_key_pressed("Escape") {
-            self.screen = GameScreen::InGame;
-            return;
-        }
+        // Esc = CONTINUE, whatever row is selected.
+        let mut chosen = input::is_key_pressed("Escape").then_some(PauseOption::Continue);
         if input::is_key_pressed("ArrowDown") || input::is_key_pressed("s") {
             self.selected_pause_option = match self.selected_pause_option {
                 PauseOption::Continue => PauseOption::Settings,
@@ -442,25 +443,19 @@ impl GameState {
                 PauseOption::Stop => PauseOption::Settings,
             };
         }
-        if input::is_key_pressed("Enter") {
-            match self.selected_pause_option {
-                PauseOption::Continue => {
-                    self.screen = GameScreen::InGame;
-                    return;
-                }
-                PauseOption::Settings => {
-                    self.pause_in_settings = true;
-                    return;
-                }
-                PauseOption::Stop => {
-                    self.screen = GameScreen::LevelSelect;
-                    return;
-                }
-            }
+        if chosen.is_none() && input::is_key_pressed("Enter") {
+            chosen = Some(self.selected_pause_option);
         }
 
         let p = self.draw_modal_chrome(graphics, "PAUSED", 420.0, 340.0, "ESC — CONTINUE");
         self.draw_pause_rows(graphics, p, true);
+
+        match chosen {
+            Some(PauseOption::Continue) => self.screen = GameScreen::InGame,
+            Some(PauseOption::Settings) => self.pause_in_settings = true,
+            Some(PauseOption::Stop) => self.screen = GameScreen::LevelSelect,
+            None => {}
+        }
     }
 
     /// The pause modal's three rows. `active` = the pause layer has
