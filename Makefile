@@ -1,4 +1,4 @@
-.PHONY: help verify verify-all check-test check-clippy check-fmt check-build check-wasm-build build-wasm bundle e2e-prep check-e2e check-render check-coverage gen-levels check-levels gen-props check-props gen-title
+.PHONY: help verify verify-all check-test check-clippy check-fmt check-build check-wasm-build build-wasm bundle e2e-prep check-e2e check-render check-coverage gen-levels check-levels gen-props check-props gen-title gen-pose check-pose
 
 # Colors for output
 RED=\033[0;31m
@@ -163,7 +163,7 @@ ifeq ($(origin RENDER_PORT), undefined)
 RENDER_PORT := $(shell python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1])')
 endif
 RENDER_TIMEOUT ?= 180
-check-render: e2e-prep
+check-render: e2e-prep check-pose
 	@echo "$(YELLOW)Running renderer acceptance tests (serve.py on :$(RENDER_PORT), $(RENDER_TIMEOUT) s timeout each)...$(NC)"
 	@ulimit -c 0; \
 	python3 serve.py $(RENDER_PORT) >/dev/null 2>&1 & SRV=$$!; \
@@ -212,6 +212,21 @@ check-props:
 	python3 tools/gen_props.py --check
 	@echo "$(GREEN)✓ Props valid and up to date$(NC)"
 
+
+# Pose fixture - tests/fixtures/pose_plan.txt is GENERATED from the JS
+# posePlan() (web/robot-core.js) and is what the Rust port
+# (src/render/pose.rs) is tested against by `cargo test`
+# (matches_the_js_pose_plan). TypeScript on Bun (the tooling policy), so it is
+# NOT in `make verify` (cargo + python only): `check-pose` = "the JS still
+# says what the fixture says" runs with `check-render`, which needs Bun anyway.
+# Changing a pose = edit BOTH implementations, `make gen-pose`, `cargo test`.
+gen-pose:
+	bun tools/gen_pose_fixture.ts
+
+check-pose:
+	@echo "$(YELLOW)Checking the pose fixture against web/robot-core.js...$(NC)"
+	bun tools/gen_pose_fixture.ts --check
+	@echo "$(GREEN)✓ Pose fixture current$(NC)"
 
 # Loading-screen title - the neon OPEN/MIAMI SVG inlined into index.html,
 # generated from src/render/title.rs's title glyphs. Python 3 stdlib only.

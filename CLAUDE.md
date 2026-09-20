@@ -80,8 +80,14 @@
   button = draw + click test in one call: menus, `?viz`, `editor_ui`) is
   legitimately APP code
 - CHARACTERS ROADMAP (docs/ARCHITECTURE.md "Roadmap" — decided direction,
-  NOT started): Rust computes poses (numbers), GLSL evaluates rigs, JS only
-  ferries. Robots first (`posePlan` is pure and the GPU rig's 16 instance
+  step R1 of the robots DONE): Rust computes poses (numbers), GLSL evaluates
+  rigs, JS only ferries. UNTIL R3 THE ROBOT POSE LOGIC EXISTS TWICE —
+  `posePlan()` in web/robot-core.js (still what the game runs) and
+  `pose_plan` in src/render/pose.rs (bit-exact port; kick / stomp timing
+  derived from `FinisherKind::impacts()`): change a pose = edit BOTH, `make
+  gen-pose`, `cargo test` (`matches_the_js_pose_plan` vs
+  tests/fixtures/pose_plan.txt; `make check-pose`, run by `check-render`,
+  fails if the JS drifts). Robots first (`posePlan` is pure and the GPU rig's 16 instance
   floats are already the seam; port behind a scalar-parity test), then the
   boss (instanced spheres in JS behind a pixel-parity page, THEN placement
   in Rust). Do not move only one of the two; do not add new animation logic
@@ -173,7 +179,7 @@
   `systems/` (incl. `passive.rs` bystanders, `head.rs`, `finisher.rs`),
   `scenario.rs`, `game.rs`, `sim.rs` (the SHARED tick `GameSystems::step` +
   the headless `Simulation`), `pathfinding.rs`, `collision.rs`. RENDER:
-  `render.rs` + `render/{world,hud,robots,comms,dialogue,floor_props,title}.rs`,
+  `render.rs` + `render/{world,hud,robots,pose,comms,dialogue,floor_props,title}.rs`,
   `level.rs`, `camera.rs`, `props.rs` + `props/` (by FAMILY:
   `layers/{datacenter,outdoor,lobby}.rs` + `draw/…`), `drive.rs`,
   `ending.rs`, `sparks.rs`; `hud_ammo.rs` / `hud_msg.rs` are HUD STATE
@@ -195,7 +201,8 @@
 - FILES THAT TOOLS PARSE (moving / renaming breaks a generator):
   `PROP_NAMES` in `src/props.rs` (tools/gen_props.py), `title_glyph` in
   `src/render/title.rs` (tools/gen_title.py -> index.html's loading SVG),
-  the `TABLE` rows of `web/ops.js` + `MASK_OFF_SECS` in
+  `posePlan` / `POSES` exported by `web/robot-core.js`
+  (tools/gen_pose_fixture.ts), the `TABLE` rows of `web/ops.js` + `MASK_OFF_SECS` in
   `web/shoggoth-core.js` + the `case N: // NAME` labels of `web/renderer.js`
   (cargo tests)
 - NEW PROPS are APPENDED (ids are persisted in props/props.json): a name in

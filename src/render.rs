@@ -11,6 +11,7 @@ pub mod comms;
 pub mod dialogue;
 pub mod floor_props;
 pub mod hud;
+pub mod pose;
 pub mod robots;
 pub mod title;
 pub mod world;

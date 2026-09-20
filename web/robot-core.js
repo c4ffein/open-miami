@@ -7,6 +7,10 @@
 
    Exports:
      PALETTES                       - color name -> {body,accent,trim}
+     posePlan(pose, time, relaxed)  - the joint scalars of a pose at time t (pure).
+                                      MIRRORED in Rust (src/render/pose.rs) and pinned
+                                      by tests/fixtures/pose_plan.txt (make gen-pose /
+                                      check-pose): edit both, then regenerate
      POSES                          - list of pose names
      WEAPONS                        - list of weapon names (fist/pistol/machinegun/shotgun)
      WEAPON_MODELS                  - name -> array of box parts (the 3D weapon models)
@@ -710,7 +714,7 @@ export function orbitVP(yaw, pitch, halfV, center){
 // `relaxed` (no weapon held) softens idle/walk into an off-duty stance: arms
 // hanging loose at the sides, slightly splayed out from the hips with a soft
 // elbow bend, and an easy walk swing. Combat/impact poses ignore it.
-function posePlan(pose, time, relaxed){
+export function posePlan(pose, time, relaxed){
   const walkPhase = time*2.0*Math.PI;
   const swing  = Math.sin(walkPhase)*0.6;
   const swing2 = Math.sin(walkPhase+Math.PI)*0.6;

@@ -174,14 +174,27 @@ Where each character stands:
   inspector's standalone preview, not game logic: in-game Rust sends the
   real `heading`.
 
-Planned order (none of it started; each step lands with its test FIRST):
+Planned order (each step lands with its test FIRST):
 
-1. **Robots: port `posePlan` to Rust** (`render/pose.rs`); the `ROBOT` op
-   carries the pose scalars instead of `poseIdx + time`. Safety net before
-   deleting the JS: a SCALAR-PARITY test — dump the scalars for every pose x
-   a sweep of times from both implementations and require a match. Payoff:
-   choreography in one language, host-testable ("the kick's foot is at full
-   extension at the impact time"). Cheap; do it first.
+1. **Robots: port `posePlan` to Rust** — IN PROGRESS, in three sub-steps:
+   - **R1 (DONE): the port + the proof, no runtime change.**
+     `src/render/pose.rs` (`pose_plan`, `PoseKind`, `Pose`) reproduces the
+     JS BIT-EXACTLY: `tests/fixtures/pose_plan.txt` is generated FROM
+     `posePlan()` (`make gen-pose`, `tools/gen_pose_fixture.ts` on Bun: every
+     pose x relaxed x 54 times) and `matches_the_js_pose_plan` compares all
+     9,504 scalars (measured: max difference 0). `make check-pose` (run by
+     `check-render`) fails if the JS drifts from the fixture. The kick /
+     stomp timing now DERIVES from `FinisherKind::impacts()` and is tested
+     ("the foot is fully extended on the impact", "each stomp lands on its
+     impact"). Until R3 the pose logic exists TWICE: edit both, regenerate.
+   - **R2 (next): the game uses it** — the `ROBOT` op carries the scalars
+     instead of `poseIdx + time` (`render/robots.rs` calls `pose_plan`;
+     `batchDraw` takes a ready-made plan).
+   - **R3: delete the JS copy** — needs roadmap step 4 (the portrait bake,
+     `tools/inspector.html` and `tools/rig-parity.html` call `posePlan`
+     with no wasm loaded); the fixture then stays as the golden record.
+
+   Payoff: choreography in one language, host-testable.
 2. **Boss: instanced spheres, still in JS** — one per-instance float block
    per sphere, one instanced draw (as the robots' GPU rig did). Worth it on
    its own (a few dozen draws -> one) and it CREATES the seam. Needs a

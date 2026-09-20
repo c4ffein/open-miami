@@ -34,7 +34,10 @@ the DRAW code too.
 - **`tests/perf_audit.rs`** — tick-cost benches (informational timings).
 - **Cross-language pins** (unit tests that parse a JS file): the opcode table
   vs `web/ops.js` and the renderer's dispatch (`src/graphics/stream.rs`),
-  `MASK_OFF_SECS` vs `web/shoggoth-core.js` (`src/systems/boss.rs`). A
+  `MASK_OFF_SECS` vs `web/shoggoth-core.js` (`src/systems/boss.rs`). And one
+  FIXTURE pin: `tests/fixtures/pose_plan.txt`, generated from the JS
+  `posePlan()` (`make gen-pose`, Bun), holds the Rust `pose_plan` bit-exact
+  to it (`src/render/pose.rs`); `make check-pose` catches JS-side drift. A
   constant mirrored across the wasm boundary gets one of these.
 
 The simulation tick is SHARED, not duplicated: the browser loop and
