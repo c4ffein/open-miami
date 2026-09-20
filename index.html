@@ -310,7 +310,7 @@
         // robot-core 3D->2D pipeline inside the renderer; text draws from a
         // VT323 glyph atlas — so the whole frame is WebGL.
         async function setupRenderer() {
-            const { initRenderer } = await import(`./renderer.js?v=${version}`);
+            const { initRenderer } = await import(`./web/renderer.js?v=${version}`);
             window.frameRender = initRenderer(document.getElementById('glcanvas'));
         }
 

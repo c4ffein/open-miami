@@ -24,11 +24,11 @@
 <canvas id="glcanvas"></canvas>
 <div id="hud"></div>
 <script type="module">
-  // Resolve renderer.js against the repo root whichever way this page was
+  // Resolve web/renderer.js against the repo root whichever way this page was
   // reached: /render-tests/<name> (serve.py rewrite) or .../render-tests.html
   // (static hosting, e.g. Pages under a subpath).
   const base = location.pathname.replace(/render-tests(\.html)?(\/.*)?$/, '');
-  const { initRenderer } = await import(`${base}renderer.js?v=${Date.now()}`);
+  const { initRenderer } = await import(`${base}web/renderer.js?v=${Date.now()}`);
   const canvas = document.getElementById('glcanvas');
   const frameRender = initRenderer(canvas);
 

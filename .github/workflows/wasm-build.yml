@@ -63,9 +63,13 @@ jobs:
       #   index.html                    - the entry page (loads the two below)
       #   open_miami.js                 - wasm-bindgen glue
       #   open_miami_bg.wasm            - the engine (simulation)
-      #   renderer.js                   - the WebGL renderer (all rendering is JS)
-      #   robot-core.js                 - 3D->2D robot pipeline (imported by renderer.js)
-      #   shoggoth-core.js              - the boss pipeline (imported by renderer.js)
+      #   web/renderer.js               - the WebGL renderer (all rendering is JS),
+      #                                   BUNDLED by `make bundle` with everything it
+      #                                   imports (ops, shaders, robot-core,
+      #                                   shoggoth-core, gpu-probe) into ONE minified
+      #                                   file at the same path — index.html is unchanged
+      #   web/robot-core.js             - unbundled: tools/inspector.html and
+      #   web/shoggoth-core.js            tools/rig-parity.html import them directly
       #   assets/**                     - VT323 font + its OFL license
       #   tools/**                      - the ?viz panels (inspector.html, levels.html,
       #                                   levels-editor*.js); gen_levels.py is
@@ -78,13 +82,18 @@ jobs:
       # under a project-Pages subpath (https://<user>.github.io/<repo>/).
       # TODO: make those paths relative (or base-aware) in tools/ before
       # deploying under a project-Pages subpath.
+      # `make bundle` runs `bun build` (bun is already the e2e toolchain).
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Stage runtime files into dist/
         run: |
           set -euo pipefail
           rm -rf dist
-          mkdir -p dist/tools
-          cp index.html open_miami.js open_miami_bg.wasm \
-             renderer.js robot-core.js shoggoth-core.js dist/
+          mkdir -p dist/tools dist/web
+          cp index.html open_miami.js open_miami_bg.wasm dist/
+          make bundle BUNDLE_OUT=dist/web
+          cp web/robot-core.js web/shoggoth-core.js dist/web/
           cp -r assets dist/assets
           cp -r levels dist/levels
           cp tools/*.html tools/*.js dist/tools/

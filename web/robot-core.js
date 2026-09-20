@@ -436,7 +436,7 @@ const weaponColSel = (c, accentSel) =>
    Both read the joint pivots (`RIG`) and the per-box joint / offset / size
    table (`RIG_BOXES`) below, so the GEOMETRY lives once; what is mirrored is
    the ORDER OF ROTATIONS per joint chain (`_renderRobot`'s leg() / arm() vs
-   rigVS's main()). tests/e2e/rig-parity.js renders every pose x weapon
+   rigVS's main()). tests/e2e/render/rig-parity.js renders every pose x weapon
    through both and compares them texel by texel — edit one rig, the test
    names the pose that diverged. */
 const RIG = {

@@ -67,6 +67,13 @@
   `GameState::render_world`, the app-side wrapper). Immediate-mode UI (a
   button = draw + click test in one call: menus, `?viz`, `editor_ui`) is
   legitimately APP code
+- CHARACTERS ROADMAP (docs/ARCHITECTURE.md "Roadmap" — decided direction,
+  NOT started): Rust computes poses (numbers), GLSL evaluates rigs, JS only
+  ferries. Robots first (`posePlan` is pure and the GPU rig's 16 instance
+  floats are already the seam; port behind a scalar-parity test), then the
+  boss (instanced spheres in JS behind a pixel-parity page, THEN placement
+  in Rust). Do not move only one of the two; do not add new animation logic
+  to JS that gameplay timers depend on without noting it there
 - WHY: it is the test boundary — render-layer code verifies in ~1 s under
   `cargo test`, app-layer code needs a ~50 s browser round trip. Keep the
   app layer thin
@@ -111,7 +118,7 @@
   `?perf` traces). The GEOMETRY lives once (`RIG` pivots + `RIG_BOXES`, read
   by both); what is mirrored is the ORDER OF ROTATIONS per joint chain
   (`leg()` / `arm()` vs `rigVS` main) — edit both or neither.
-  `tests/e2e/rig-parity.js` (in `make check-render`) renders every pose x
+  `tests/e2e/render/rig-parity.js` (in `make check-render`) renders every pose x
   weapon x a spread of times / palettes / facings through both rigs via
   `tools/rig-parity.html` (also the human-eye page: CPU | GPU | DIFF;
   `?bench=N` times both rigs' submit cost) and asserts the art-res atlases
@@ -153,7 +160,7 @@
   premultiplied form for a pixel group's composite; off inside groups;
   only when the frame opens with a BACKDROP and no post pass follows)
   gives the quad's pixels without the quad's layer —
-  `tests/e2e/grain-fold.js` (in `make check-render`) proves the pixels on
+  `tests/e2e/render/grain-fold.js` (in `make check-render`) proves the pixels on
   three live frames. It is NOT the default: it is a TRADE, measured with
   `?gpuprobe=headroom` on the 2018 MacBook Air (4.12 Mpx) — the quad's layer
   goes (game frame 8.6 -> 6.8 ms GPU) but the second texture fetch makes
@@ -187,7 +194,7 @@
   anchored at the INTEGER texel row count (a fractional `h/px` would
   shift sampling by the ceil remainder, which changes as a camera-sized
   group resizes — content would swim row by row while panning).
-  `tests/e2e/composite-coherence.js` (standalone bun script, like
+  `tests/e2e/render/composite-coherence.js` (standalone bun script, like
   props-stability) asserts the composite numerically at DPR 1 and 2:
   edge position matches the analytic expectation (incl. FRACTIONAL group
   sizes — the v-flip regression), slope matches the requested angle,
@@ -207,7 +214,7 @@
   whole-texel thickness + texel-centre endpoints (a moving shape keeps one
   stamp and hops texel by texel); circles are always tessellated in target
   space so a circle under a rotating transform (fan well / hub) is
-  frame-stable. `tests/e2e/props-stability.js` (standalone bun script) is the
+  frame-stable. `tests/e2e/render/props-stability.js` (standalone bun script) is the
   headless acceptance test for this on the PROPS page (rotating layers of
   DATACENTER, OUTDOOR and LOBBY props: only their boxes may differ between
   frozen clocks)
@@ -322,7 +329,7 @@
   texel boundaries — the test caught it), nothing at all when the floor
   fills the screen. Not shading a fragment cannot cost anything (unlike the
   grain fold): up to a full layer saved, 1.8 ms on the 2018 MacBook Air.
-  `tests/e2e/backdrop-clip.js` (in `make check-render`) renders live
+  `tests/e2e/render/backdrop-clip.js` (in `make check-render`) renders live
   frames clipped and full and requires them pixel-IDENTICAL (corner of a
   floor, `?pixel=3` / `6`, floor 0, DPR 2; several sway phases each);
   `?backdrop=full` = the A/B switch
@@ -347,14 +354,17 @@
   KICK, bar or empty gun = OVERHEAD / KICK, loaded gun always EXECUTE; the
   player poses `kick` / `stomp` in robot-core's `posePlan` run on the
   finisher's own timer (choreographed to `FinisherKind::impacts`)
-- The command opcode tables in src/graphics.rs (`mod op`), renderer.js
-  (incl. its `OP_ARGS` arity table used by the POSTFX pre-scan) and
-  tests/e2e/specs/helpers.js (`OP_ARGS`) must stay in sync (ops 21-23's
-  values live in `src/static_geo.rs`) — ENFORCED by `cargo test`:
-  `src/graphics/stream.rs` holds the Rust `OP_ARGS` and parses both JS
-  files (`renderer_js_op_args_match`, `e2e_helpers_op_args_match`), and
-  `every_draw_method_emits_its_declared_arity` records every `Graphics`
-  method against it
+- THE OPCODE TABLE exists twice, pinned together: Rust (`mod op` in
+  src/graphics.rs + `OP_ARGS` in `src/graphics/stream.rs`; ops 21-23's
+  values in `src/static_geo.rs`) and JS (`web/ops.js` — read by
+  renderer.js, gpu-probe.js, and parsed from disk by the CommonJS
+  tests/e2e/specs/helpers.js). ENFORCED by `cargo test`
+  (`src/graphics/stream.rs`): `web_ops_js_matches_the_rust_table` (every
+  row's name, position = value, arity), `renderer_js_dispatch_matches_the_table`
+  (every `case N: // NAME` of the renderer's switch, and every opcode has a
+  case) and `every_draw_method_emits_its_declared_arity`. A new opcode = a
+  Rust const + arity, a `web/ops.js` row, a renderer `case` — the tests
+  fail until all three agree
 - `Graphics` is a RECORDER with two surfaces: the browser one (canvas
   sizing + `flush` -> `window.frameRender`, wasm-only) and the HEADLESS one
   (`Graphics::new_headless(w, h)` + `take_frame()`, native). Every draw
@@ -377,7 +387,8 @@
   browser round trip
 
 ## Repo layout (post-`proto/`)
-- Root: `index.html`, `renderer.js`, `robot-core.js` (the 3D->2D robot pipeline, imported by renderer.js at runtime), `shoggoth-core.js` (the boss pipeline, built on robot-core), `serve.py` (dev server, no-store + level-editor write API + the `/render-tests/<name>` route), `docs.html` (the `/docs` page: the RENDERING PIPELINE map — hand-built HTML/CSS mirroring the mermaid source in `docs/PIPELINE.md`, which GitHub renders — plus the persistent-vs-per-frame table, the cost model and links to every doc; serve.py routes `/docs` to it, `/docs/*.md` stay real files), `render-tests.html` (RENDER TESTS: a renderer-only harness — no wasm, no game — that drives `initRenderer`/`frameRender` with hand-built command streams so the smooth pixel-group composite can be eyeballed in isolation on any GPU; tests `square` (rocking black square), `sway` (the exact game sway over a checker/walls scene), `split` (smooth vs hard composite side by side); tweak via `?px=&amp=&period=&smooth=&zoom=`)
+- `web/` = the hand-written JS RUNTIME (plain ES modules, no build step in dev — edit + refresh; "renderer.js" / "robot-core.js" anywhere in this file mean these): `renderer.js` (the WebGL renderer: `initRenderer` is ONE closure ON PURPOSE — its ~30 mutable vars (`m`, `vCount`, `pix`, `batch*`, …) are read by nearly every inner function and by the per-vertex hot path, so it is not split into a shared-context object; only its pure DATA is factored out), `renderer/shaders.js` (every GLSL source, ~600 lines, no runtime string building), `ops.js` (THE one JS copy of the opcode table: `["NAME", args]` rows, row index = opcode → `OP`, `OP_ARGS`, `TEXT_SEP`; dependency-free), `robot-core.js` (the 3D->2D robot pipeline), `shoggoth-core.js` (the boss pipeline, built on robot-core), `gpu-probe.js` (`?gpuprobe`). `open_miami.js` + `open_miami_bg.wasm` at the root are GENERATED by wasm-bindgen (gitignored). DEPLOY ONLY: `make bundle` (`bun build`, no dependency) follows `web/renderer.js`'s imports into ONE minified module written at the same relative path (261 KB of sources → ~109 KB, one request; index.html unchanged); `.github/workflows/wasm-build.yml` stages it + copies `robot-core.js` / `shoggoth-core.js` unbundled because `tools/inspector.html` / `tools/rig-parity.html` import them directly
+- Root: `index.html`, `serve.py` (dev server, no-store + level-editor write API + the `/render-tests/<name>` route), `docs.html` (the `/docs` page: the RENDERING PIPELINE map — hand-built HTML/CSS mirroring the mermaid source in `docs/PIPELINE.md`, which GitHub renders — plus the persistent-vs-per-frame table, the cost model and links to every doc; serve.py routes `/docs` to it, `/docs/*.md` stay real files), `render-tests.html` (RENDER TESTS: a renderer-only harness — no wasm, no game — that drives `initRenderer`/`frameRender` with hand-built command streams so the smooth pixel-group composite can be eyeballed in isolation on any GPU; tests `square` (rocking black square), `sway` (the exact game sway over a checker/walls scene), `split` (smooth vs hard composite side by side); tweak via `?px=&amp=&period=&smooth=&zoom=`)
 - `tools/`: the `?viz` panels — `inspector.html` (character inspector: `?kind=robot&color=…` / `?kind=shoggoth&phase=masked|enraged`, `&embed=1` for the SPRITES tab; 3D orbit + 2D top-down views), `levels.html` + `levels-editor*.js` (level + scenario editor, LEVELS tab) — and `gen_levels.py`, `gen_props.py`
 - `levels/`: `floor_00.json` (the ground-level cold open: gate / parking lot, passive crowd), `floor_01..13.json`, `floor_13h.json`, `index.json` — the floors' single source of truth (format: `docs/SCENARIO_FORMAT.md`). Level *index* = position in `index.json` (sorted by id: index 0 = floor 0); `?floor=N` takes the floor **id** A floor may carry `"props": [{ "kind", "x", "y", "rot" (deg, cw), "size" (world units, default 100) }]` = placed set dressing (`kind` = a `PROP_NAMES` snake_case id, validated by `gen_levels.py` → `FloorDef.props: &[PropPlacement]`); DECORATION ONLY — drawn in-game by `src/render/floor_props.rs` (`render_floor_props`, called in `update_game` after the walls and before the actors, inside the `?pixel=N` world group), no collision
 - `src/lib.rs` is just the module list. THE BROWSER APP is `src/app.rs` + `src/app/` (wasm-only): `app.rs` = `GameState` (its fields are private to the `app` tree), the screen dispatch `update`, floor load / checkpoints, `start()` + the rAF loop; submodules `use super::*` and add their own `impl GameState` blocks — `game_loop` (`update_game`: input → `sim::GameSystems::step` → scenario bridge → HUD; boss intro; ending), `world_render` (the WRAPPER of `render::world::render_world`: owns the kill-flash / spark-expiry mutations, samples the fire input, builds the `WorldView`), `menus` (level select, modal chrome, SETTINGS / ABOUT / PAUSE), `viz` + `viz/{effects,props_page,musics}` (the `?viz` toolbox), `url`, `perf`. Drawing modules live in `src/render.rs` + `src/render/{world,robots,comms,dialogue,floor_props,title}.rs` (`world` = the real `render_world` over a read-only `WorldView`; `robots` = the actors layer, pose / colour tables; `title` = the neon glyphs — `tools/gen_title.py` parses `title_glyph` out of THAT file); `hud_ammo.rs` / `hud_msg.rs` are pure HUD STATE machines (host-tested), drawn by `render.rs`
@@ -471,8 +482,10 @@
   `make verify-all` (= `verify` + `check-e2e` + `check-render`) and by
   `.github/workflows/e2e-tests.yml` (one matrix job each):
   - `make check-e2e` — the Playwright specs (`tests/e2e/specs`)
-  - `make check-render` — the standalone renderer acceptance scripts
-    `tests/e2e/composite-coherence.js` (~7 s) + `props-stability.js` (~60 s,
+  - `make check-render` — the standalone renderer acceptance scripts (in
+    `tests/e2e/render/`, apart from the Playwright specs; they share
+    `tests/e2e/node_modules`)
+    `tests/e2e/render/composite-coherence.js` (~7 s) + `props-stability.js` (~60 s,
     fixed-sleep bound) + `rig-parity.js` (~5 s, the robots' GPU rig vs the
     CPU rig) + `grain-fold.js` (~15 s, the opt-in folded TV static vs the quad) +
     `backdrop-clip.js` (~30 s, the floor-occluded backdrop vs the full quad), in parallel against a `serve.py` the target starts on

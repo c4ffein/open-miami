@@ -49,10 +49,16 @@ function collectErrors(page) {
   return errors;
 }
 
-// Per-opcode argument counts of the frame command stream (must mirror
-// `mod op` in src/graphics.rs and OP_ARGS in renderer.js).
-const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1, 8, 5];
-const OP_ROBOT = 11; // colorIdx poseIdx weaponIdx x y angle sizePx time
+// The frame command stream's opcode table: READ from web/ops.js (the one JS
+// copy, pinned to src/graphics.rs by `cargo test`). ops.js is an ES module
+// and these specs are CommonJS, so its `["NAME", args]` rows are parsed from
+// disk rather than imported.
+const OPS_ROWS = [...require('fs')
+  .readFileSync(require('path').join(__dirname, '../../../web/ops.js'), 'utf8')
+  .matchAll(/^\s*\["([A-Z_]+)",\s*(\d+)\]/gm)];
+if (OPS_ROWS.length === 0) throw new Error('helpers.js: no opcode rows found in web/ops.js');
+const OP_ARGS = OPS_ROWS.map((r) => Number(r[2]));
+const OP_ROBOT = OPS_ROWS.findIndex((r) => r[1] === 'ROBOT'); // colorIdx poseIdx weaponIdx x y angle sizePx time
 const ROBOT_COLOR_PLAYER = 0; // CL4-UD3, coral (src/render/robots.rs ROBOT_COLOR_CORAL)
 
 /**

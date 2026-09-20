@@ -6,7 +6,7 @@
      art resolution the game samples. Every pose x weapon x a spread of
      animation times, palettes and facings, in full 64-tile batches so a
      spill into a neighbour tile shows up as a diff.
-     Headless acceptance: tests/e2e/rig-parity.js reads `window.rigParity`.
+     Headless acceptance: tests/e2e/render/rig-parity.js reads `window.rigParity`.
      `?bench=N` also times N batches of 64 robots per rig (CPU submit cost). -->
 <html>
 <head>
@@ -34,7 +34,7 @@
 <div id="out">running…</div>
 <canvas id="gl" width="16" height="16" style="display:none"></canvas>
 <script type="module">
-import { createRobotPipeline, POSES, WEAPONS, PALETTES } from "../robot-core.js";
+import { createRobotPipeline, POSES, WEAPONS, PALETTES } from "../web/robot-core.js";
 
 const RT = 128, PX = 3, COLS = 8, B = Math.ceil(RT / PX), ATLAS = 512;
 const TIMES = [0, 0.13, 0.31, 0.77, 1.9];

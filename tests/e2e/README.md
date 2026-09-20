@@ -35,7 +35,7 @@ used by `make check-render`):
 
 ## Renderer acceptance scripts (`make check-render`)
 
-`composite-coherence.js` (the smooth pixel-group composite, numeric
+`render/composite-coherence.js` (the smooth pixel-group composite, numeric
 assertions at DPR 1 and 2, ~7 s), `props-stability.js` (the `?viz` PROPS
 pixel-art stability, ~60 s — fixed-sleep bound) and `rig-parity.js` (the
 robots' GPU rig vs the CPU reference rig, every pose x weapon, through
@@ -48,7 +48,7 @@ not Playwright specs. `make check-render` runs them after the same
 `e2e-prep`, in parallel, against a `python3 serve.py 8098` it starts and
 kills itself (`RENDER_PORT` (a free ephemeral port by default) / `RENDER_TIMEOUT` (180 s each) override), and
 prints their logs (`test-results/render-*.log`) once all are done. By hand:
-`cd tests/e2e && bun composite-coherence.js [baseURL]` with a server at
+`cd tests/e2e && bun render/composite-coherence.js [baseURL]` with a server at
 `http://localhost:8098` (each header documents its arguments).
 
 Running Playwright by hand (after `make build-wasm` or a previous

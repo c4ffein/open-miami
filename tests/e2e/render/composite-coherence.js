@@ -2,7 +2,7 @@
 // world path) — not part of the Playwright spec run, a standalone script
 // like props-stability.js:
 //
-//   cd tests/e2e && bun composite-coherence.js [baseURL=http://localhost:8098]
+//   cd tests/e2e && bun render/composite-coherence.js [baseURL=http://localhost:8098]
 //
 // It freezes the game loop (frozen clock + the FPS cap's skip), then drives
 // window.frameRender directly with a synthetic stream: a black square inside

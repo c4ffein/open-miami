@@ -21,10 +21,25 @@
    The stream is filtered with the renderer's own OP_ARGS arity table, so the
    probe needs no knowledge of the ops it does not touch. */
 
-const OP_CLEAR = 0, OP_RECT = 1, OP_TEXT = 6, OP_SAVE = 7, OP_RESTORE = 8,
-      OP_SCALE = 12, OP_ROBOT = 11, OP_SHOGGOTH = 13, OP_POSTFX = 14,
-      OP_PIX_BEGIN = 15, OP_PIX_END = 16, OP_STATIC_BEGIN = 21, OP_STATIC_END = 22,
-      OP_STATIC_REF = 23, OP_BACKDROP = 24;
+import { OP } from "./ops.js";
+
+const {
+  CLEAR: OP_CLEAR,
+  RECT: OP_RECT,
+  TEXT: OP_TEXT,
+  SAVE: OP_SAVE,
+  RESTORE: OP_RESTORE,
+  SCALE: OP_SCALE,
+  ROBOT: OP_ROBOT,
+  SHOGGOTH: OP_SHOGGOTH,
+  POSTFX: OP_POSTFX,
+  PIX_BEGIN: OP_PIX_BEGIN,
+  PIX_END: OP_PIX_END,
+  STATIC_BEGIN: OP_STATIC_BEGIN,
+  STATIC_END: OP_STATIC_END,
+  STATIC_REF: OP_STATIC_REF,
+  BACKDROP: OP_BACKDROP,
+} = OP;
 const POSTFX_TV_STATIC = 13;
 
 const SETTLE_MS = (typeof window !== "undefined" && window.__gpuProbeFast) ? 50 : 500;   // ignored after each switch (pipeline drains, caches settle)

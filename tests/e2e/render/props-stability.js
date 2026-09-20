@@ -1,7 +1,7 @@
 // Headless acceptance test for the ?viz PROPS page pixel-art stability
 // (not part of the Playwright spec run — a standalone script):
 //
-//   cd tests/e2e && bun props-stability.js [baseURL=http://localhost:8098] [shotsDir]
+//   cd tests/e2e && bun render/props-stability.js [baseURL=http://localhost:8098] [shotsDir]
 //
 // The engine clock (performance.now) is frozen so frames are deterministic.
 // 1) For CRAC COOLER, RACK/CLOSED, EXHAUST FAN, SECURITY CAM (DATACENTER)

@@ -5,7 +5,8 @@
 //! flat f32 stream; renderer.js walks it with its own `OP_ARGS` table. The
 //! same walk here lets a native test record any draw code through
 //! `Graphics::new_headless` and assert on what the renderer would receive —
-//! no browser. `renderer_js_op_args_match` pins the two tables together.
+//! no browser. The tests pin this table to `web/ops.js` (names, values,
+//! arities) and to the `case` labels of renderer.js's dispatch.
 
 use super::{op, TEXT_SEP};
 use crate::static_geo::{OP_STATIC_BEGIN, OP_STATIC_END, OP_STATIC_REF};
@@ -13,8 +14,8 @@ use crate::static_geo::{OP_STATIC_BEGIN, OP_STATIC_END, OP_STATIC_REF};
 /// Number of opcodes (the highest opcode + 1).
 pub const OP_COUNT: usize = 26;
 
-/// Argument count per opcode (index = opcode). Mirror of `OP_ARGS` in
-/// renderer.js — the test below parses that file and compares.
+/// Argument count per opcode (index = opcode). Mirror of the `TABLE` in
+/// web/ops.js — the tests below parse that file and compare.
 pub const OP_ARGS: [usize; OP_COUNT] = [
     4,  // 0 CLEAR
     8,  // 1 RECT
@@ -235,31 +236,87 @@ mod tests {
     use crate::graphics::Graphics;
     use crate::math::{Color, Vec2};
 
-    /// Parse `const OP_ARGS = [ ... ];` out of a JS source.
-    fn js_op_args(src: &str, file: &str) -> Vec<usize> {
-        let at = src
-            .find("const OP_ARGS = [")
-            .unwrap_or_else(|| panic!("no `const OP_ARGS = [` in {file}"));
-        let body = &src[at + "const OP_ARGS = [".len()..];
-        let body = &body[..body.find(']').expect("unterminated OP_ARGS")];
-        body.split(',')
-            .map(|v| v.trim().parse().expect("OP_ARGS entry is not a number"))
+    /// Every Rust opcode with the name `web/ops.js` must give it.
+    const NAMED: [(f32, &str); OP_COUNT] = [
+        (op::CLEAR, "CLEAR"),
+        (op::RECT, "RECT"),
+        (op::RECT_LINES, "RECT_LINES"),
+        (op::CIRCLE, "CIRCLE"),
+        (op::LINE, "LINE"),
+        (op::ARC, "ARC"),
+        (op::TEXT, "TEXT"),
+        (op::SAVE, "SAVE"),
+        (op::RESTORE, "RESTORE"),
+        (op::TRANSLATE, "TRANSLATE"),
+        (op::ROTATE, "ROTATE"),
+        (op::ROBOT, "ROBOT"),
+        (op::SCALE, "SCALE"),
+        (op::SHOGGOTH, "SHOGGOTH"),
+        (op::POSTFX, "POSTFX"),
+        (op::PIX_BEGIN, "PIX_BEGIN"),
+        (op::PIX_END, "PIX_END"),
+        (op::PORTRAIT, "PORTRAIT"),
+        (op::GUN_PICKUP, "GUN_PICKUP"),
+        (op::PIX_BLIT, "PIX_BLIT"),
+        (op::DRIVE, "DRIVE"),
+        (OP_STATIC_BEGIN, "STATIC_BEGIN"),
+        (OP_STATIC_END, "STATIC_END"),
+        (OP_STATIC_REF, "STATIC_REF"),
+        (op::BACKDROP, "BACKDROP"),
+        (op::HEAD, "HEAD"),
+    ];
+
+    /// The `["NAME", args],` rows of `web/ops.js`, in order (row = opcode).
+    fn js_table() -> Vec<(String, usize)> {
+        let src = include_str!("../../web/ops.js");
+        let body = &src[src.find("const TABLE = [").expect("TABLE in web/ops.js")..];
+        let body = &body[..body.find("\n];").expect("unterminated TABLE")];
+        body.lines()
+            .filter_map(|l| l.trim().strip_prefix("[\""))
+            .map(|row| {
+                let (name, rest) = row.split_once('"').expect("a quoted name");
+                let args = rest.trim_start_matches(',').trim();
+                let args = &args[..args.find(']').expect("a closed row")];
+                (name.to_string(), args.trim().parse().expect("an arity"))
+            })
             .collect()
     }
 
     #[test]
-    fn renderer_js_op_args_match() {
-        let js = js_op_args(include_str!("../../renderer.js"), "renderer.js");
-        assert_eq!(
-            js, OP_ARGS,
-            "renderer.js OP_ARGS != graphics::stream::OP_ARGS"
-        );
+    fn web_ops_js_matches_the_rust_table() {
+        let js = js_table();
+        assert_eq!(js.len(), OP_COUNT, "web/ops.js row count");
+        for (value, name) in NAMED {
+            let row = &js[value as usize];
+            assert_eq!(row.0, name, "web/ops.js row {value} is named {}", row.0);
+            assert_eq!(row.1, OP_ARGS[value as usize], "arity of {name}");
+        }
     }
 
+    /// renderer.js dispatches on numeric literals (`case 18: // GUN_PICKUP`):
+    /// every label must agree with the table, and every opcode have a case.
     #[test]
-    fn e2e_helpers_op_args_match() {
-        let src = include_str!("../../tests/e2e/specs/helpers.js");
-        assert_eq!(js_op_args(src, "helpers.js"), OP_ARGS);
+    fn renderer_js_dispatch_matches_the_table() {
+        let src = include_str!("../../web/renderer.js");
+        let body = &src[src.find("switch (op) {").expect("the dispatch switch")..];
+        let mut seen = [false; OP_COUNT];
+        for line in body.lines() {
+            let Some(rest) = line.trim().strip_prefix("case ") else {
+                continue;
+            };
+            let Some((num, tail)) = rest.split_once(':') else {
+                continue;
+            };
+            let Ok(value) = num.trim().parse::<usize>() else {
+                continue;
+            };
+            let label = tail.split("//").nth(1).unwrap_or("").trim();
+            let label = label.split([' ', '(']).next().unwrap_or("");
+            assert!(value < OP_COUNT, "renderer.js has a case {value}");
+            assert_eq!(label, NAMED[value].1, "renderer.js `case {value}` label");
+            seen[value] = true;
+        }
+        assert!(seen.iter().all(|&s| s), "an opcode has no case: {seen:?}");
     }
 
     /// Every `Graphics` draw method, called once each.

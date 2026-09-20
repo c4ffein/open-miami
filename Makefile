@@ -1,4 +1,4 @@
-.PHONY: help verify verify-all check-test check-clippy check-fmt check-build check-wasm-build build-wasm e2e-prep check-e2e check-render check-coverage gen-levels check-levels gen-props check-props gen-title
+.PHONY: help verify verify-all check-test check-clippy check-fmt check-build check-wasm-build build-wasm bundle e2e-prep check-e2e check-render check-coverage gen-levels check-levels gen-props check-props gen-title
 
 # Colors for output
 RED=\033[0;31m
@@ -95,6 +95,21 @@ build-wasm:
 	@echo "  - open_miami_bg.wasm"
 	@echo "$(YELLOW)You can now open index.html in a web browser (via a local web server)$(NC)"
 
+# Bundle - DEPLOY ONLY. `bun build` (the bundler built into the e2e toolchain:
+# no dependency) follows web/renderer.js's imports (ops, shaders, robot-core,
+# shoggoth-core, gpu-probe) into ONE minified ES module written at the same
+# relative path, so index.html's `import("./web/renderer.js")` is unchanged
+# and the site makes one request for the renderer instead of six. Local dev
+# never needs it: serve.py serves the source modules, edit + refresh.
+# tools/inspector.html and tools/rig-parity.html import robot-core /
+# shoggoth-core directly, so the deploy also copies those two unbundled.
+BUNDLE_OUT ?= dist/web
+bundle:
+	@echo "$(YELLOW)Bundling web/renderer.js -> $(BUNDLE_OUT)/renderer.js...$(NC)"
+	@mkdir -p $(BUNDLE_OUT)
+	bun build web/renderer.js --outfile $(BUNDLE_OUT)/renderer.js --target browser --format esm --minify
+	@echo "$(GREEN)✓ Bundle written ($$(wc -c < $(BUNDLE_OUT)/renderer.js) bytes; sources: $$(cat web/renderer.js web/ops.js web/gpu-probe.js web/robot-core.js web/shoggoth-core.js web/renderer/shaders.js | wc -c))$(NC)"
+
 # Browser suites - shared preparation: the wasm + glue (build-wasm), the Bun
 # deps, the Chromium browser (+ its system libs, rootless fallback via
 # setup-browser-deps.sh). Both check-e2e and check-render depend on it.
@@ -122,13 +137,13 @@ check-e2e: e2e-prep
 	@echo "$(GREEN)✓ E2E tests passed$(NC)"
 
 # Render Tests - the five standalone renderer acceptance scripts
-# (tests/e2e/composite-coherence.js: the smooth pixel-group composite, at DPR
-# 1 and 2, ~7 s; tests/e2e/props-stability.js: the ?viz PROPS pixel-art
+# (tests/e2e/render/composite-coherence.js: the smooth pixel-group composite, at DPR
+# 1 and 2, ~7 s; tests/e2e/render/props-stability.js: the ?viz PROPS pixel-art
 # stability, ~60 s — it is fixed-sleep bound: ~60 waitForTimeout calls + 9
-# page loads of /?viz; tests/e2e/rig-parity.js: the robots' GPU rig vs the
-# CPU rig, every pose x weapon, ~5 s; tests/e2e/grain-fold.js: the TV static
+# page loads of /?viz; tests/e2e/render/rig-parity.js: the robots' GPU rig vs the
+# CPU rig, every pose x weapon, ~5 s; tests/e2e/render/grain-fold.js: the TV static
 # folded into the batch shader vs the old full-screen quad, pixel diff on
-# three live game frames, ~15 s; tests/e2e/backdrop-clip.js: the void
+# three live game frames, ~15 s; tests/e2e/render/backdrop-clip.js: the void
 # backdrop clipped to where the floor does not cover it vs the full quad,
 # pixel-IDENTICAL on live frames, ~30 s). Each launches its own Chromium, so they run IN
 # PARALLEL against one serve.py started on RENDER_PORT for the duration of
@@ -151,17 +166,17 @@ check-render: e2e-prep
 	for i in $$(seq 1 50); do curl -sf -o /dev/null http://127.0.0.1:$(RENDER_PORT)/index.html && break; sleep 0.1; done; \
 	kill -0 $$SRV 2>/dev/null || { echo "$(RED)serve.py did not start on :$(RENDER_PORT) (port in use?) — set RENDER_PORT$(NC)"; exit 1; }; \
 	cd tests/e2e && mkdir -p test-results; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun composite-coherence.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-composite-coherence.log 2>&1 & P1=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun props-stability.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-props-stability.log 2>&1 & P2=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun rig-parity.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-rig-parity.log 2>&1 & P3=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun grain-fold.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-grain-fold.log 2>&1 & P4=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun backdrop-clip.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-backdrop-clip.log 2>&1 & P5=$$!; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/composite-coherence.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-composite-coherence.log 2>&1 & P1=$$!; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/props-stability.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-props-stability.log 2>&1 & P2=$$!; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/rig-parity.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-rig-parity.log 2>&1 & P3=$$!; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/grain-fold.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-grain-fold.log 2>&1 & P4=$$!; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/backdrop-clip.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-backdrop-clip.log 2>&1 & P5=$$!; \
 	wait $$P1; R1=$$?; wait $$P2; R2=$$?; wait $$P3; R3=$$?; wait $$P4; R4=$$?; wait $$P5; R5=$$?; \
-	echo "--- composite-coherence.js (exit $$R1)"; cat test-results/render-composite-coherence.log; \
-	echo "--- props-stability.js (exit $$R2)"; cat test-results/render-props-stability.log; \
-	echo "--- rig-parity.js (exit $$R3)"; cat test-results/render-rig-parity.log; \
-	echo "--- grain-fold.js (exit $$R4)"; cat test-results/render-grain-fold.log; \
-	echo "--- backdrop-clip.js (exit $$R5)"; cat test-results/render-backdrop-clip.log; \
+	echo "--- render/composite-coherence.js (exit $$R1)"; cat test-results/render-composite-coherence.log; \
+	echo "--- render/props-stability.js (exit $$R2)"; cat test-results/render-props-stability.log; \
+	echo "--- render/rig-parity.js (exit $$R3)"; cat test-results/render-rig-parity.log; \
+	echo "--- render/grain-fold.js (exit $$R4)"; cat test-results/render-grain-fold.log; \
+	echo "--- render/backdrop-clip.js (exit $$R5)"; cat test-results/render-backdrop-clip.log; \
 	[ $$R1 -eq 0 ] && [ $$R2 -eq 0 ] && [ $$R3 -eq 0 ] && [ $$R4 -eq 0 ] && [ $$R5 -eq 0 ]
 	@echo "$(GREEN)✓ Render tests passed$(NC)"
 

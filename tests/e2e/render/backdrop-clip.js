@@ -1,7 +1,7 @@
 // Headless acceptance test for the BACKDROP OCCLUSION — a standalone script
 // like composite-coherence.js, not a Playwright spec:
 //
-//   cd tests/e2e && bun backdrop-clip.js [baseURL=http://localhost:8098]
+//   cd tests/e2e && bun render/backdrop-clip.js [baseURL=http://localhost:8098]
 //
 // The void backdrop (opcode 24) is an opaque full-screen quad drawn first;
 // the floor then paints over most of it. The wasm now sends, with the op, the

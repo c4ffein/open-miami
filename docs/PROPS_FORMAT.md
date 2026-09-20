@@ -89,7 +89,7 @@ grid — the PROPS page does. Inside groups the renderer applies the pixel-art
 rule to primitives (whole-texel rects, half-texel small circles with snapped
 centres, texel-centre lines; circles tessellated in target space so a fan's
 well / hub never flickers while the blades turn) — see renderer.js.
-`tests/e2e/props-stability.js` (`cd tests/e2e && bun props-stability.js
+`tests/e2e/render/props-stability.js` (`cd tests/e2e && bun render/props-stability.js
 [baseURL] [shotsDir]`) is the headless acceptance test: frozen-clock frames,
 only a rotating layer's box may differ between clocks, identical clocks give
 identical frames, the obelisk's motes keep a constant lit-texel count.

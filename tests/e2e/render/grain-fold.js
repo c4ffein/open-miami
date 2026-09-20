@@ -1,7 +1,7 @@
 // Headless acceptance test for the FOLDED TV STATIC — a standalone script
 // like composite-coherence.js, not a Playwright spec:
 //
-//   cd tests/e2e && bun grain-fold.js [baseURL=http://localhost:8098]
+//   cd tests/e2e && bun render/grain-fold.js [baseURL=http://localhost:8098]
 //
 // The film grain (POSTFX 13) used to be one more alpha-blended full-screen
 // quad over the finished frame. With `?grain=fold` renderer.js FOLDS it into

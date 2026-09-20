@@ -26,7 +26,7 @@ flowchart LR
 | **sim** | What is the state of the world? | the `World`, its components, `dt` | `Graphics`, input, the browser, wall-clock time | `ecs/`, `components/`, `systems/`, `scenario.rs`, `game.rs`, `sim.rs`, `pathfinding.rs`, `collision.rs`, `hud_ammo.rs` / `hud_msg.rs` (HUD *state*), `editor.rs` (the editor *document*) |
 | **render** | What does this state look like? | state READ-ONLY + `&Graphics` | input, mutation of game state, the browser, audio | `render.rs`, `render/` (`world`, `robots`, `comms`, `dialogue`, `floor_props`, `title`), `level.rs`, `camera.rs`, the `draw` submodules of `props.rs` / `drive.rs` / `ending.rs`, `sparks::render_sparks` |
 | **app** | What happens THIS FRAME? | everything: input, the clock, audio, settings, the URL, `&mut GameState` | — (but it should hold no drawing of its own, see below) | `app.rs`, `app/` (wasm-only), `editor_ui.rs`, `input.rs`, `audio/engine.rs` |
-| **renderer** | How do commands become pixels? | the GPU | game state (it only ever sees the stream) | `renderer.js`, `robot-core.js`, `shoggoth-core.js` |
+| **renderer** | How do commands become pixels? | the GPU | game state (it only ever sees the stream) | `web/`: `renderer.js` + `renderer/shaders.js`, `ops.js`, `robot-core.js`, `shoggoth-core.js`, `gpu-probe.js` |
 
 ## The test for "is this render code?"
 
@@ -100,7 +100,20 @@ ships.
 - `update_game` is still one ~600-line function (input, tick, event bridge
   and HUD drawing in sequence). Its HUD / comms drawing half is render code
   by the test above and should move behind a view struct like the world did.
-- `renderer.js` is one ~2,300-line closure (split planned, not done).
+- `web/renderer.js`'s `initRenderer` is one ~1,650-line closure, and that is
+  a DECISION, not debt to pay down blindly. The dependency graph was
+  measured before deciding: ~30 mutable closure variables (`m` — which
+  `tSave` / `tRestore` REASSIGN —, `vCount`, `pix`, `batchFbo`, `boundTex`,
+  …) are touched by nearly all 54 inner functions, and `vert` — called per
+  vertex — reads four of them. Splitting it into modules means a shared
+  context object: every one of those reads becomes a property load in the
+  hottest loop of a renderer tuned on a fill-rate-poor GPU, across code
+  whose pixels are only partly under test (postfx kinds, text, the drive
+  have no pixel test). What WAS pure data is out: the GLSL
+  (`renderer/shaders.js`) and the opcode table (`ops.js`). A further split
+  should start with the subsystems that own their state — postfx + warp,
+  drive + backdrop, the glyph atlas — as factories, each with a pixel test
+  first.
 - `audio/engine.rs` + `audio/engine/*` is split by concern but stays
   browser-only: unlike `Graphics` it is not a recorder — it builds live
   WebAudio node graphs — so none of the SFX / voice recipes are host-tested
@@ -110,3 +123,65 @@ ships.
 - Mirrored constants without a test yet: the drive scene geometry
   (`drive.rs` ↔ `DRIVE_FS`) and the robot rig's rotation order
   (`leg()` / `arm()` ↔ `rigVS`, covered by `rig-parity.js` in the browser).
+
+## Roadmap — characters: Rust computes poses, GLSL evaluates rigs, JS ferries
+
+The robots and the boss are the one place where the layering is not settled:
+their ANIMATION (what the body does at time `t`) lives in JS, outside the
+native test boundary. The target is one rule for both characters:
+
+> **Rust computes poses (numbers). GLSL evaluates the rig. JS only ferries.**
+
+Neither extreme is the goal. "All Rust" is impossible — the skeleton and
+the inking must run on the GPU, so they stay GLSL. "All JS" is today, and
+it has a real coupling: Rust owns the finisher timers and impact frames
+(`FinisherKind::impacts`), JS owns the kick / stomp keyframes that must line
+up with them — gameplay choreography mirrored across two languages, pinned by
+nothing. What moves is only the middle piece: `(pose, time)` -> joint
+numbers, which by the test above is render-layer code.
+
+Where each character stands:
+
+- **Robots — the seam already exists.** `posePlan(pose, time, relaxed)` in
+  `web/robot-core.js` is a PURE ~150-line function (no state, no randomness,
+  no browser) returning a handful of scalars, and the GPU rig (`rigVS`)
+  already consumes exactly that: 16 floats per instance. The interface is
+  there; it just sits between two pieces of JS.
+- **The boss — no seam yet.** `web/shoggoth-core.js` builds a matrix per
+  sphere on the CPU and issues one draw per sphere; there is no "pose
+  numbers" layer to cut along. (The command is already minimal — 6 floats,
+  `x y size heading reveal time` — so this is about where the expansion
+  runs, not about stream size.) Its small wander state machine is the
+  inspector's standalone preview, not game logic: in-game Rust sends the
+  real `heading`.
+
+Planned order (none of it started; each step lands with its test FIRST):
+
+1. **Robots: port `posePlan` to Rust** (`render/pose.rs`); the `ROBOT` op
+   carries the pose scalars instead of `poseIdx + time`. Safety net before
+   deleting the JS: a SCALAR-PARITY test — dump the scalars for every pose x
+   a sweep of times from both implementations and require a match. Payoff:
+   choreography in one language, host-testable ("the kick's foot is at full
+   extension at the impact time"). Cheap; do it first.
+2. **Boss: instanced spheres, still in JS** — one per-instance float block
+   per sphere, one instanced draw (as the robots' GPU rig did). Worth it on
+   its own (a few dozen draws -> one) and it CREATES the seam. Needs a
+   pixel-parity page first, like `tools/rig-parity.html`: the boss has no
+   pixel test today, and its animation was tuned by eye.
+3. **Boss: move the sphere placement to Rust**, filling that instance list
+   (`render/shoggoth.rs`). Removes the mirrored `MASK_OFF_SECS` /
+   `BOSS_MASK_OFF_SECS`.
+4. **Tools load the wasm for poses.** `tools/inspector.html` and
+   `tools/rig-parity.html` import the JS pipelines with no engine today;
+   they would call an exported `pose_plan(...)` instead.
+
+Costs accepted knowingly: look-dev on a pose goes from edit + refresh to a
+wasm rebuild (15 s release today; a dev-profile build should cut that — not
+yet measured), and the tools pages gain a wasm dependency. Decide robots and
+boss TOGETHER — moving only one leaves two conventions, which is worse than
+either.
+
+Interim guard until step 3: `BOSS_MASK_OFF_SECS` (src/systems/boss.rs) and
+`MASK_OFF_SECS` (web/shoggoth-core.js) are kept equal by a comment only; a
+`cargo test` parsing the JS constant (the `web/ops.js` pattern) closes that.
+

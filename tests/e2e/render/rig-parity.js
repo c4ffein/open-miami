@@ -1,7 +1,7 @@
 // Headless acceptance test for the robots' GPU RIG (robot-core.js) — a
 // standalone script like composite-coherence.js, not a Playwright spec:
 //
-//   cd tests/e2e && bun rig-parity.js [baseURL=http://localhost:8098]
+//   cd tests/e2e && bun render/rig-parity.js [baseURL=http://localhost:8098]
 //
 // The game draws its robots through the GPU rig: the skeleton runs in the
 // vertex shader from a dozen per-instance pose scalars and the whole batch
