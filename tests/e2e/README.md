@@ -44,7 +44,11 @@ robots' GPU rig vs the CPU reference rig, every pose x weapon, through
 into the batch shader vs the old full-screen quad: pixel diff on three live
 game frames, ~15 s) and `backdrop-clip.js` (the void backdrop drawn only
 where the floor does not cover it vs the full quad: pixel-identical on live
-frames, ~30 s) are standalone Bun scripts,
+frames, ~30 s) and the three RENDERER-ONLY ones — `postfx-kinds.js`,
+`text-glyphs.js`, `drive-backdrop.js` (no game, no wasm: `render/lib.js`
+drives `web/renderer.js` through `/render-tests` with hand-built streams and
+asserts what each subsystem promises; ~3-6 s each; `DUMP=<dir>` writes the
+interesting shots as PNGs) — are standalone Bun scripts,
 not Playwright specs. `make check-render` runs them after the same
 `e2e-prep`, in parallel, against a `python3 serve.py 8098` it starts and
 kills itself (`RENDER_PORT` (a free ephemeral port by default) / `RENDER_TIMEOUT` (180 s each) override), and

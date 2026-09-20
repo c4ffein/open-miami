@@ -60,13 +60,31 @@ Headless Chromium on software GL (SwiftShader, ~5–15 fps): correct pixels,
 slow frames. Always run through the Makefile — it builds the wasm, installs
 the browser, sets the library path and the timeouts.
 
-- **`make check-render`** — six standalone scripts, in parallel, each
-  comparing PIXELS: the pixel-group composite (`composite-coherence`), prop
-  pixel-art stability (`props-stability`), the robots' GPU rig vs the CPU
-  reference (`rig-parity`), the folded TV static (`grain-fold`), the
-  floor-occluded backdrop (`backdrop-clip`), the boss's instanced path vs
-  its per-sphere reference (`shoggoth-parity`). These are the safety net for
-  any change to `web/`.
+- **`make check-render`** — nine standalone scripts (`RENDER_SCRIPTS` in the
+  Makefile), in parallel, each comparing PIXELS. Two families:
+  - on LIVE GAME frames: the pixel-group composite (`composite-coherence`),
+    prop pixel-art stability (`props-stability`), the robots' GPU rig vs the
+    CPU reference (`rig-parity`), the folded TV static (`grain-fold`), the
+    floor-occluded backdrop (`backdrop-clip`), the boss's instanced path vs
+    its per-sphere reference (`shoggoth-parity`);
+  - RENDERER-ONLY, no game and no wasm (`render/lib.js` drives
+    `web/renderer.js` through the `/render-tests` harness page with
+    hand-built streams, the clock and `Math.random` pinned; ~3-6 s each):
+    every POSTFX kind against what its table promises (`postfx-kinds`: t = 0
+    is the identity, each kind is its own image, clock + colour wired, the
+    modal static's coverage IS `t`, the warp accumulator accumulates and
+    clears, unknown kinds are no-ops), TEXT + the glyph atlas
+    (`text-glyphs`: baseline / size / monospace pen / colour / transform /
+    arena, and text after an ATLAS RESET == text before), and the two
+    full-shader backgrounds (`drive-backdrop`: the art grid, `dim`, one torn
+    band = the image shifted, split threshold, placement, the occlusion
+    rect). They assert PROPERTIES, never golden images; each was
+    mutation-tested (7 renderer breaks, 7 caught). They also print one
+    `FP <case> <hash>` line per rendered case into their log: REFACTORING
+    `web/renderer.js`? diff those lines before / after — identical =
+    pixel-identical on 150+ cases.
+
+  These are the safety net for any change to `web/`.
 - **`make check-e2e`** — Playwright: floor 1 loads and draws its HUD, the
   player purges the floor and rides the lift to floor 2 (the real boot path,
   audio pre-render gate included); `menu-transitions.spec.js`: driving the
@@ -83,7 +101,8 @@ pre-render gate with `?precompute=0`, the gameplay specs keep the real boot
 path) and each render script at `RENDER_TIMEOUT` (180 s — measured:
 `composite-coherence` ~7 s, `props-stability` ~60 s (fixed-sleep bound),
 `rig-parity` ~5 s, `grain-fold` ~15 s, `backdrop-clip` ~30 s,
-`shoggoth-parity` ~20 s). The render scripts run against a `serve.py` the
+`shoggoth-parity` ~20 s, the three renderer-only ones ~3-6 s; the whole
+target ~85 s). The render scripts run against a `serve.py` the
 target starts on `RENDER_PORT` (a free ephemeral port by default) and kills;
 logs in `tests/e2e/test-results/render-*.log`.
 
@@ -95,5 +114,5 @@ the headless simulation proves those thousands of times faster.
 ## Not covered (known)
 
 The WebAudio engine (`src/audio/engine*`) builds live node graphs and has no
-host tests; postfx kinds, text and the drive backdrop have no pixel test;
+host tests;
 `src/app/` (input, menus, `?viz`) is only exercised by the Playwright specs.

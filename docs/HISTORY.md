@@ -172,6 +172,28 @@ THE ROADMAP IS COMPLETE: no character animation is left in JS. What the JS
 still decides about a character is how it is LIT, INKED and FRAMED — renderer
 questions by the layering above.
 
+## Findings of the renderer-only pixel tests (2026-09)
+
+Writing `postfx-kinds` / `text-glyphs` / `drive-backdrop` (docs/TESTING.md)
+turned up one real mismatch and two non-bugs worth remembering:
+
+- **Unknown POSTFX kinds were NOT no-ops.** `Graphics::postfx` documents "any
+  other kind is a no-op", but a kind > 13 (or < 0) fell into the post
+  shader's last `else` — the MODAL STATIC branch, reading the colour as
+  panel extents. The game never emits one, so nothing was visible. Fixed in
+  `frameRender` (the frame is no longer routed through the scene target).
+- **Zeroing the glyph atlas on reset: tried, measured, removed.** The atlas
+  is sampled LINEAR and its reset leaves the old texels in place, which
+  looks like a bleed bug for magnified text. It is not: VT323 cells all have
+  one width, every generation lays out on the same grid, and a stale
+  neighbour presents its transparent padding. Zeroing changed no pixel
+  (A/B, magnified text included). What DOES differ after a reset: up to +-1
+  on a channel for a few dozen px — float rounding of the interpolated UVs
+  at another atlas position. The test's tolerance is 1 for that reason.
+- **DRIVE's torn band keeps one art column of scene in the vacated slice**:
+  the shader's void test is `p.x < -0.5 * uPx` (a cell whose centre lands
+  exactly half a cell outside still samples). By design; the test allows it.
+
 ## Removed tooling (so nobody looks for it)
 
 - `build-wasm.sh` — replaced by `make build-wasm` (installs the wasm32 target

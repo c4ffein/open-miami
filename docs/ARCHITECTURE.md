@@ -127,8 +127,8 @@ ships.
   vertex — reads four of them. Splitting it into modules means a shared
   context object: every one of those reads becomes a property load in the
   hottest loop of a renderer tuned on a fill-rate-poor GPU, across code
-  whose pixels are only partly under test (postfx kinds, text, the drive
-  have no pixel test). What WAS pure data is out: the GLSL
+  whose pixels were only partly under test when this was decided (postfx
+  kinds, text and the drive got their pixel tests since: docs/TESTING.md). What WAS pure data is out: the GLSL
   (`renderer/shaders.js`) and the opcode table (`ops.js`). A further split
   should start with the subsystems that own their state — postfx + warp,
   drive + backdrop, the glyph atlas — as factories, each with a pixel test
@@ -183,20 +183,17 @@ how each move was proven bit-exact: [HISTORY.md](HISTORY.md)):
 Everything the refactor set out to do is done; nothing below is urgent, and
 each item is optional. A new session can start from this list.
 
-1. **Pixel tests for the renderer's untested subsystems** — the postfx kinds,
-   text (the glyph atlas) and the DRIVE backdrop have none (docs/TESTING.md,
-   "Not covered"). Cheap, in the style of `tests/e2e/render/*.js`, and the
-   precondition for item 3. Highest value per hour.
-2. **Pin the last unpinned mirror: the DRIVE scene geometry** (`src/drive.rs`
+1. **Pin the last unpinned mirror: the DRIVE scene geometry** (`src/drive.rs`
    tunables <-> `DRIVE_FS` in web/renderer/shaders.js) — a `cargo test` that
    parses the shader's constants, like the opcode / pose / sphere pins.
-3. **The renderer's self-contained subsystems as factories** (postfx + warp,
-   drive + backdrop, the glyph atlas) — ONLY behind item 1's pixel tests, and
-   never the batch core: see "Known debt" for why `initRenderer` stays one
+2. **The renderer's self-contained subsystems as factories** (postfx + warp,
+   drive + backdrop, the glyph atlas) — their pixel tests exist now
+   (`postfx-kinds` / `text-glyphs` / `drive-backdrop`, docs/TESTING.md): diff
+   their `FP` hashes before / after. Never the batch core: see "Known debt" for why `initRenderer` stays one
    closure.
-4. **Host tests for the WebAudio engine** — needs a recording `AudioGraph`
+3. **Host tests for the WebAudio engine** — needs a recording `AudioGraph`
    seam (what `Graphics::new_headless` is to drawing). A real design change;
    worth it only if the SFX / voice recipes start changing often.
-5. **Splitting `update_game`'s orchestration** (input handling, the
+4. **Splitting `update_game`'s orchestration** (input handling, the
    event-to-sound bridge) — app code by nature, reachable only by Playwright,
    so the payoff is readability, not testability. Lowest priority.

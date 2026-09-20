@@ -164,6 +164,11 @@ ifeq ($(origin RENDER_PORT), undefined)
 RENDER_PORT := $(shell python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1])')
 endif
 RENDER_TIMEOUT ?= 180
+# The standalone scripts of tests/e2e/render/, run in parallel (one log each:
+# tests/e2e/test-results/render-<name>.log — the `FP <case> <hash>` lines the
+# renderer-only ones print stay in the log, for diffing across a refactor).
+RENDER_SCRIPTS = composite-coherence props-stability rig-parity grain-fold backdrop-clip \
+	shoggoth-parity postfx-kinds text-glyphs drive-backdrop
 check-render: e2e-prep
 	@echo "$(YELLOW)Running renderer acceptance tests (serve.py on :$(RENDER_PORT), $(RENDER_TIMEOUT) s timeout each)...$(NC)"
 	@ulimit -c 0; \
@@ -171,21 +176,17 @@ check-render: e2e-prep
 	trap 'kill $$SRV 2>/dev/null' EXIT; \
 	for i in $$(seq 1 50); do curl -sf -o /dev/null http://127.0.0.1:$(RENDER_PORT)/index.html && break; sleep 0.1; done; \
 	kill -0 $$SRV 2>/dev/null || { echo "$(RED)serve.py did not start on :$(RENDER_PORT) (port in use?) — set RENDER_PORT$(NC)"; exit 1; }; \
-	cd tests/e2e && mkdir -p test-results; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/composite-coherence.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-composite-coherence.log 2>&1 & P1=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/props-stability.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-props-stability.log 2>&1 & P2=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/rig-parity.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-rig-parity.log 2>&1 & P3=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/grain-fold.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-grain-fold.log 2>&1 & P4=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/backdrop-clip.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-backdrop-clip.log 2>&1 & P5=$$!; \
-	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/shoggoth-parity.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-shoggoth-parity.log 2>&1 & P6=$$!; \
-	wait $$P1; R1=$$?; wait $$P2; R2=$$?; wait $$P3; R3=$$?; wait $$P4; R4=$$?; wait $$P5; R5=$$?; wait $$P6; R6=$$?; \
-	echo "--- render/composite-coherence.js (exit $$R1)"; cat test-results/render-composite-coherence.log; \
-	echo "--- render/props-stability.js (exit $$R2)"; cat test-results/render-props-stability.log; \
-	echo "--- render/rig-parity.js (exit $$R3)"; cat test-results/render-rig-parity.log; \
-	echo "--- render/grain-fold.js (exit $$R4)"; cat test-results/render-grain-fold.log; \
-	echo "--- render/backdrop-clip.js (exit $$R5)"; cat test-results/render-backdrop-clip.log; \
-	echo "--- render/shoggoth-parity.js (exit $$R6)"; cat test-results/render-shoggoth-parity.log; \
-	[ $$R1 -eq 0 ] && [ $$R2 -eq 0 ] && [ $$R3 -eq 0 ] && [ $$R4 -eq 0 ] && [ $$R5 -eq 0 ] && [ $$R6 -eq 0 ]
+	cd tests/e2e && mkdir -p test-results; PIDS=""; \
+	for s in $(RENDER_SCRIPTS); do \
+		( $(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/$$s.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-$$s.log 2>&1; echo $$? > test-results/render-$$s.exit ) & PIDS="$$PIDS $$!"; \
+	done; wait $$PIDS; \
+	FAILED=""; \
+	for s in $(RENDER_SCRIPTS); do \
+		R=$$(cat test-results/render-$$s.exit); rm -f test-results/render-$$s.exit; \
+		echo "--- render/$$s.js (exit $$R)"; grep -v '^FP ' test-results/render-$$s.log; \
+		[ "$$R" = 0 ] || FAILED="$$FAILED $$s"; \
+	done; \
+	[ -z "$$FAILED" ] || { echo "$(RED)✗ render scripts failed:$$FAILED$(NC)"; exit 1; }
 	@echo "$(GREEN)✓ Render tests passed$(NC)"
 
 # Levels - compile the floor/scenario JSON (levels/*.json, written by the

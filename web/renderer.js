@@ -1818,7 +1818,13 @@ export function initRenderer(canvas) {
       glyphPenY += glyphCellH;
     }
     if (glyphPenY + glyphCellH > GLYPH_ATLAS_SIZE) {
-      // Atlas full (would need hundreds of distinct glyphs) — reset it.
+      // Atlas full (would need hundreds of distinct glyphs — the game never
+      // gets there) — reset it. The old texels are NOT cleared: VT323 cells
+      // all have one width, so every generation lays out on the same grid and
+      // a stale neighbour shows its transparent padding at the boundary, which
+      // is as far as the LINEAR footprint of magnified text reaches (measured:
+      // zeroing the atlas here changed no pixel). Pinned by
+      // tests/e2e/render/text-glyphs.js: text after a reset == text before.
       glyphs.clear();
       glyphPenX = 0;
       glyphPenY = 0;
@@ -2091,6 +2097,9 @@ export function initRenderer(canvas) {
     // EXCEPT kind 13 (TV STATIC), which needs nothing from the scene and is
     // drawn as a plain blended noise quad at the end of the frame instead.
     postfxActive = scanPostfx(cmds);
+    // "Any other kind is a no-op" (the table: `Graphics::postfx`): without
+    // this an unknown kind fell into the post shader's last branch (12).
+    if (postfxActive && !(postfx.kind >= 0 && postfx.kind <= 13)) postfxActive = false;
     let staticOverlay = 0;
     if (postfxActive && (postfx.kind | 0) === 13) {
       staticOverlay = postfx.t;

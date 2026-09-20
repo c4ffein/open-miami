@@ -29,8 +29,18 @@
   // (static hosting, e.g. Pages under a subpath).
   const base = location.pathname.replace(/render-tests(\.html)?(\/.*)?$/, '');
   const { initRenderer } = await import(`${base}web/renderer.js?v=${Date.now()}`);
+  // The game font, exactly as index.html loads it — BEFORE the renderer
+  // rasterizes its first glyphs (the text pixel test needs the real VT323).
+  try {
+    const font = new FontFace('GameFont', `url(${base}assets/fonts/VT323-Regular.ttf)`);
+    document.fonts.add(await font.load());
+  } catch (e) { /* fall back to monospace, like the game */ }
   const canvas = document.getElementById('glcanvas');
   const frameRender = initRenderer(canvas);
+  // The handle the headless pixel tests drive (tests/e2e/render/lib.js): they
+  // open this page with NO test selected (no rAF loop running), size the
+  // canvas themselves and submit hand-built streams.
+  window.__rt = { frameRender, canvas };
 
   // ---- URL: /render-tests/<name> (serve.py rewrite) or ?t=<name> ----
   const q = new URLSearchParams(location.search);
