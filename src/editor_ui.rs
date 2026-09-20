@@ -6,7 +6,7 @@
 //! document model, undo history, validation and the JSON writer live in
 //! `editor.rs`; this file is the immediate-mode UI (wasm-only).
 //!
-//! Layout (canvas coordinates): the tab bar (drawn by `lib.rs`, y 14..60),
+//! Layout (canvas coordinates): the tab bar (drawn by `app/viz.rs`, y 14..60),
 //! two header rows (floor picker + actions, then the tools) down to
 //! [`MAP_TOP`], the map pane below it (right of it the properties / palette
 //! panel, under it the status line). index.html positions the SCENARIO
@@ -18,7 +18,6 @@ use crate::components::{EnemyType, WeaponType};
 use crate::editor::{
     enemy_type_id, next_enemy_type, next_weapon, weapon_id, EditableFloor, EditorDoc, Item,
 };
-use crate::floor_props::draw_placed_prop;
 use crate::graphics::Graphics;
 use crate::input::{self, keys, mouse_buttons};
 use crate::level::Level;
@@ -26,8 +25,9 @@ use crate::levels::{floor_def, floor_title, LEVEL_COUNT};
 use crate::levels_data::FLOORS;
 use crate::math::{Color, Vec2};
 use crate::props::{draw_prop, family_range, prop_px, snap_size, PROP_FAMILIES, PROP_NAMES};
+use crate::render::comms::{car_back_side, draw_elevator_car, CarView};
 use crate::render::draw_wall;
-use crate::render_comms::{car_back_side, draw_elevator_car, CarView};
+use crate::render::floor_props::draw_placed_prop;
 use crate::scenario::{parse_hex_rgb, PropPlacement, Rect};
 
 #[wasm_bindgen]

@@ -2962,7 +2962,7 @@ mod tests {
     /// Regression for the floor-1 "LEFT CLICK — SWING THE BAR" soft-lock:
     /// replays the WHOLE tutorial through the browser's own gate input
     /// dispatch ([`crate::game::gated_player_input`] — the exact function
-    /// `lib.rs` forwards `input::` state to), with realistic play: the player
+    /// `app/game_loop.rs` forwards `input::` state to), with realistic play: the player
     /// WALKS (velocity + the movement system, frame by frame, under the
     /// freeze) instead of being teleported onto each target, and both melee
     /// gates are first attempted from ~90 px — the distance at which two
@@ -2974,7 +2974,7 @@ mod tests {
         use crate::game::{gated_player_input, get_player_weapon, PlayerIntents};
 
         /// One browser frame: the gate dispatch (if a gate is up), then the
-        /// engine tick + scenario tick + gate notify — the `lib.rs` order.
+        /// engine tick + scenario tick + gate notify — the `app/game_loop.rs` order.
         fn frame(sim: &mut Simulation, sc: &mut ScenarioState, intents: &PlayerIntents) {
             if let Some(g) = sc.gate_view() {
                 gated_player_input(&mut sim.world, g, intents);
@@ -3015,7 +3015,7 @@ mod tests {
 
         /// Walk the player to `to` at full speed, one frame at a time (the
         /// movement system does the moving — under a gate freeze too, like
-        /// the browser). Holds / conversations lock movement, as `lib.rs`
+        /// the browser). Holds / conversations lock movement, as `app/game_loop.rs`
         /// does.
         fn walk_to(sim: &mut Simulation, sc: &mut ScenarioState, to: Vec2) {
             for _ in 0..1500 {

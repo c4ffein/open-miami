@@ -53,7 +53,7 @@ function collectErrors(page) {
 // `mod op` in src/graphics.rs and OP_ARGS in renderer.js).
 const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1, 8, 5];
 const OP_ROBOT = 11; // colorIdx poseIdx weaponIdx x y angle sizePx time
-const ROBOT_COLOR_PLAYER = 0; // CL4-UD3, coral (src/lib.rs ROBOT_COLOR_CORAL)
+const ROBOT_COLOR_PLAYER = 0; // CL4-UD3, coral (src/app/robots.rs ROBOT_COLOR_CORAL)
 
 /**
  * Must be called BEFORE page.goto(): wraps the renderer's `window.frameRender`

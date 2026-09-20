@@ -1,4 +1,13 @@
 // Rendering system for drawing entities
+//
+// Submodules: `comms` (elevators / doorways, the hold caption + gate
+// prompt, zone debug), `dialogue` (the letterbox + face slab),
+// `floor_props` (a floor's placed set dressing). All of it only RECORDS
+// into `Graphics`, so it builds and is tested natively.
+pub mod comms;
+pub mod dialogue;
+pub mod floor_props;
+
 use crate::components::*;
 use crate::ecs::{Entity, World};
 use crate::graphics::Graphics;

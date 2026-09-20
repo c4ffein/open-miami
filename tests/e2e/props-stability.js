@@ -13,7 +13,7 @@
 //    actually moving).
 // 2) UPLINK OBELISK escort motes at px 4 / 6: soloed, over a frame sequence
 //    the number of lit texels must stay constant (constant stamp shape).
-// Layout numbers mirror src/lib.rs draw_viz_props at a 1280x800 viewport.
+// Layout numbers mirror src/app/viz/props_page.rs draw_viz_props at a 1280x800 viewport.
 const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
@@ -65,7 +65,7 @@ function previewGeom(nLayers, px) {
 }
 const tileCenter = (i) => [X0 + (i % COLS) * TILE_W + (TILE_W - 6) / 2, Y0 + Math.floor(i / COLS) * TILE_H + (TILE_H - 6) / 2 - 6];
 const PLUS = [583, 95], PROPS_BTN = [287, 95];
-// The family page buttons, right of SAVE (src/lib.rs: cx + 414 + f * 120, 112 wide).
+// The family page buttons, right of SAVE (src/app/viz/props_page.rs: cx + 414 + f * 120, 112 wide).
 const FAMILY_BTN = (f) => [416 + 414 + f * 120 + 56, 95];
 const eyeBtn = (listY, i) => [PANEL_X + 12 + 13, listY + 30 + i * 24 + 10];
 const soloBtn = (listY, i) => [PANEL_X + 12 + 32 + 13, listY + 30 + i * 24 + 10];

@@ -390,7 +390,7 @@ pub struct PlayerIntents {
 /// it stays with the platform layer (the browser reads WASD directly; the
 /// headless sim scripts velocities).
 ///
-/// This is the ONE gate input path — the browser loop (`lib.rs`) samples
+/// This is the ONE gate input path — the browser loop (`app/game_loop.rs`) samples
 /// `input::` into a [`PlayerIntents`] and forwards it here, and the host
 /// tests drive the very same function, so what the tests prove is what the
 /// browser runs.

@@ -48,7 +48,7 @@ pub const GATE_STUN_FLOOR: f32 = 0.05;
 /// and pickups. Enemy AI, the boss, enemy attacks and the scenario clock do
 /// not run, and knockdown timers tick only down to [`GATE_STUN_FLOOR`].
 ///
-/// Shared verbatim by the browser loop (`lib.rs`) and the headless
+/// Shared verbatim by the browser loop (`app/game_loop.rs`) and the headless
 /// [`Simulation::scenario_step`], so the freeze semantics are host-testable.
 pub fn gate_frozen_step(world: &mut World, dt: f32) {
     FinisherSystem.run(world, dt);
@@ -77,7 +77,7 @@ pub fn gate_frozen_step(world: &mut World, dt: f32) {
 
 /// Every gameplay system, run in THE per-frame order by [`GameSystems::step`].
 /// Shared by the headless [`Simulation`] and the browser loop (`update_game`
-/// in lib.rs) so the two can never drift apart; the host tests that pin the
+/// in app/game_loop.rs) so the two can never drift apart; the host tests that pin the
 /// order therefore cover the browser too.
 pub struct GameSystems {
     finisher: FinisherSystem,

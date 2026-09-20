@@ -17,7 +17,7 @@
 
 use crate::graphics::Graphics;
 use crate::math::{Color, Vec2};
-use crate::render_comms::wrap_text;
+use crate::render::comms::wrap_text;
 use crate::scenario::{speaker_rgb, DialogueView};
 
 /// Approximate VT323 advance as a fraction of the font size (same heuristic

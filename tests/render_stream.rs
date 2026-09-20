@@ -9,7 +9,6 @@
 
 use open_miami::camera::{Camera, ViewCull};
 use open_miami::ecs::World;
-use open_miami::floor_props::render_floor_props;
 use open_miami::game::{get_player_position, initialize_game};
 use open_miami::graphics::stream::{check, Cmd};
 use open_miami::graphics::{op, Graphics};
@@ -17,8 +16,9 @@ use open_miami::level::Level;
 use open_miami::levels::{floor_def, LEVEL_COUNT};
 use open_miami::math::Vec2;
 use open_miami::props::{draw_prop, draw_prop_ex, PropDrawOpts, MAX_PX, PROP_COUNT, PROP_NAMES};
+use open_miami::render::comms::{render_elevators, render_zones_debug};
+use open_miami::render::floor_props::render_floor_props;
 use open_miami::render::{render_entities, render_walls};
-use open_miami::render_comms::{render_elevators, render_zones_debug};
 use open_miami::static_geo::{OP_STATIC_BEGIN, OP_STATIC_REF};
 
 const VIEW: (f32, f32) = (1280.0, 800.0);

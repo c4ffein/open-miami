@@ -51,7 +51,7 @@ check-test:
 check-clippy:
 	@echo "$(YELLOW)Running clippy (linting)...$(NC)"
 	cargo clippy --all-targets --all-features -- -D warnings
-	@echo "$(YELLOW)Running clippy for the wasm32 target (the audio engine, input, editor_ui and the lib.rs entry are wasm-only)...$(NC)"
+	@echo "$(YELLOW)Running clippy for the wasm32 target (the audio engine, input, editor_ui and the `app` module are wasm-only)...$(NC)"
 	cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
 	@echo "$(GREEN)✓ Clippy passed$(NC)"
 
@@ -194,7 +194,7 @@ check-props:
 
 
 # Loading-screen title - the neon OPEN/MIAMI SVG inlined into index.html,
-# generated from src/lib.rs's title glyphs. Python 3 stdlib only.
+# generated from src/app/title.rs's title glyphs. Python 3 stdlib only.
 gen-title:
 	@echo "$(YELLOW)Generating the loading-screen title SVG...$(NC)"
 	python3 tools/gen_title.py
