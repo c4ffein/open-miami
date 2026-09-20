@@ -2,7 +2,7 @@
 """Generate the loading screen's neon SVGs: the "LOADING..." title AND the
 progress-bar frame, both through the SAME pipeline.
 
-Single source of truth: the 12x16 title glyphs live in src/app/title.rs
+Single source of truth: the 12x16 title glyphs live in src/render/title.rs
 (`title_glyph`). This script parses them out, runs the SAME boundary + glow
 pass the menu title uses (only the contour cells of the fat letterforms,
 plus two rings of pixel glow, the same pink), lays out one flat line of
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LIB = ROOT / "src" / "app" / "title.rs"
+LIB = ROOT / "src" / "render" / "title.rs"
 HTML = ROOT / "index.html"
 
 UNIT = 8  # svg units per art pixel (matches the in-game cell)
@@ -43,7 +43,7 @@ def parse_glyphs(src):
     """{char: [16 row strings]} out of title_glyph's match arms."""
     body = re.search(r"fn title_glyph.*?\n(.*?)\n\s*}\n", src, re.S)
     if not body:
-        sys.exit("gen_title: title_glyph not found in src/app/title.rs")
+        sys.exit("gen_title: title_glyph not found in src/render/title.rs")
     glyphs = {}
     for ch, rows in re.findall(r"'(.)' => \[(.*?)\]", body.group(1), re.S):
         glyphs[ch] = re.findall(r'"([.#]{12})"', rows)

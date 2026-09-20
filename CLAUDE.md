@@ -50,6 +50,27 @@
   Consequently the e2e text-arena probes see uppercase: match `'HEALTH:'`,
   never `'Health:'`
 
+## Layering (docs/ARCHITECTURE.md — read it before adding a module)
+- FOUR LAYERS, one question each: SIM "what is the state?" (`ecs`,
+  `systems`, `scenario`, `game`, `sim` — no `Graphics`, no browser), RENDER
+  "what does the state look like?" (`render.rs` + `render/*`, `level`,
+  `camera`, the props / drive / ending `draw` code — state READ-ONLY +
+  `&Graphics`), APP "what happens this frame?" (`app.rs` + `app/*`,
+  `editor_ui`, `input`, `audio/engine` — wasm-only: input, clock, audio,
+  settings, `&mut GameState`), RENDERER "commands -> pixels" (the JS)
+- THE TEST for render code: a function from state to draw commands — reads
+  NO input, MUTATES nothing, calls NO browser API. If it passes, it goes in
+  the render layer, takes plain arguments / a view struct
+  (`render::world::WorldView`) and gets a native stream test. So: render
+  code never samples input (the app passes `player_firing: bool`) and never
+  advances a timer (the kill flash / spark expiry count down in
+  `GameState::render_world`, the app-side wrapper). Immediate-mode UI (a
+  button = draw + click test in one call: menus, `?viz`, `editor_ui`) is
+  legitimately APP code
+- WHY: it is the test boundary — render-layer code verifies in ~1 s under
+  `cargo test`, app-layer code needs a ~50 s browser round trip. Keep the
+  app layer thin
+
 ## Rendering Architecture
 - The Rust/wasm engine owns the simulation only; **all rendering is WebGL in JS**
 - Each frame, `Graphics` (src/graphics.rs) records a flat f32 command stream
@@ -319,7 +340,7 @@
   a `DetachedHead` launches along the kick (deterministic jitter/spin from
   a hash seed), mirrors the thrown-weapon/knockback physics (friction
   slide to rest, damped wall bounces, sub-stepped vs walls), then persists
-  as a corpse detail under a `MAX_HEADS` oldest-first ring cap; app/robots.rs
+  as a corpse detail under a `MAX_HEADS` oldest-first ring cap; render/robots.rs
   draws an oil splat + drip trail at the detach point. FINISHER VARIETY:
   `FinisherSystem::kind_for(weapon, seed)` picks per victim by a
   deterministic hash — unarmed = POUND / STOMP (two-hit quick stomp) /
@@ -347,8 +368,10 @@
   balanced SAVE/RESTORE + pixel groups ≤ `PIX_DEPTH`, static sections
   framed + solid-only, TEXT indices; `Affine` / `final_transform` = the
   mirror of renderer.js's `tTranslate` / `tScale` / `tRotate`).
-  `tests/render_stream.rs` runs it over EVERY floor (cached frame, `REF`
-  frame, debug-bypass frame) and every prop at every px; src/camera.rs's
+  `tests/render_stream.rs` runs the REAL `render::world::render_world`
+  over EVERY floor (cached frame, `REF` frame, debug + kill-flash bypass
+  frames, `?pixel=2|3|6`: one smooth whole-texel group holding the static
+  floor, robots outside it) and every prop at every px; src/camera.rs's
   tests check `screen_to_world` against the transform `apply()` records. A
   new draw path gets a stream test there first — ~1 s, vs ~50 s for a
   browser round trip
@@ -357,7 +380,7 @@
 - Root: `index.html`, `renderer.js`, `robot-core.js` (the 3D->2D robot pipeline, imported by renderer.js at runtime), `shoggoth-core.js` (the boss pipeline, built on robot-core), `serve.py` (dev server, no-store + level-editor write API + the `/render-tests/<name>` route), `docs.html` (the `/docs` page: the RENDERING PIPELINE map — hand-built HTML/CSS mirroring the mermaid source in `docs/PIPELINE.md`, which GitHub renders — plus the persistent-vs-per-frame table, the cost model and links to every doc; serve.py routes `/docs` to it, `/docs/*.md` stay real files), `render-tests.html` (RENDER TESTS: a renderer-only harness — no wasm, no game — that drives `initRenderer`/`frameRender` with hand-built command streams so the smooth pixel-group composite can be eyeballed in isolation on any GPU; tests `square` (rocking black square), `sway` (the exact game sway over a checker/walls scene), `split` (smooth vs hard composite side by side); tweak via `?px=&amp=&period=&smooth=&zoom=`)
 - `tools/`: the `?viz` panels — `inspector.html` (character inspector: `?kind=robot&color=…` / `?kind=shoggoth&phase=masked|enraged`, `&embed=1` for the SPRITES tab; 3D orbit + 2D top-down views), `levels.html` + `levels-editor*.js` (level + scenario editor, LEVELS tab) — and `gen_levels.py`, `gen_props.py`
 - `levels/`: `floor_00.json` (the ground-level cold open: gate / parking lot, passive crowd), `floor_01..13.json`, `floor_13h.json`, `index.json` — the floors' single source of truth (format: `docs/SCENARIO_FORMAT.md`). Level *index* = position in `index.json` (sorted by id: index 0 = floor 0); `?floor=N` takes the floor **id** A floor may carry `"props": [{ "kind", "x", "y", "rot" (deg, cw), "size" (world units, default 100) }]` = placed set dressing (`kind` = a `PROP_NAMES` snake_case id, validated by `gen_levels.py` → `FloorDef.props: &[PropPlacement]`); DECORATION ONLY — drawn in-game by `src/render/floor_props.rs` (`render_floor_props`, called in `update_game` after the walls and before the actors, inside the `?pixel=N` world group), no collision
-- `src/lib.rs` is just the module list. THE BROWSER APP is `src/app.rs` + `src/app/` (wasm-only): `app.rs` = `GameState` (its fields are private to the `app` tree), the screen dispatch `update`, floor load / checkpoints, `start()` + the rAF loop; submodules `use super::*` and add their own `impl GameState` blocks — `game_loop` (`update_game`: input → `sim::GameSystems::step` → scenario bridge → HUD; boss intro; ending), `world_render` (`render_world`), `robots` (the actors layer: `draw_robot_entities`, pose / colour tables), `menus` (level select, modal chrome, SETTINGS / ABOUT / PAUSE), `title` (the neon glyphs — `tools/gen_title.py` parses `title_glyph` out of THIS file), `viz` + `viz/{effects,props_page,musics}` (the `?viz` toolbox), `url`, `perf`. Drawing modules live in `src/render.rs` + `src/render/{comms,dialogue,floor_props}.rs`; `hud_ammo.rs` / `hud_msg.rs` are pure HUD STATE machines (host-tested), drawn by `render.rs`
+- `src/lib.rs` is just the module list. THE BROWSER APP is `src/app.rs` + `src/app/` (wasm-only): `app.rs` = `GameState` (its fields are private to the `app` tree), the screen dispatch `update`, floor load / checkpoints, `start()` + the rAF loop; submodules `use super::*` and add their own `impl GameState` blocks — `game_loop` (`update_game`: input → `sim::GameSystems::step` → scenario bridge → HUD; boss intro; ending), `world_render` (the WRAPPER of `render::world::render_world`: owns the kill-flash / spark-expiry mutations, samples the fire input, builds the `WorldView`), `menus` (level select, modal chrome, SETTINGS / ABOUT / PAUSE), `viz` + `viz/{effects,props_page,musics}` (the `?viz` toolbox), `url`, `perf`. Drawing modules live in `src/render.rs` + `src/render/{world,robots,comms,dialogue,floor_props,title}.rs` (`world` = the real `render_world` over a read-only `WorldView`; `robots` = the actors layer, pose / colour tables; `title` = the neon glyphs — `tools/gen_title.py` parses `title_glyph` out of THAT file); `hud_ammo.rs` / `hud_msg.rs` are pure HUD STATE machines (host-tested), drawn by `render.rs`
 - `src/levels_data.rs` is GENERATED from `levels/*.json` by `make gen-levels`; `make check-levels` validates + checks it is current. Never hand-edit it.
 - MUSIC IS CODE: one song = one Rust file in `src/audio/songs/` — the
   SOUNDTRACK is 7 tracks with ROLES (`docs/music/TRACKS.md`): NEON

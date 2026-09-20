@@ -14,7 +14,7 @@
 //!
 //! Everything here is host-testable: the spawn velocity, the friction
 //! integration, the wall bounce and the rest condition run natively (unit
-//! tests below); only the drawing (app/robots.rs / renderer.js `HEAD` opcode) is
+//! tests below); only the drawing (render/robots.rs / renderer.js `HEAD` opcode) is
 //! browser-side.
 
 use crate::collision::circle_rect_collision;
@@ -55,7 +55,7 @@ pub const MAX_HEADS: usize = 12;
 pub const HEAD_NECK_OFFSET: f32 = 16.0;
 
 /// Robot colour-table index for an enemy flavour (matches the sprite colours
-/// app/robots.rs picks: SENTINEL red, DRIFTER violet, HUNTER magenta).
+/// render/robots.rs picks: SENTINEL red, DRIFTER violet, HUNTER magenta).
 pub fn color_for(initial_type: EnemyType) -> u32 {
     match initial_type {
         EnemyType::Idle => 1,

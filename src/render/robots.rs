@@ -1,43 +1,45 @@
 //! The actors layer: every robot entity as a live 3D sprite (pose / weapon /
 //! colour picked from its components), plus detached heads.
 
-use super::*;
+use crate::ecs::World;
+use crate::graphics::Graphics;
+use crate::math::{Color, Vec2};
 
 /// On-screen size (px) of a robot sprite tile. The tile is square and the
 /// robot fills ~55% of it, so this is tuned so the bot roughly matches the
 /// actor hitbox (player radius 15 -> 30px dia, enemy radius 12 -> 24px
 /// dia): a 60px tile draws a ~34px robot that sits over the hitbox like
 /// the primitive did.
-pub(crate) const ROBOT_TILE_PX: f32 = 60.0;
+pub const ROBOT_TILE_PX: f32 = 60.0;
 
 /// The robot sprite's gun/forward points DOWN (+Y in image) at facingDeg=0,
 /// while the entity `angle` is atan2(aim) measured from +X. Rotating the
 /// image by (angle - PI/2) makes the gun point along the aim/shoot
 /// direction (where bullets actually fly), which reads correctly top-down.
-pub(crate) const ROBOT_ANGLE_OFFSET: f32 = -std::f32::consts::FRAC_PI_2;
+pub const ROBOT_ANGLE_OFFSET: f32 = -std::f32::consts::FRAC_PI_2;
 
 // Index tables shared with renderer.js (see Graphics::draw_robot).
-pub(crate) const ROBOT_COLOR_CORAL: u32 = 0;
-pub(crate) const ROBOT_POSE_IDLE: u32 = 0;
-pub(crate) const ROBOT_POSE_WALK: u32 = 1;
-pub(crate) const ROBOT_POSE_SHOOT: u32 = 2;
-pub(crate) const ROBOT_POSE_DOWNED: u32 = 4;
+pub const ROBOT_COLOR_CORAL: u32 = 0;
+pub const ROBOT_POSE_IDLE: u32 = 0;
+pub const ROBOT_POSE_WALK: u32 = 1;
+pub const ROBOT_POSE_SHOOT: u32 = 2;
+pub const ROBOT_POSE_DOWNED: u32 = 4;
 /// The downed pose with the head cubes skipped (a KICK finisher victim).
-pub(crate) const ROBOT_POSE_DOWNED_HEADLESS: u32 = 5;
+pub const ROBOT_POSE_DOWNED_HEADLESS: u32 = 5;
 /// The head-kick finisher: support leg planted, kicking leg sweeping
 /// through, body leaning back. `time` = seconds into the finisher.
-pub(crate) const ROBOT_POSE_KICK: u32 = 6;
+pub const ROBOT_POSE_KICK: u32 = 6;
 /// The two-hit quick stomp finisher. `time` = seconds into the finisher.
-pub(crate) const ROBOT_POSE_STOMP: u32 = 7;
+pub const ROBOT_POSE_STOMP: u32 = 7;
 
 /// Screen size (px) of a detached head's sprite quad — the 16-texel art
 /// upscaled to a bit over its physical share of a 60 px robot tile so
 /// the little trophy stays readable.
-pub(crate) const HEAD_TILE_PX: f32 = 26.0;
+pub const HEAD_TILE_PX: f32 = 26.0;
 
 /// Map a held weapon to the robot-core weapon model index
 /// (0 fist, 1 pistol, 2 machinegun, 3 shotgun).
-pub(crate) fn robot_weapon_idx(weapon: Option<crate::components::WeaponType>) -> u32 {
+pub fn robot_weapon_idx(weapon: Option<crate::components::WeaponType>) -> u32 {
     use crate::components::WeaponType;
     match weapon {
         None | Some(WeaponType::Melee) => 0,
@@ -50,7 +52,7 @@ pub(crate) fn robot_weapon_idx(weapon: Option<crate::components::WeaponType>) ->
 /// Downed-pose time (seconds) a body with no live knockdown clock is
 /// parked at: past the fall transition and the landing wobble, so corpses
 /// lie still, fully settled, from the first frame.
-pub(crate) const ROBOT_DOWNED_SETTLED: f32 = 2.0;
+pub const ROBOT_DOWNED_SETTLED: f32 = 2.0;
 
 /// Draw the player and rogue enemies as live-rendered 3D robot sprites on
 /// top of the primitive draw. Must be called while the camera transform is
@@ -62,6 +64,9 @@ pub(crate) const ROBOT_DOWNED_SETTLED: f32 = 2.0;
 /// phase-locked unison, and knocked-down bots play the hit flinch synced
 /// to the moment the stun landed.
 ///
+/// `player_firing` = the fire input is held (the player's SHOOT pose): the
+/// caller samples the input, this function only draws.
+///
 /// One pass of the robot sprites. `prone_pass` = draw only the downed
 /// (dead / knocked-down) bodies; `!prone_pass` = only the upright ones.
 /// Two passes let the ground weapons draw OVER the corpses (easy to spot)
@@ -70,11 +75,12 @@ pub(crate) const ROBOT_DOWNED_SETTLED: f32 = 2.0;
 /// Each ROBOT command costs robot-core an FBO round-trip and ~15-19 draw
 /// calls, so bots fully outside `cull` are skipped (conservative
 /// half-extent: a whole tile, downed bodies sprawl past their centre).
-pub(crate) fn draw_robot_entities(
+pub fn draw_robot_entities(
     world: &World,
     graphics: &Graphics,
     now: f32,
     prone_pass: bool,
+    player_firing: bool,
     cull: &crate::camera::ViewCull,
 ) {
     use crate::components::{AIState, EnemyType};
@@ -261,7 +267,7 @@ pub(crate) fn draw_robot_entities(
                     .get_component::<Velocity>(player)
                     .map(|v| (v.x * v.x + v.y * v.y).sqrt())
                     .unwrap_or(0.0);
-                let firing = crate::input::is_mouse_button_down(crate::input::mouse_buttons::LEFT);
+                let firing = player_firing;
                 let mut pose_idx = pose_for(speed, firing);
                 let mut draw_pos = Vec2::new(pos.x, pos.y);
                 let mut draw_time = now;

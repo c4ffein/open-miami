@@ -194,7 +194,7 @@ check-props:
 
 
 # Loading-screen title - the neon OPEN/MIAMI SVG inlined into index.html,
-# generated from src/app/title.rs's title glyphs. Python 3 stdlib only.
+# generated from src/render/title.rs's title glyphs. Python 3 stdlib only.
 gen-title:
 	@echo "$(YELLOW)Generating the loading-screen title SVG...$(NC)"
 	python3 tools/gen_title.py

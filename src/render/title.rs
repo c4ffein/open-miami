@@ -2,13 +2,14 @@
 //! `tools/gen_title.py` parses `title_glyph` out of THIS file for the loading
 //! screen's inline SVG) and their in-game renderer.
 
-use super::*;
+use crate::graphics::Graphics;
+use crate::math::{Color, Vec2};
 
 /// One 12x16 pixel bitmap per title glyph ('#' = filled). The neon look
 /// comes from drawing only the BOUNDARY cells of these fat letterforms:
 /// that yields the outer contour and, where a glyph has a counter (O, P,
 /// A), the inner contour — two neon lines with an empty letter between.
-pub(crate) fn title_glyph(ch: char) -> [&'static str; 16] {
+pub fn title_glyph(ch: char) -> [&'static str; 16] {
     match ch {
         'O' => [
             ".##########.",
@@ -218,7 +219,7 @@ pub(crate) fn title_glyph(ch: char) -> [&'static str; 16] {
 /// (outer + inner contours of the fat glyphs, with a two-ring pixel glow
 /// around them), rasterized in one pixel-art group opened UNDER a slow
 /// rotation — the whole sign sways between -12 and -3 degrees.
-pub(crate) fn draw_neon_title(graphics: &Graphics, cx: f32, cy: f32, t: f32) {
+pub fn draw_neon_title(graphics: &Graphics, cx: f32, cy: f32, t: f32) {
     const UNIT: f32 = 8.0; // one art pixel = 8 screen px
     const GW: usize = 72;
     const GH: usize = 36;

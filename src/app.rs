@@ -1,10 +1,11 @@
 //! The browser app: `GameState` (every screen of the game + the `?viz`
 //! toolbox), the `requestAnimationFrame` loop and the wasm entry point.
 //!
-//! Split by screen: `game_loop` (the in-game frame), `world_render`
-//! (`render_world`), `robots` (the actors layer), `menus`, `title`, `viz/*`,
-//! `url`, `perf`. Submodules `use super::*` and add `impl GameState` blocks;
-//! `GameState`'s fields are private to this module tree.
+//! Split by screen: `game_loop` (the in-game frame), `world_render` (the
+//! wrapper building `render::world::WorldView`), `menus`, `viz/*`, `url`,
+//! `perf`. Drawing that needs no input lives in `crate::render`, not here
+//! (docs/ARCHITECTURE.md). Submodules `use super::*` and add `impl GameState`
+//! blocks; `GameState`'s fields are private to this module tree.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,10 +28,10 @@ use crate::props::{
     settings_json, snap_size, PixelMode, PropDrawOpts, MAX_LAYERS, MAX_PX, PROP_COUNT,
     PROP_FAMILIES, PROP_NAMES,
 };
-use crate::render::comms::{
-    render_elevators, render_gate_prompt, render_hold_caption, render_zones_debug,
-};
+use crate::render::comms::{render_gate_prompt, render_hold_caption};
 use crate::render::dialogue::render_dialogue;
+use crate::render::title::draw_neon_title;
+use crate::render::world::KILL_FLASH_SECS;
 use crate::render::*;
 use crate::scenario::{ScenarioState, SURFACE_EXIT};
 use crate::systems::boss::any_boss_enraged;
@@ -39,17 +40,12 @@ use crate::systems::*;
 mod game_loop;
 mod menus;
 mod perf;
-mod robots;
-mod title;
 mod url;
 mod viz;
 mod world_render;
 
-use robots::*;
-use title::*;
 use url::*;
 use viz::*;
-use world_render::*;
 
 /// Longest simulation step a single frame may take (seconds).
 const MAX_FRAME_DT: f32 = 0.1;
