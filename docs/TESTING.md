@@ -49,6 +49,11 @@ Conventions: fixed `dt` (deterministic), no wall-clock time, no randomness
 without a seed; a new draw path gets a `render_stream` test before a browser
 one.
 
+**Refactoring the AI?** `tests/ai_fingerprint.rs` is an `#[ignore]`d tool, not
+a check: it hashes every enemy's state on every tick of every floor. Run it
+before and after (`cargo test --test ai_fingerprint -- --ignored --nocapture
+| grep ^FP`) and diff — identical output = behaviour unchanged, bit for bit.
+
 ## Browser (`tests/e2e/`, on Bun — see its README)
 
 Headless Chromium on software GL (SwiftShader, ~5–15 fps): correct pixels,
@@ -70,6 +75,17 @@ the browser, sets the library path and the timeouts.
   `all-floors.spec.js`: EVERY floor of
   `levels/index.json` boots, keeps rendering well-formed frames and logs no
   error (with `?precompute=0`, ~3 s a floor).
+
+Timeouts, so a run cannot hang: Playwright caps each TEST at 60 s, the
+Makefile caps the run at `E2E_TIMEOUT` (180 s — measured: the 3 gameplay
+specs ~32 s + `all-floors.spec.js` ~42 s serially; it skips the audio
+pre-render gate with `?precompute=0`, the gameplay specs keep the real boot
+path) and each render script at `RENDER_TIMEOUT` (180 s — measured:
+`composite-coherence` ~7 s, `props-stability` ~60 s (fixed-sleep bound),
+`rig-parity` ~5 s, `grain-fold` ~15 s, `backdrop-clip` ~30 s,
+`shoggoth-parity` ~20 s). The render scripts run against a `serve.py` the
+target starts on `RENDER_PORT` (a free ephemeral port by default) and kills;
+logs in `tests/e2e/test-results/render-*.log`.
 
 What only the browser can catch: GLSL that does not compile, the JS renderer
 mis-walking a stream, robot-core / shoggoth-core failing, a prop or surface

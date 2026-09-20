@@ -32,3 +32,31 @@ file formats: [SCENARIO_FORMAT.md](SCENARIO_FORMAT.md), [PROPS_FORMAT.md](PROPS_
 - `src/editor_ui.rs` (wasm-only): the immediate-mode UI, one `Editor` in `GameState` (`update(graphics, mouse, click, now)` from `update_visualizer` when the LEVELS tab is active, drawn UNDER the tab bar). Layout: tab bar (y 14..60) → row 1 (`<` FLOOR `>` picker, FIT, GRID, SNAP, UNDO, REDO, SAVE (lit when dirty), SCENARIO (web) → `viz_inspect("levels")` iframe positioned at `MAP_TOP` = 150 by index.html) → row 2 (tools `1 SELECT … 9 PROP` + the active tool's option) → the map pane (view = `pan + world * zoom`; the floor through the REAL renderer: `Level` tiles clipped to the floor, `render::draw_wall`, `render::comms::draw_elevator_car` (`CarView` + `car_back_side`), `render::floor_props::draw_placed_prop` live at their px; screen-space overlays: room washes / labels, cyan zone outlines + ids, spawn diamonds by type colour, gold weapon pickups, coral player start, selection + 8 resize handles, hover, rubber band, prop ghost) → the right panel (`PANEL_W` = 260: SELECTION properties strip — geometry, `id` / `label` text fields (click, type, Enter commits, Esc cancels; `input::typed_text()`), exit `to` −/+ and OPEN/CLOSED, spawn type, weapon, prop rot ±90 / size ±10, DELETE — then the PROP PALETTE (family pages from `PROP_FAMILIES`, live `draw_prop` thumbnails, click to pick + brush rot / size) or the KEYS map) → the status line (`validate()` result or the counts, transient notes, cursor world position + zoom).
 - Keys: `1-9` tools · wheel zoom (`input::wheel_delta()`, canvas `wheel` listener) · `F` fit · middle / right drag or Space+drag = pan · `G` grid · `N` snap (10 u) · click / drag = select + move, handles resize · arrows nudge (Shift = 1 u) · `Del` / `Backspace` delete · `T` / `Q` cycle spawn type / weapon · `R` (Shift = −90) rotate the selected prop or the brush, `[` `]` size ±10 · `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` undo / redo · `Esc` cancel drag / deselect / back to SELECT.
 - SAVE = `validate` (refuses with the first problem on the status line) → `vizSaveLevel(file, to_json())` → toast "SAVED … — now run: make gen-levels". Floors keep their edits while you switch between them (one `EditorDoc` per floor, loaded lazily).
+
+## Debug mode (`?debug`)
+
+OFF by default; enabled only when the URL carries `?debug` (`debug_enabled`
+in `GameState`, e.g. `/?floor=14&debug`). Without it, I / K / B / G and the
+debug HUD line do nothing. With it, **I** toggles the overlays; while they
+are on, **K** purges all rogues (incl. the boss; the e2e helper), **B**
+cracks the boss's mask (drops it to the enrage threshold, to preview the
+mask-off / raw form) and **G** skips the active tutorial `gate` (releases it
+as if the gated input had succeeded — the anti-softlock escape, see
+[SCENARIO_FORMAT.md](SCENARIO_FORMAT.md)).
+
+What the overlays show:
+
+1. **Enemy vision cones** — the 90-degree cone of each enemy.
+2. **Inflated wall boundaries** — yellow translucent rectangles: the 25 px
+   padding around walls that pathfinding uses (what prevents wall grinding).
+3. **Pathfinding**, for enemies that are chasing (`SpottedUnsure` /
+   `SurePlayerSeen`):
+   - **cyan line** — the trail actually travelled (last 100 positions)
+   - **red translucent line** — the direct line from the enemy to its target
+   - **green lines + dots** — the planned path and its waypoints (A* +
+     string pulling + wall-hugging)
+   - **red dot** — the final target
+
+Compare cyan (taken) against green (planned) to debug the AI; the overlays
+vary per frame, so they BYPASS the static geometry cache. The world records
+`DebugPath` / `DebugTrail` only while they are shown (`World::debug_viz`).

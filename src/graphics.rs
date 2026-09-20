@@ -397,7 +397,7 @@ impl Graphics {
     /// given POSE — every frame, no caching — and draws it as a rotated quad
     /// of `size_px` px. The pose is NUMBERS computed here in Rust
     /// ([`crate::render::pose::pose_plan`]): the renderer only ferries the
-    /// eleven joint scalars to the rig (roadmap: docs/ARCHITECTURE.md).
+    /// eleven joint scalars to the rig (roadmap: docs/HISTORY.md).
     ///   color:  0 coral, 1 red, 2 violet, 3 magenta  (renderer.js tables)
     ///   weapon: 0 fist, 1 pistol, 2 machinegun, 3 shotgun
     ///   flags:  bit 0 = the gun hand aims forward (`Pose::shoot`),
@@ -542,7 +542,7 @@ impl Graphics {
             look_up: None,
             wander: false,
         });
-        for sphere in boss.data.chunks_exact(SPHERE_FLOATS) {
+        for sphere in boss.data.as_chunks::<SPHERE_FLOATS>().0 {
             self.push(&[op::SPHERE]);
             self.push(sphere);
         }

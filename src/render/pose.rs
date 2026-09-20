@@ -1,7 +1,7 @@
 //! `pose_plan`: what a robot's body does at time `t` — the joint scalars the
 //! rig turns into a skeleton. Pure numbers: no `Graphics`, no browser.
 //!
-//! THE ONE pose implementation (roadmap: docs/ARCHITECTURE.md). It began as a
+//! THE ONE pose implementation (roadmap: docs/HISTORY.md). It began as a
 //! port of `posePlan()` in web/robot-core.js, proven BIT-EXACT against it
 //! (`tests/fixtures/pose_plan.txt`, generated from that JS: 9,504 scalars,
 //! max difference 0) before anything switched over; then the game's `ROBOT`

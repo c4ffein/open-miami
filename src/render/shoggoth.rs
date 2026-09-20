@@ -5,7 +5,7 @@
 //! The boss is NOTHING BUT SPHERES: web/shoggoth-core.js draws a list of
 //! them (two instanced draws; it owns the camera, the shading and the
 //! inking) and holds no animation. This module is that list's one source
-//! (roadmap: docs/ARCHITECTURE.md): the game ships it in the stream
+//! (roadmap: docs/HISTORY.md): the game ships it in the stream
 //! (`Graphics::draw_shoggoth_live`: `SPHERE` ops closed by a `SHOGGOTH`), the
 //! tool pages ask the wasm (`src/wasm_api.rs`).
 //!

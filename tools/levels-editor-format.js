@@ -44,7 +44,7 @@
   };
   const ACTION_KINDS = ["say", "talk", "spawn", "open_exit", "close_exit", "objective", "sfx", "alert", "hold", "look_at", "gate", "checkpoint", "disarm", "combat"];
   const SFX_NAMES = ["elevator", "mask_crack", "level_clear", "pickup", "throw", "enemy_down"];
-  /* tutorial gate inputs (mirrors scenario.rs GateInput::parse) */
+  /* tutorial gate inputs (mirrors GateInput::parse, src/scenario/defs.rs) */
   const GATE_INPUTS = ["punch", "finish", "pickup", "strike", "fire", "throw"];
   const MAX_FLOOR = 14;
 

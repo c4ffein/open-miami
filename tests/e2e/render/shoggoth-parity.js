@@ -12,7 +12,7 @@
 // pixels per frame (the reference multiplies VP * model in JS doubles; the
 // instanced shader does it in float32). It is also the boss's FIRST pixel
 // test: its animation was tuned by eye, and moving its sphere placement to
-// Rust (docs/ARCHITECTURE.md roadmap) will be checked against this page.
+// Rust (docs/HISTORY.md roadmap) will be checked against this page.
 const { chromium } = require('playwright');
 
 const BASE = process.argv[2] || 'http://localhost:8098';

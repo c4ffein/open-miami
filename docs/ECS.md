@@ -185,7 +185,16 @@ pos.x += vel.x * dt;
 pos.y += vel.y * dt;
 ```
 
-#### AISystem (`src/systems/ai.rs`)
+#### AISystem (`src/systems/ai.rs` + `src/systems/ai/`)
+`run` is an orchestrator — per enemy: PERCEIVE (`senses.rs`: `Percept` = where
+am I, where is the player, do I SEE them), THINK (`think.rs`: the state
+machine, one function per state, never moves the bot), STEER (`steer.rs`:
+state -> velocity + heading; the only part that pathfinds, through `nav.rs`'s
+throttled path follower, shared with the passive crowd). `wander.rs` = the
+patrol / feral idle movement and the feral lunge cadence; `rng.rs` = the
+deterministic RNG helpers (RNG call ORDER is behaviour: think, then steer).
+Refactoring it: `tests/ai_fingerprint.rs` (docs/TESTING.md).
+
 Enemy state machine (`AIState`):
 - **Unaware**: never saw the player; idles / wanders / patrols per `EnemyType`
 - **SpottedUnsure**: glimpsed the player — still spotting, or investigating the last known position

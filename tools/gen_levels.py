@@ -35,7 +35,7 @@ TRIGGERS = {"start", "enter_zone", "kills", "all_dead", "timer", "exit_open", "s
             "boss_dead", "extracted"}
 ACTIONS = {"say", "talk", "spawn", "open_exit", "close_exit", "objective", "sfx", "alert", "hold",
            "look_at", "gate", "checkpoint", "disarm", "combat"}
-# Tutorial `gate` inputs (mirrors scenario.rs `GateInput::parse`).
+# Tutorial `gate` inputs (mirrors `GateInput::parse`, src/scenario/defs.rs).
 GATE_INPUTS = {"punch": "Punch", "finish": "Finish", "pickup": "Pickup", "strike": "Strike",
                "fire": "Fire", "throw": "Throw"}
 SFX = {"elevator", "mask_crack", "level_clear", "pickup", "throw", "enemy_down",

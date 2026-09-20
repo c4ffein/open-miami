@@ -12,34 +12,46 @@ very bad night to be a rogue AI. (See [LORE.md](LORE.md) for the full fiction.)
 
 ## Features
 
-- **Top-down fast-paced combat** - Purge rogue AI models in brutal, Hotline-Miami-quick fights
-- **Play as a Claude bot** - A friendly coral purge bot with a single glowing visor
-- **Three rogue archetypes** - Sentinels (red), Drifters (violet) and Hunters (magenta)
-- **Browser-based** - Runs entirely in your web browser using WebAssembly
-- **Written in Rust** - Leveraging Rust's performance and safety
+- **Hotline-Miami-quick combat** - one hit hurts, everyone dies fast, R puts you straight back in
+- **One weapon at a time** - fists, melee, pistol, shotgun, machine gun; rogues drop theirs,
+  you grab it (E) or throw yours at someone's head (right click)
+- **Knockdowns and finishers** - punch a rogue down, then finish it: pound, stomp, or kick
+  its head clean off (the head is physically simulated and rolls away)
+- **Three rogue archetypes** - Sentinels (red), Drifters (violet) and Hunters (magenta), with
+  vision cones, a "did I see something?" investigation phase, and A* pathfinding
+- **15 hand-designed floors** - a parking-lot cold open with a passive crowd, thirteen floors
+  of the Miami Datacenter, a boss, and floor 13½ (see [LORE.md](LORE.md))
+- **Scripted floors** - comms chatter, dialogue, tutorial gates that freeze the world until you
+  do the thing, objectives, mid-floor checkpoints, cinematic camera beats — all data, in
+  `levels/*.json` ([docs/SCENARIO_FORMAT.md](docs/SCENARIO_FORMAT.md))
+- **Live 3D characters, pixel-art look** - robots and the boss are rigged 3D models rendered
+  live at a low ART resolution and moved smoothly at native resolution: the crunch comes
+  from the asset grid, never from a screen-space pixel grid. No antialiasing, on purpose
+- **Music as code** - seven songs, each one Rust file, played by a WebAudio synth engine
+  ([docs/MUSIC_CODE.md](docs/MUSIC_CODE.md)); every sound effect is synthesized too. There
+  is no audio or image asset file in the game — the one asset is the VT323 font
+- **Built-in tools** - `/?viz`: a sprite / prop inspector, a tracker for the songs, a level
+  editor and a post-effects gallery ([docs/TOOLS.md](docs/TOOLS.md))
+- **Zero dependencies** - a custom ECS, renderer, pathfinder and sequencer; the only crates
+  are `wasm-bindgen` / `web-sys`, the whole game is a ~900 KB wasm plus hand-written WebGL
 - **Open Source** - MIT licensed, free to use and modify
 
-## Gameplay
+## Controls
 
-- **WASD** - Move your character
-- **Mouse** - Aim
-- **Left Click** - Shoot
-- **E** - Pick up / swap the weapon you're standing on
-- **1-4** - Switch weapon
-- **R** - Restart after death
+| Input | Action |
+|---|---|
+| **WASD** | Move |
+| **Mouse** | Aim |
+| **Left click** | Punch / strike / shoot — on a downed rogue: finisher |
+| **Right click** | Throw the held weapon |
+| **E** | Pick up / swap the weapon you're standing on |
+| **Shift** (hold) | Look ahead toward the cursor |
+| **R** | After death: back to the last checkpoint. Held while alive: restart the floor |
+| **Esc** | Pause (settings, about) |
 
-### Current Features
-
-- Player (Claude bot) movement with WASD controls
-- Camera following the player
-- Rogue AI with detection and chase behavior
-- Shooting mechanics with limited ammo
-- Melee combat system
-- Health system for both the Claude bot and the rogues
-- Rogues drop their weapon when decommissioned; pick it up to swap (Hotline Miami style)
-- 13 hand-designed floors of the Miami Datacenter
-- Reboot on death
-- Checkered floor pattern for visual reference
+`/?floor=N` starts directly on floor N; `&debug` enables the debug overlays (**I**): vision
+cones, pathfinding waypoints, inflated wall bounds. Every URL flag:
+[docs/URL_PARAMS.md](docs/URL_PARAMS.md).
 
 ## Building and Running
 
@@ -98,19 +110,10 @@ wasm-bindgen target/wasm32-unknown-unknown/release/open_miami.wasm \
 
 #### Running the Game
 
-After building, serve the game with any static file server:
-
-```bash
-# Using Python
-python3 -m http.server 8000
-
-# Or using Node.js
-npx http-server
-
-# Or any other static file server
-```
-
-Then open `http://localhost:8000` in your browser.
+`python3 serve.py` (above) is the dev server: it disables caching and carries the level
+editor's write API. To just PLAY a build, any static file server works
+(`python3 -m http.server 8000`, then `http://localhost:8000`) — the game is `index.html`,
+the generated `open_miami.js` / `open_miami_bg.wasm`, `web/` and `assets/`.
 
 ## Development
 
@@ -143,29 +146,25 @@ open-miami/
 Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (where code goes and
 why), then [docs/PIPELINE.md](docs/PIPELINE.md) (one frame, end to end),
 [docs/ECS.md](docs/ECS.md) (the engine) and [docs/TESTING.md](docs/TESTING.md).
-`CLAUDE.md` is the detailed working reference.
+`CLAUDE.md` holds the working rules (what must never be broken, and why).
 
-## Roadmap
+## Status and roadmap
 
-Future improvements planned:
-
-- [ ] More weapon types (shotgun, machine gun)
-- [ ] Different enemy types
-- [ ] Multiple levels/rooms
-- [ ] Wall collision
-- [ ] Particle effects and blood splatter
-- [ ] Sound effects and music
-- [ ] Weapon pickup system
-- [ ] Score tracking
-- [ ] Better graphics and animations
-- [ ] Mobile touch controls
+The game is playable start to finish: gate, thirteen floors, the boss, 13½, the ending.
+The engineering roadmap (layering, the characters moved from JS into Rust, the renderer's
+measured GPU work) is done and recorded in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md);
+its **"What's next"** section is the open-work list. Not planned yet: score tracking,
+mobile touch controls.
 
 ## Technology
 
-- **Rust** - Systems programming language
-- **wasm-bindgen** - WebAssembly bindings for Rust
-- **WebAssembly** - Run Rust in the browser
-- **Custom ECS** - Entity-Component-System architecture built from scratch
+- **Rust -> WebAssembly** (`wasm-bindgen`, `web-sys`) - the simulation, the poses, the music
+- **Hand-written WebGL** (`web/`, plain ES modules, no build step in dev) - the engine records
+  each frame as one flat f32 command stream, handed to JS in a single zero-copy crossing
+- **Custom everything** - ECS, A* + string pulling, level / prop formats, synth + sequencer
+- **Tested on both sides of the boundary** - ~420 native tests run in seconds (every floor's
+  real render path is recorded headlessly and validated), Playwright specs and pixel-parity
+  scripts cover the browser ([docs/TESTING.md](docs/TESTING.md))
 
 ## Contributing
 
