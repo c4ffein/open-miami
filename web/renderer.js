@@ -19,7 +19,7 @@
      8 RESTORE
      9 TRANSLATE  x y
     10 ROTATE     angle
-    11 ROBOT      colorIdx poseIdx weaponIdx x y angle sizePx time
+    11 ROBOT      colorIdx weaponIdx flags x y angle sizePx + 11 pose scalars
     12 SCALE      sx sy
     13 SHOGGOTH   x y sizePx heading reveal time
     14 POSTFX     kind t r g b                        (full-screen post pass)
@@ -155,7 +155,7 @@
    transform (a fan's well / hub) never changes its rasterization.
    ========================================================================= */
 
-import { createRobotPipeline } from "./robot-core.js";
+import { createRobotPipeline, planFromScalars, POSE_SCALARS } from "./robot-core.js";
 import { wrapGpuProbe } from "./gpu-probe.js";
 import { createShoggothPipeline } from "./shoggoth-core.js";
 import { OP, OP_ARGS, TEXT_SEP } from "./ops.js";
@@ -165,10 +165,9 @@ import {
 
 const OP_POSTFX = OP.POSTFX;
 
-/* ---- robot tables (indices mirror src/graphics.rs draw_robot) ----------- */
+/* ---- robot tables (indices mirror src/graphics.rs draw_robot; there is no
+   pose table: the engine sends the pose as NUMBERS, src/render/pose.rs) ---- */
 const ROBOT_COLORS = ["coral", "red", "violet", "magenta"];
-const ROBOT_POSES = ["idle", "walk", "shoot", "hit", "downed",
-  "downed_headless", "kick", "stomp"];
 const ROBOT_WEAPONS = ["fist", "pistol", "machinegun", "shotgun"];
 const ROBOT_TILE = 128; // per-robot pass-1 scene resolution (texels)
 const ROBOT_PX = 3; // robot-core pixelation block size at this tile size
@@ -480,14 +479,19 @@ export function initRenderer(canvas) {
   const robotGpuRig = !(typeof location !== "undefined"
     && new URLSearchParams(location.search).get("rig") === "cpu");
   const robotPipe = createRobotPipeline(gl, { rt: ROBOT_TILE, gpuRig: robotGpuRig });
-  // Robots queued for the current batch: (colorIdx, poseIdx, weaponIdx, time)
-  // per slot, rendered into their tiles by flush() right before the draw.
-  const robotQueue = new Float32Array(robotSlots * 4);
+  // Robots queued for the current batch, ROBOT_Q floats per slot: colorIdx,
+  // weaponIdx, flags, then the 11 pose scalars exactly as the engine sent
+  // them (src/render/pose.rs computes the pose; nothing here animates) —
+  // rendered into their tiles by flush() right before the draw.
+  const ROBOT_Q = 3 + POSE_SCALARS.length;
+  const robotQueue = new Float32Array(robotSlots * ROBOT_Q);
   let robotUsed = 0;
   // Reused per render so the per-frame robot path never allocates.
-  const robotOpts = {
-    pose: "idle", color: "coral", weapon: "fist", time: 0, facingDeg: 0,
+  const robotPlan = {
+    bob: 0, lean: 0, zback: 0, recoil: 0, legA: 0, legB: 0, armLp: 0, armRp: 0,
+    armRaise: 0, armOut: 0, elbow: 0, shoot: false, headless: false,
   };
+  const robotOpts = { color: "coral", weapon: "fist", facingDeg: 0, plan: robotPlan };
   // The batch lays its tiles out from the atlas origin (robotCols per row).
   const robotTarget = { fbo: robotFbo, x: 0, y: 0 };
 
@@ -1382,11 +1386,10 @@ export function initRenderer(canvas) {
     if (robotUsed > 0) {
       robotPipe.batchBegin(robotCols, robotUsed);
       for (let i = 0; i < robotUsed; i++) {
-        const q = i * 4;
-        robotOpts.color = ROBOT_COLORS[robotQueue[q] | 0] || ROBOT_COLORS[0];
-        robotOpts.pose = ROBOT_POSES[robotQueue[q + 1] | 0] || ROBOT_POSES[0];
-        robotOpts.weapon = ROBOT_WEAPONS[robotQueue[q + 2] | 0] || ROBOT_WEAPONS[0];
-        robotOpts.time = robotQueue[q + 3];
+        const q = i * ROBOT_Q, Q = robotQueue;
+        robotOpts.color = ROBOT_COLORS[Q[q] | 0] || ROBOT_COLORS[0];
+        robotOpts.weapon = ROBOT_WEAPONS[Q[q + 1] | 0] || ROBOT_WEAPONS[0];
+        planFromScalars(robotPlan, Q, q + 3, Q[q + 2] | 0);
         robotPipe.batchDraw(i, robotOpts);
       }
       robotPipe.batchEnd(robotTarget, robotCols, robotUsed, ROBOT_PX, true);
@@ -1859,19 +1862,20 @@ export function initRenderer(canvas) {
 
   /* ---- robots: queue a live render into a scratch tile, draw it as a quad ---- */
   // Facing is applied as quad rotation (the tile is rendered facing "up"), so
-  // the robot goes through the transform stack like every other quad. `time`
-  // is the engine's continuous animation clock, used as-is.
-  function drawRobot(colorIdx, poseIdx, weaponIdx, x, y, angle, sizePx, time) {
+  // the robot goes through the transform stack like every other quad. Args at
+  // cmds[a..]: colorIdx weaponIdx flags x y angle sizePx + the 11 pose scalars.
+  function drawRobot(cmds, a) {
+    const x = cmds[a + 3], y = cmds[a + 4], angle = cmds[a + 5], sizePx = cmds[a + 6];
     setTexture(robotTex);
     // Need a free tile AND room for the whole quad in this batch: a flush
     // recycles tiles, so the six verts of one robot must never straddle one.
     if (robotUsed >= robotSlots || vCount + 6 > MAX_VERTS) flush();
     const slot = robotUsed++;
-    const q = slot * 4;
-    robotQueue[q] = colorIdx;
-    robotQueue[q + 1] = poseIdx;
-    robotQueue[q + 2] = weaponIdx;
-    robotQueue[q + 3] = time;
+    const q = slot * ROBOT_Q;
+    robotQueue[q] = cmds[a];         // colorIdx
+    robotQueue[q + 1] = cmds[a + 1]; // weaponIdx
+    robotQueue[q + 2] = cmds[a + 2]; // flags
+    for (let k = 0; k < POSE_SCALARS.length; k++) robotQueue[q + 3 + k] = cmds[a + 7 + k];
     // The tile holds one atlas texel per pixelate block; the quad covers the
     // tile's 128 scene texels = 128 / 3 blocks (the last one partial), inset
     // by half a scene texel on each side (against neighbor-tile bleed — the
@@ -2175,9 +2179,8 @@ export function initRenderer(canvas) {
           i += 1;
           break;
         case 11: // ROBOT
-          drawRobot(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4],
-            cmds[i + 5], cmds[i + 6], cmds[i + 7]);
-          i += 8;
+          drawRobot(cmds, i);
+          i += 18;
           break;
         case 12: // SCALE
           tScale(cmds[i], cmds[i + 1]);

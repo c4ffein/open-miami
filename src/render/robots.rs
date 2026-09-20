@@ -4,6 +4,7 @@
 use crate::ecs::World;
 use crate::graphics::Graphics;
 use crate::math::{Color, Vec2};
+use crate::render::pose::{pose_plan, Pose, PoseKind};
 
 /// On-screen size (px) of a robot sprite tile. The tile is square and the
 /// robot fills ~55% of it, so this is tuned so the bot roughly matches the
@@ -47,6 +48,12 @@ pub fn robot_weapon_idx(weapon: Option<crate::components::WeaponType>) -> u32 {
         Some(WeaponType::MachineGun) => 2,
         Some(WeaponType::Shotgun) => 3,
     }
+}
+
+/// The joint scalars of pose `pose_idx` at `time`. Unarmed robots
+/// (`weapon_idx` 0 = fist) stand / walk at ease rather than in the combat rig.
+pub fn robot_pose(pose_idx: u32, time: f32, weapon_idx: u32) -> Pose {
+    pose_plan(PoseKind::from_index(pose_idx), time, weapon_idx == 0)
 }
 
 /// Downed-pose time (seconds) a body with no live knockdown clock is
@@ -238,12 +245,11 @@ pub fn draw_robot_entities(
         };
         graphics.draw_robot(
             color_idx,
-            pose_idx,
             weapon_idx,
             Vec2::new(pos.x, pos.y),
             angle + ROBOT_ANGLE_OFFSET,
             ROBOT_TILE_PX,
-            time,
+            &robot_pose(pose_idx, time, weapon_idx),
         );
     }
 
@@ -306,12 +312,11 @@ pub fn draw_robot_entities(
                     robot_weapon_idx(world.get_component::<Weapon>(player).map(|w| w.weapon_type));
                 graphics.draw_robot(
                     ROBOT_COLOR_CORAL,
-                    pose_idx,
                     weapon_idx,
                     draw_pos,
                     angle + ROBOT_ANGLE_OFFSET,
                     ROBOT_TILE_PX,
-                    draw_time,
+                    &robot_pose(pose_idx, draw_time, weapon_idx),
                 );
             }
         }

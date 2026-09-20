@@ -28,7 +28,7 @@ const TABLE = [
   ["RESTORE", 0],      //  8
   ["TRANSLATE", 2],    //  9  x y
   ["ROTATE", 1],       // 10  angle
-  ["ROBOT", 8],        // 11  colorIdx poseIdx weaponIdx x y angle sizePx time
+  ["ROBOT", 18],       // 11  colorIdx weaponIdx flags x y angle sizePx + 11 pose scalars
   ["SCALE", 2],        // 12  sx sy
   ["SHOGGOTH", 6],     // 13  x y sizePx heading reveal time
   ["POSTFX", 5],       // 14  kind t r g b

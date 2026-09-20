@@ -21,6 +21,7 @@
 // roll / drift take different values. It also checks the exclusion is really
 // in use (a rect that never appears would pass trivially).
 const { chromium } = require('playwright');
+const { OP, OP_ARGS } = require('../ops'); // the ONE opcode table (web/ops.js)
 
 const BASE = process.argv[2] || 'http://localhost:8098';
 const SCENES = [
@@ -70,18 +71,17 @@ const SAMPLES = 4;
       await page.waitForTimeout(k === 0 ? 1200 : 900); // let the sway move on
       await page.evaluate(() => { window.__fakeT = performance.now(); });
       await page.waitForTimeout(150);
-      const r = await page.evaluate(() => {
+      const r = await page.evaluate(({ OP, OP_ARGS }) => {
         const canvas = document.getElementById('glcanvas');
         const W = canvas.width, H = canvas.height;
         const c2 = document.createElement('canvas'); c2.width = W; c2.height = H;
         const g2 = c2.getContext('2d', { willReadFrequently: true });
         const { cmds, text } = window.__lastFrame;
-        const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1, 8, 5];
         const full = new Float32Array(cmds);
         let rect = null;
         for (let i = 0; i < cmds.length;) {
           const op = cmds[i];
-          if (op === 24) { rect = [cmds[i + 5], cmds[i + 6], cmds[i + 7], cmds[i + 8], cmds[i + 1], cmds[i + 2]]; full[i + 7] = 0; full[i + 8] = 0; }
+          if (op === OP.BACKDROP) { rect = [cmds[i + 5], cmds[i + 6], cmds[i + 7], cmds[i + 8], cmds[i + 1], cmds[i + 2]]; full[i + 7] = 0; full[i + 8] = 0; }
           i += 1 + OP_ARGS[op];
         }
         const shot = (stream) => {
@@ -98,7 +98,7 @@ const SAMPLES = 4;
           }
         }
         return { rect, differing, first };
-      });
+      }, { OP, OP_ARGS });
       if (!r.rect) { report(false, `${name}: the frame carries a BACKDROP op`); break; }
       const [ex, ey, ew, eh, w, h] = r.rect;
       if (ew > 0 && eh > 0) { withRect++; excludedShare += (ew * eh) / (w * h); }

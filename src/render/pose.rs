@@ -1,14 +1,13 @@
 //! `pose_plan`: what a robot's body does at time `t` — the joint scalars the
 //! rig turns into a skeleton. Pure numbers: no `Graphics`, no browser.
 //!
-//! ROADMAP STEP R1 (docs/ARCHITECTURE.md "Roadmap"): this is the Rust port of
-//! `posePlan()` in web/robot-core.js, landed TEST FIRST. The game still
-//! animates through the JS copy; nothing calls this at runtime yet. The two
-//! are held together by `tests/fixtures/pose_plan.txt` — generated from the
+//! ROADMAP (docs/ARCHITECTURE.md "Roadmap"): the Rust port of `posePlan()` in
+//! web/robot-core.js. The GAME animates through THIS (R2: `render::robots`
+//! calls it and the `ROBOT` op carries the scalars); the JS copy only serves
+//! the tools and the portrait bake until R3. The two are held together by `tests/fixtures/pose_plan.txt` — generated from the
 //! JS (`make gen-pose`), compared against this implementation by
-//! `matches_the_js_pose_plan` below — so the later steps (the `ROBOT` op
-//! carrying these scalars, then deleting the JS copy) start from a proven
-//! equivalent.
+//! `matches_the_js_pose_plan` below — bit-exact, so switching the game over
+//! changed nothing on screen by construction.
 //!
 //! What moving it here buys: the finisher choreography lives in ONE language.
 //! The JS hard-codes "the kick lands at 0.28 s" / "stomps at 0.14 and 0.34 s"
@@ -18,8 +17,9 @@
 
 use crate::components::FinisherKind;
 
-/// The poses, in the order of renderer.js's `ROBOT_POSES` (= the `poseIdx`
-/// of the `ROBOT` op, see `render::robots::ROBOT_POSE_*`).
+/// The poses, in the order of `POSES` in web/robot-core.js and of
+/// `render::robots::ROBOT_POSE_*` (the engine's own pose indices — they no
+/// longer cross the boundary: the `ROBOT` op carries the pose as numbers).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoseKind {
     Idle,
@@ -45,7 +45,7 @@ impl PoseKind {
         PoseKind::Stomp,
     ];
 
-    /// The `poseIdx` of the `ROBOT` op.
+    /// The engine-side pose index (`render::robots::ROBOT_POSE_*`).
     pub fn index(self) -> u32 {
         Self::ALL.iter().position(|&k| k == self).unwrap_or(0) as u32
     }
@@ -121,7 +121,16 @@ impl Pose {
         headless: false,
     };
 
-    /// The eleven scalars, in the fixture's (and the GPU rig's) order.
+    /// The JS names of [`Pose::scalars`], in order: must equal `POSE_SCALARS`
+    /// in web/robot-core.js — the list the renderer unpacks the `ROBOT` op
+    /// with (`scalar_order_matches_the_js`).
+    pub const SCALAR_NAMES: [&'static str; 11] = [
+        "bob", "lean", "zback", "recoil", "legA", "legB", "armLp", "armRp", "armRaise", "armOut",
+        "elbow",
+    ];
+
+    /// The eleven scalars, in the order they cross the wasm boundary (the tail
+    /// of the `ROBOT` op).
     pub fn scalars(&self) -> [f32; 11] {
         [
             self.bob,
@@ -367,6 +376,31 @@ mod tests {
             assert_eq!(PoseKind::from_index(k.index()), k);
         }
         assert_eq!(PoseKind::from_index(99), PoseKind::Idle);
+    }
+
+    /// The ORDER the scalars travel in: the fixture's header is written from
+    /// `POSE_SCALARS` (web/robot-core.js), the very list `planFromScalars`
+    /// unpacks the ROBOT op with. So Rust's order == the renderer's, by test.
+    #[test]
+    fn scalar_order_matches_the_js() {
+        let fixture = include_str!("../../tests/fixtures/pose_plan.txt");
+        let header = fixture.lines().nth(1).expect("a header line");
+        let mut want = vec!["#", "pose", "relaxed", "time"];
+        want.extend(Pose::SCALAR_NAMES);
+        want.extend(["shoot", "headless"]);
+        assert_eq!(header.split(' ').collect::<Vec<_>>(), want);
+        // ...and robot-core.js still declares that list, in that order.
+        let js = include_str!("../../web/robot-core.js");
+        let decl = js
+            .split("export const POSE_SCALARS = [")
+            .nth(1)
+            .expect("POSE_SCALARS");
+        let decl = &decl[..decl.find(']').unwrap()];
+        let names: Vec<&str> = decl
+            .split(',')
+            .map(|n| n.trim().trim_matches('"'))
+            .collect();
+        assert_eq!(names, Pose::SCALAR_NAMES);
     }
 
     /// The parity proof: every row of the fixture — generated FROM

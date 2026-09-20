@@ -28,6 +28,7 @@
 // composite path), and floor 0's opening dialogue (translucent slab, text,
 // portraits over the scene).
 const { chromium } = require('playwright');
+const { OP, OP_ARGS } = require('../ops'); // the ONE opcode table (web/ops.js)
 
 const BASE = process.argv[2] || 'http://localhost:8098';
 const SCENES = [
@@ -72,20 +73,19 @@ const SCENES = [
     await page.evaluate(() => { window.__fakeT = performance.now(); }); // freeze: the FPS cap now skips every engine frame
     await page.waitForTimeout(200);
 
-    const r = await page.evaluate(() => {
+    const r = await page.evaluate(({ OP, OP_ARGS }) => {
       const canvas = document.getElementById('glcanvas');
       const W = canvas.width, H = canvas.height;
       const c2 = document.createElement('canvas'); c2.width = W; c2.height = H;
       const g2 = c2.getContext('2d', { willReadFrequently: true });
       const { cmds, text } = window.__lastFrame;
-      const OP_ARGS = [4, 8, 9, 7, 9, 9, 8, 0, 0, 2, 1, 8, 2, 6, 5, 4, 2, 6, 5, 6, 16, 1, 0, 1, 8, 5];
       let hasStatic = false, hasBackdrop = false;
       const stripped = [];
       for (let i = 0; i < cmds.length;) {
         const op = cmds[i], n = OP_ARGS[op];
-        if (op === 14 && (cmds[i + 1] | 0) === 13) hasStatic = true;
-        if (op === 24) hasBackdrop = true;
-        if (op !== 14) for (let k = 0; k <= n; k++) stripped.push(cmds[i + k]);
+        if (op === OP.POSTFX && (cmds[i + 1] | 0) === 13) hasStatic = true;
+        if (op === OP.BACKDROP) hasBackdrop = true;
+        if (op !== OP.POSTFX) for (let k = 0; k <= n; k++) stripped.push(cmds[i + k]);
         i += 1 + n;
       }
       window.__grainOffset = [37 / 512, 211 / 512];
@@ -111,7 +111,7 @@ const SCENES = [
         return { max, over1: over1 / px, any: any / px, mean: sum / px };
       }
       return { W, H, hasStatic, hasBackdrop, foldVsQuad: diff(fold, quad), foldVsNone: diff(fold, none), quadVsNone: diff(quad, none) };
-    });
+    }, { OP, OP_ARGS });
 
     const f = r.foldVsQuad, gN = r.foldVsNone, qN = r.quadVsNone;
     console.log(`${name}: ${r.W}x${r.H} · fold vs quad: max ${f.max}, >1 on ${(f.over1 * 100).toFixed(3)}% px, any on ${(f.any * 100).toFixed(1)}% ` +

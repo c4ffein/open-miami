@@ -527,12 +527,11 @@ mod draw {
         // CL4-UD3, unarmed, idling — going home.
         g.draw_robot(
             0, // coral
-            0, // idle
             0, // fist
             Vec2::new(cx, cy + 6.0),
             -std::f32::consts::FRAC_PI_2,
             200.0,
-            t,
+            &crate::render::pose::pose_plan(crate::render::pose::PoseKind::Idle, t, true),
         );
     }
 

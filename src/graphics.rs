@@ -41,7 +41,7 @@ pub mod op {
     pub const RESTORE: f32 = 8.0; //
     pub const TRANSLATE: f32 = 9.0; // x y
     pub const ROTATE: f32 = 10.0; // angle
-    pub const ROBOT: f32 = 11.0; // colorIdx poseIdx weaponIdx x y angle sizePx time
+    pub const ROBOT: f32 = 11.0; // colorIdx weaponIdx flags x y angle sizePx + 11 pose scalars (render::pose)
     pub const SCALE: f32 = 12.0; // sx sy
     pub const SHOGGOTH: f32 = 13.0; // x y sizePx heading reveal time
     pub const POSTFX: f32 = 14.0; // kind t r g b  (full-screen post pass over the whole frame)
@@ -392,36 +392,38 @@ impl Graphics {
     }
 
     /// Draw a live-rendered 3D robot sprite. The JS renderer runs the
-    /// robot-core 3D->2D pipeline for the requested (color, pose, weapon) at
-    /// the continuous animation time `time` — every frame, no caching — and
-    /// draws it as a rotated quad of `size_px` px.
-    /// Indices follow renderer.js tables:
-    ///   color:  0 coral, 1 red, 2 violet, 3 magenta
-    ///   pose:   0 idle, 1 walk, 2 shoot, 3 hit, 4 downed (sprawled knockdown;
-    ///           `time` = seconds since the fall started)
+    /// robot-core 3D->2D pipeline for the requested colour / weapon in the
+    /// given POSE — every frame, no caching — and draws it as a rotated quad
+    /// of `size_px` px. The pose is NUMBERS computed here in Rust
+    /// ([`crate::render::pose::pose_plan`]): the renderer only ferries the
+    /// eleven joint scalars to the rig (roadmap: docs/ARCHITECTURE.md).
+    ///   color:  0 coral, 1 red, 2 violet, 3 magenta  (renderer.js tables)
     ///   weapon: 0 fist, 1 pistol, 2 machinegun, 3 shotgun
-    #[allow(clippy::too_many_arguments)]
+    ///   flags:  bit 0 = the gun hand aims forward (`Pose::shoot`),
+    ///           bit 1 = skip the head cubes (`Pose::headless`)
+    /// Args: `colorIdx weaponIdx flags x y angle sizePx` + `Pose::scalars()`
+    /// (bob lean zback recoil legA legB armLp armRp armRaise armOut elbow).
     pub fn draw_robot(
         &self,
         color_idx: u32,
-        pose_idx: u32,
         weapon_idx: u32,
         center: Vec2,
         angle: f32,
         size_px: f32,
-        time: f32,
+        pose: &crate::render::pose::Pose,
     ) {
+        let flags = pose.shoot as u32 | (pose.headless as u32) << 1;
         self.push(&[
             op::ROBOT,
             color_idx as f32,
-            pose_idx as f32,
             weapon_idx as f32,
+            flags as f32,
             center.x,
             center.y,
             angle,
             size_px,
-            time,
         ]);
+        self.push(&pose.scalars());
     }
 
     /// Draw a DIALOGUE PORTRAIT: a Hotline-Miami-style pixel-art face.

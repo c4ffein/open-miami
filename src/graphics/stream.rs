@@ -28,7 +28,7 @@ pub const OP_ARGS: [usize; OP_COUNT] = [
     0,  // 8 RESTORE
     2,  // 9 TRANSLATE
     1,  // 10 ROTATE
-    8,  // 11 ROBOT
+    18, // 11 ROBOT
     2,  // 12 SCALE
     6,  // 13 SHOGGOTH
     5,  // 14 POSTFX
@@ -293,6 +293,56 @@ mod tests {
         }
     }
 
+    /// The arity table may be written down in exactly ONE JS place, web/ops.js.
+    /// A pasted copy keeps "working" until the day an opcode's arity changes,
+    /// then silently desyncs that file's stream walk (it happened: two render
+    /// scripts carried one inside `page.evaluate`). Build the telltale from the
+    /// real table and look for it everywhere JS lives.
+    #[test]
+    fn no_js_file_pastes_the_arity_table() {
+        let needle: Vec<String> = OP_ARGS[..10].iter().map(|n| n.to_string()).collect();
+        let needle = needle.join(", ");
+        let mut stack: Vec<std::path::PathBuf> = [
+            "web",
+            "tools",
+            "tests/e2e",
+            "index.html",
+            "render-tests.html",
+        ]
+        .iter()
+        .map(Into::into)
+        .collect();
+        let mut scanned = 0;
+        while let Some(path) = stack.pop() {
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !matches!(
+                    name,
+                    "node_modules" | "test-results" | "playwright-report" | "playwright-deps"
+                ) {
+                    stack.extend(std::fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+                }
+                continue;
+            }
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !matches!(ext, "js" | "mjs" | "ts" | "html") || path.ends_with("web/ops.js") {
+                continue;
+            }
+            scanned += 1;
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                !text.contains(&needle),
+                "{} pastes the opcode arity table — read it from web/ops.js instead \
+                 (tests: `require('../ops')`, see tests/e2e/ops.js)",
+                path.display()
+            );
+        }
+        assert!(
+            scanned > 10,
+            "the scan found almost no files ({scanned}): wrong cwd?"
+        );
+    }
+
     /// renderer.js dispatches on numeric literals (`case 18: // GUN_PICKUP`):
     /// every label must agree with the table, and every opcode have a case.
     #[test]
@@ -334,7 +384,8 @@ mod tests {
         g.rotate(0.5);
         g.scale(2.0, 2.0);
         g.restore();
-        g.draw_robot(0, 1, 2, p, 0.0, 64.0, 1.0);
+        let pose = crate::render::pose::pose_plan(crate::render::pose::PoseKind::Walk, 1.0, false);
+        g.draw_robot(0, 2, p, 0.0, 64.0, &pose);
         g.draw_shoggoth_live(p, 128.0, 0.0, 0.5, 1.0);
         g.postfx(13, 0.075, c);
         g.pixel_begin(2.0, 10.0, 10.0);

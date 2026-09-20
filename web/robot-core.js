@@ -714,6 +714,23 @@ export function orbitVP(yaw, pitch, halfV, center){
 // `relaxed` (no weapon held) softens idle/walk into an off-duty stance: arms
 // hanging loose at the sides, slightly splayed out from the hips with a soft
 // elbow bend, and an easy walk swing. Combat/impact poses ignore it.
+/* The pose SCALARS, in the order they cross the wasm boundary: the tail of the
+   ROBOT op (src/graphics.rs `draw_robot` <- `Pose::scalars()`), the columns of
+   tests/fixtures/pose_plan.txt, and what `planFromScalars` unpacks. ONE list:
+   the renderer and the fixture generator both read it, and
+   `scalar_order_matches_the_js` (src/render/pose.rs) holds Rust to it. */
+export const POSE_SCALARS = ["bob", "lean", "zback", "recoil", "legA", "legB",
+  "armLp", "armRp", "armRaise", "armOut", "elbow"];
+/* Fill `plan` from POSE_SCALARS.length floats at arr[o..] + the op's flags
+   (bit 0 = the gun hand aims, bit 1 = headless). The game's poses arrive this
+   way, computed in Rust; posePlan() below serves the tools + the bakes. */
+export function planFromScalars(plan, arr, o, flags){
+  for(let k=0;k<POSE_SCALARS.length;k++) plan[POSE_SCALARS[k]] = arr[o+k];
+  plan.shoot = (flags & 1) !== 0;
+  plan.headless = (flags & 2) !== 0;
+  return plan;
+}
+
 export function posePlan(pose, time, relaxed){
   const walkPhase = time*2.0*Math.PI;
   const swing  = Math.sin(walkPhase)*0.6;
@@ -1254,7 +1271,9 @@ class RobotPipeline extends SpritePipeline {
       ? orbitVP(opts.orbit.yaw||0, opts.orbit.pitch||0, opts.orbit.halfV, opts.orbit.center)
       : topDownVP(opts.halfV);
     // Unarmed robots stand / walk at ease rather than in the combat rig.
-    const plan = posePlan(pose, time, weapon === "fist");
+    // `opts.plan` = a ready-made pose (the GAME: computed in Rust,
+    // src/render/pose.rs); without it (tools, the portrait bake) the JS copy.
+    const plan = opts.plan || posePlan(pose, time, weapon === "fist");
     this._renderRobot(VP, pal, plan, facingRad, weapon);
   }
 
@@ -1276,7 +1295,7 @@ class RobotPipeline extends SpritePipeline {
     const facingRad = (opts.facingDeg || 0) * Math.PI/180;
     if(this.gpuRig && this.rigReady && !opts.orbit && !opts.halfV){
       // GPU rig: 16 floats into the instance array; drawn by batchEnd
-      this._rigQueue(i, pal, posePlan(pose, opts.time || 0, weapon === "fist"), facingRad, weapon);
+      this._rigQueue(i, pal, opts.plan || posePlan(pose, opts.time || 0, weapon === "fist"), facingRad, weapon);
       return;
     }
     // CPU rig: this robot right now, into its own tile viewport + scissor

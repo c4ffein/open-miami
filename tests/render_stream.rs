@@ -8,7 +8,7 @@
 //! STREAM on every floor and every prop, in well under a second.
 
 use open_miami::camera::{Camera, ViewCull};
-use open_miami::components::{Enemy, Headless, Health, WeaponType};
+use open_miami::components::{Enemy, Headless, Health, Position, WeaponType};
 use open_miami::ecs::World;
 use open_miami::game::{get_player_position, initialize_game};
 use open_miami::graphics::stream::{check, Cmd};
@@ -275,15 +275,78 @@ fn the_fire_input_only_changes_the_players_pose() {
     );
     let firing = g.take_frame();
     assert_eq!(idle.cmds.len(), firing.cmds.len());
+
+    // Every float that differs sits inside ONE command: the player's ROBOT
+    // (colour 0 = coral), whose pose went from standing to SHOOT.
+    let mut at = 0;
+    let mut player = None;
+    for c in checked(&firing, "firing") {
+        let span = at + 1..at + 1 + c.args.len();
+        if c.op == op::ROBOT && c.args[0] == 0.0 {
+            player = Some((span.clone(), c.args[2]));
+        }
+        at = span.end;
+    }
+    let (span, flags) = player.expect("the player robot is drawn");
     let changed: Vec<usize> = (0..idle.cmds.len())
         .filter(|&i| idle.cmds[i] != firing.cmds[i])
         .collect();
-    assert_eq!(
-        changed.len(),
-        1,
-        "one float differs: the player's pose index"
+    assert!(!changed.is_empty(), "firing changed nothing");
+    assert!(
+        changed.iter().all(|i| span.contains(i)),
+        "firing changed floats outside the player's ROBOT command: {changed:?} vs {span:?}"
     );
-    assert_eq!(firing.cmds[changed[0]], 2.0, "ROBOT_POSE_SHOOT");
+    assert_eq!(
+        flags as u32 & 1,
+        1,
+        "the SHOOT pose aims the gun hand (flags bit 0)"
+    );
+}
+
+#[test]
+fn robots_are_drawn_in_the_pose_the_engine_computed() {
+    // The ROBOT op carries `pose_plan`'s numbers verbatim: a corpse's scalars
+    // in the stream ARE `pose_plan(Downed, settled)`, the headless corpse
+    // carries flags bit 1 — no pose index, no JS animation in between.
+    use open_miami::render::pose::{pose_plan, PoseKind};
+    use open_miami::render::robots::ROBOT_DOWNED_SETTLED;
+    let mut stage = Stage::new(1);
+    // Lay the two corpses next to the player: off-camera robots are culled.
+    let here = get_player_position(&stage.world).expect("a player");
+    let dead: Vec<_> = stage
+        .world
+        .query::<Enemy>()
+        .into_iter()
+        .filter(|&e| {
+            stage
+                .world
+                .get_component::<Health>(e)
+                .is_some_and(|h| h.current <= 0)
+        })
+        .collect();
+    for (n, e) in dead.into_iter().enumerate() {
+        let p = stage
+            .world
+            .get_component_mut::<Position>(e)
+            .expect("a position");
+        p.x = here.x + 40.0 + 30.0 * n as f32;
+        p.y = here.y;
+    }
+    let g = Graphics::new_headless(VIEW.0, VIEW.1);
+    stage.record(&g, Shot::default());
+    let frame = g.take_frame();
+    let cmds = checked(&frame, "floor 1");
+    let settled = pose_plan(PoseKind::Downed, ROBOT_DOWNED_SETTLED, true).scalars();
+    let corpses: Vec<_> = cmds
+        .iter()
+        .filter(|c| c.op == op::ROBOT && c.args[7..18] == settled)
+        .collect();
+    assert_eq!(corpses.len(), 2, "the stage kills two enemies");
+    assert_eq!(
+        corpses.iter().filter(|c| c.args[2] as u32 & 2 != 0).count(),
+        1,
+        "one is headless"
+    );
 }
 
 #[test]

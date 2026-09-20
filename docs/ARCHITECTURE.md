@@ -187,9 +187,18 @@ Planned order (each step lands with its test FIRST):
      stomp timing now DERIVES from `FinisherKind::impacts()` and is tested
      ("the foot is fully extended on the impact", "each stomp lands on its
      impact"). Until R3 the pose logic exists TWICE: edit both, regenerate.
-   - **R2 (next): the game uses it** — the `ROBOT` op carries the scalars
-     instead of `poseIdx + time` (`render/robots.rs` calls `pose_plan`;
-     `batchDraw` takes a ready-made plan).
+   - **R2 (DONE): the game uses it.** The `ROBOT` op is `colorIdx weaponIdx
+     flags x y angle sizePx` + the 11 pose scalars (18 args; flags bit 0 =
+     the gun hand aims, bit 1 = headless): `render/robots.rs` calls
+     `pose_plan`, the renderer unpacks with `planFromScalars` and
+     `batchDraw` takes the ready-made `opts.plan` — the game runs NO JS
+     animation any more, and renderer.js lost its `ROBOT_POSES` table. The
+     scalar ORDER is one JS list, `POSE_SCALARS` (web/robot-core.js), which
+     drives both the renderer's unpack and the fixture's columns; Rust is
+     held to it by `scalar_order_matches_the_js`, and `make check-pose`
+     proves `planFromScalars` inverts it. Since R1 proved the two pose
+     functions bit-identical, the game's robots are unchanged by
+     construction. JS `posePlan()` now only serves the tools + the bakes.
    - **R3: delete the JS copy** — needs roadmap step 4 (the portrait bake,
      `tools/inspector.html` and `tools/rig-parity.html` call `posePlan`
      with no wasm loaded); the fixture then stays as the golden record.

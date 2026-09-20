@@ -80,11 +80,15 @@
   button = draw + click test in one call: menus, `?viz`, `editor_ui`) is
   legitimately APP code
 - CHARACTERS ROADMAP (docs/ARCHITECTURE.md "Roadmap" — decided direction,
-  step R1 of the robots DONE): Rust computes poses (numbers), GLSL evaluates
-  rigs, JS only ferries. UNTIL R3 THE ROBOT POSE LOGIC EXISTS TWICE —
-  `posePlan()` in web/robot-core.js (still what the game runs) and
-  `pose_plan` in src/render/pose.rs (bit-exact port; kick / stomp timing
-  derived from `FinisherKind::impacts()`): change a pose = edit BOTH, `make
+  robots R1 + R2 DONE): Rust computes poses (numbers), GLSL evaluates rigs,
+  JS only ferries. THE GAME's robots are animated by `pose_plan` in
+  src/render/pose.rs (kick / stomp timing derived from
+  `FinisherKind::impacts()`); the `ROBOT` op carries its 11 scalars, in the
+  order of `POSE_SCALARS` (web/robot-core.js — the ONE list behind the
+  renderer's `planFromScalars` and the fixture's columns; Rust pinned to it).
+  UNTIL R3 THE POSE LOGIC STILL EXISTS TWICE: JS `posePlan()` serves the
+  portrait bake + tools/inspector.html + tools/rig-parity.html (no wasm
+  there) and must stay BIT-IDENTICAL — change a pose = edit BOTH, `make
   gen-pose`, `cargo test` (`matches_the_js_pose_plan` vs
   tests/fixtures/pose_plan.txt; `make check-pose`, run by `check-render`,
   fails if the JS drifts). Robots first (`posePlan` is pure and the GPU rig's 16 instance
@@ -134,7 +138,8 @@
   EFFECTS list in src/app/viz/effects.rs); the DRIVE scene geometry
   (`src/drive.rs` tunables <-> `DRIVE_FS`) and its integer hash (`hash01` <->
   `driveHash`); the robot index tables (src/render/robots.rs <-> renderer.js
-  `ROBOT_COLORS` / `ROBOT_POSES` / `ROBOT_WEAPONS`); the rig's ROTATION ORDER
+  `ROBOT_COLORS` / `ROBOT_WEAPONS` — no pose table: poses cross as numbers);
+  the pose logic itself until R3 (PINNED bit-exact, see Layering); the rig's ROTATION ORDER
   per joint chain inside web/robot-core.js (`leg()` / `arm()`, the CPU rig =
   the reference <-> `rigVS`, the GPU rig; `tests/e2e/render/rig-parity.js`);
   `PIX_DEPTH` (stream.rs <-> renderer.js); `BOSS_MASK_OFF_SECS` <->
@@ -201,8 +206,8 @@
 - FILES THAT TOOLS PARSE (moving / renaming breaks a generator):
   `PROP_NAMES` in `src/props.rs` (tools/gen_props.py), `title_glyph` in
   `src/render/title.rs` (tools/gen_title.py -> index.html's loading SVG),
-  `posePlan` / `POSES` exported by `web/robot-core.js`
-  (tools/gen_pose_fixture.ts), the `TABLE` rows of `web/ops.js` + `MASK_OFF_SECS` in
+  `posePlan` / `POSES` / `POSE_SCALARS` / `planFromScalars` exported by
+  `web/robot-core.js` (tools/gen_pose_fixture.ts + a cargo test), the `TABLE` rows of `web/ops.js` + `MASK_OFF_SECS` in
   `web/shoggoth-core.js` + the `case N: // NAME` labels of `web/renderer.js`
   (cargo tests)
 - NEW PROPS are APPENDED (ids are persisted in props/props.json): a name in
