@@ -17,8 +17,8 @@
 //! 2D primitives through pixel-art groups; that cost several full-screen
 //! blended layers per frame and drowned fill-rate-limited GPUs.
 //!
-//! The emission needs the canvas so it is `cfg(target_arch = "wasm32")`; the
-//! projection and glitch schedules below are plain math, unit-tested natively.
+//! The emission only records a `Graphics` op; it and the projection / glitch
+//! schedules below are unit-tested natively.
 
 // ---------------------------------------------------------------------------
 // Tunables — the scene geometry constants are MIRRORED in renderer.js's
@@ -127,10 +127,9 @@ pub fn ending_glitch(credits_time: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Drawing (canvas-only)
+// Drawing
 // ---------------------------------------------------------------------------
 
-#[cfg(target_arch = "wasm32")]
 mod draw {
     use super::*;
     use crate::graphics::Graphics;
@@ -161,7 +160,6 @@ mod draw {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 pub use draw::render_drive;
 
 #[cfg(test)]

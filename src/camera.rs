@@ -226,3 +226,122 @@ impl Camera {
         Vec2::new(f.x + rx / self.zoom, f.y + ry / self.zoom)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graphics::stream::{check, final_transform};
+
+    /// A camera mid-game: off-origin, looking ahead, cinematic pull, swaying.
+    fn busy_camera(w: f32, h: f32) -> Camera {
+        let mut cam = Camera::new();
+        cam.set_viewport(w, h);
+        cam.follow_player(Vec2::new(812.0, 431.0));
+        cam.update_look(Vec2::new(w * 0.9, h * 0.2), true, 0.05);
+        cam.set_cinematic(Some((Vec2::new(300.0, 900.0), 0.4)));
+        cam.update_sway(3.7);
+        cam
+    }
+
+    /// The transform `apply()` records, as renderer.js would build it.
+    fn recorded(cam: &Camera, w: f32, h: f32) -> crate::graphics::stream::Affine {
+        let g = Graphics::new_headless(w, h);
+        cam.apply(&g);
+        let frame = g.take_frame();
+        // Unbalanced on purpose (reset() closes it): decode, don't `check`.
+        final_transform(&crate::graphics::stream::walk(&frame.cmds).unwrap())
+    }
+
+    #[test]
+    fn zoom_tracks_the_viewport_area_and_clamps() {
+        let mut cam = Camera::new();
+        cam.set_viewport(REF_VIEW_W, REF_VIEW_H);
+        assert!((cam.zoom() - DEFAULT_ZOOM).abs() < 1e-6);
+        cam.set_viewport(200.0, 150.0);
+        assert!((cam.zoom() - DEFAULT_ZOOM * ZOOM_SCALE_MIN).abs() < 1e-6);
+        cam.set_viewport(5120.0, 2880.0);
+        assert!((cam.zoom() - DEFAULT_ZOOM * ZOOM_SCALE_MAX).abs() < 1e-6);
+        // Same area, other aspect = same zoom (constant visible area).
+        cam.set_viewport(1440.0, 480.0);
+        assert!((cam.zoom() - DEFAULT_ZOOM).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_focus_lands_on_the_swayed_screen_centre() {
+        let (w, h) = (1280.0, 800.0);
+        let cam = busy_camera(w, h);
+        let f = cam.focus();
+        let (sx, sy) = recorded(&cam, w, h).apply(f.x, f.y);
+        assert!((sx - w / 2.0).abs() <= SWAY_DRIFT_PX + 1e-3);
+        assert!((sy - h / 2.0).abs() <= SWAY_DRIFT_PX + 1e-3);
+    }
+
+    #[test]
+    fn screen_to_world_inverts_the_recorded_transform() {
+        for (w, h) in [(960.0, 720.0), (1280.0, 800.0), (2880.0, 1046.0)] {
+            let cam = busy_camera(w, h);
+            let m = recorded(&cam, w, h);
+            for world in [(0.0, 0.0), (812.0, 431.0), (1500.0, -40.0), (-300.0, 990.0)] {
+                let (sx, sy) = m.apply(world.0, world.1);
+                let back = cam.screen_to_world(Vec2::new(sx, sy));
+                assert!(
+                    (back.x - world.0).abs() < 0.05 && (back.y - world.1).abs() < 0.05,
+                    "{world:?} -> ({sx}, {sy}) -> {back:?} at {w}x{h}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn apply_is_composite_plus_focus_and_reset_balances_it() {
+        let (w, h) = (960.0, 720.0);
+        let cam = busy_camera(w, h);
+        let g = Graphics::new_headless(w, h);
+        cam.apply_composite(&g);
+        let f = cam.focus();
+        g.translate(-f.x, -f.y);
+        let split = g.take_frame();
+        cam.apply(&g);
+        assert_eq!(g.take_frame().cmds, split.cmds);
+
+        cam.apply(&g);
+        cam.reset(&g);
+        let frame = g.take_frame();
+        check(&frame.cmds, &frame.texts).expect("apply + reset is balanced");
+    }
+
+    #[test]
+    fn visible_bounds_corners_map_to_the_screen_corners_without_sway() {
+        let (w, h) = (1280.0, 800.0);
+        let mut cam = Camera::new();
+        cam.set_viewport(w, h);
+        cam.follow_player(Vec2::new(500.0, 500.0));
+        let m = recorded(&cam, w, h);
+        let (min, max) = cam.visible_bounds(w, h);
+        let (x0, y0) = m.apply(min.x, min.y);
+        let (x1, y1) = m.apply(max.x, max.y);
+        assert!(x0.abs() < 1e-2 && y0.abs() < 1e-2, "({x0}, {y0})");
+        assert!(
+            (x1 - w).abs() < 1e-2 && (y1 - h).abs() < 1e-2,
+            "({x1}, {y1})"
+        );
+    }
+
+    #[test]
+    fn the_occluded_rect_really_is_floor_under_the_recorded_transform() {
+        let (w, h) = (1280.0, 800.0);
+        let (fw, fh) = (1600.0, 1200.0);
+        let cam = busy_camera(w, h);
+        let [x, y, rw, rh] = cam
+            .floor_occlusion(fw, fh, 2.0)
+            .expect("camera is mid-floor");
+        assert!(x >= 0.0 && y >= 0.0 && x + rw <= w && y + rh <= h);
+        for (sx, sy) in [(x, y), (x + rw, y), (x, y + rh), (x + rw, y + rh)] {
+            let p = cam.screen_to_world(Vec2::new(sx, sy));
+            assert!(
+                p.x >= 0.0 && p.x <= fw && p.y >= 0.0 && p.y <= fh,
+                "screen ({sx}, {sy}) = world {p:?} is off the floor"
+            );
+        }
+    }
+}

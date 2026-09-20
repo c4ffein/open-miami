@@ -13,11 +13,10 @@
 //!      back to the level select.
 //!
 //! The credits text is the plain [`CREDITS`] list below — edit freely.
-//! Everything that needs the canvas is behind `cfg(target_arch = "wasm32")`;
-//! the timeline and layout are plain data so they are unit-tested natively.
+//! The drawing only records into `Graphics`, so the whole module — timeline,
+//! layout and draw calls — builds and is unit-tested natively.
 
 use crate::math::Color;
-#[cfg(target_arch = "wasm32")]
 use crate::math::Vec2;
 
 // ---------------------------------------------------------------------------
@@ -300,10 +299,9 @@ impl Ending {
 }
 
 // ---------------------------------------------------------------------------
-// Drawing (canvas-only)
+// Drawing
 // ---------------------------------------------------------------------------
 
-#[cfg(target_arch = "wasm32")]
 mod draw {
     use super::*;
     use crate::graphics::Graphics;
@@ -615,7 +613,6 @@ mod draw {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
 pub use draw::{draw_credits, draw_extract_card, render_ride};
 
 #[cfg(test)]

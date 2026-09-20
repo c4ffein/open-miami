@@ -1,5 +1,14 @@
 ## Development Constraints
 - NEVER add any additional dependency
+- TOOLING LANGUAGE: NEW tooling (generators, checkers, build / deploy
+  scripts, dev utilities) is written in TYPESCRIPT and run with BUN (already
+  the e2e toolchain; `bun build` is the bundler — no extra dependency). Do
+  NOT add new Python scripts. The existing Python 3 stdlib tools
+  (`tools/gen_levels.py`, `tools/gen_props.py`, `gen-title`, `serve.py`)
+  stay as they are for now — port one only when it needs real work anyway,
+  and keep `make verify` runnable while doing so. A check that can be a
+  Rust host test (`cargo test`, e.g. the opcode-table sync in
+  `src/graphics/stream.rs`) should be one: no toolchain beyond cargo
 
 ## Design
 - THE VIBE — "pixelated assets in a modern engine", not real pixel art
@@ -320,7 +329,29 @@
 - The command opcode tables in src/graphics.rs (`mod op`), renderer.js
   (incl. its `OP_ARGS` arity table used by the POSTFX pre-scan) and
   tests/e2e/specs/helpers.js (`OP_ARGS`) must stay in sync (ops 21-23's
-  values live in `src/static_geo.rs`)
+  values live in `src/static_geo.rs`) — ENFORCED by `cargo test`:
+  `src/graphics/stream.rs` holds the Rust `OP_ARGS` and parses both JS
+  files (`renderer_js_op_args_match`, `e2e_helpers_op_args_match`), and
+  `every_draw_method_emits_its_declared_arity` records every `Graphics`
+  method against it
+- `Graphics` is a RECORDER with two surfaces: the browser one (canvas
+  sizing + `flush` -> `window.frameRender`, wasm-only) and the HEADLESS one
+  (`Graphics::new_headless(w, h)` + `take_frame()`, native). Every draw
+  method is plain Rust, so everything that only records — `camera`,
+  `level`, `render*`, `floor_props`, the `draw` submodules of `props` /
+  `drive` / `ending`, `sparks::render_sparks` — builds and is TESTED
+  natively. Only `input`, `editor_ui`, `audio/engine` and lib.rs's
+  `wasm_entry` are `cfg(target_arch = "wasm32")`: do not gate a module just
+  because it takes a `&Graphics`. `graphics::stream` reads a frame back
+  (`walk`, `check` = the structural validator: arity, finite floats,
+  balanced SAVE/RESTORE + pixel groups ≤ `PIX_DEPTH`, static sections
+  framed + solid-only, TEXT indices; `Affine` / `final_transform` = the
+  mirror of renderer.js's `tTranslate` / `tScale` / `tRotate`).
+  `tests/render_stream.rs` runs it over EVERY floor (cached frame, `REF`
+  frame, debug-bypass frame) and every prop at every px; src/camera.rs's
+  tests check `screen_to_world` against the transform `apply()` records. A
+  new draw path gets a stream test there first — ~1 s, vs ~50 s for a
+  browser round trip
 
 ## Repo layout (post-`proto/`)
 - Root: `index.html`, `renderer.js`, `robot-core.js` (the 3D->2D robot pipeline, imported by renderer.js at runtime), `shoggoth-core.js` (the boss pipeline, built on robot-core), `serve.py` (dev server, no-store + level-editor write API + the `/render-tests/<name>` route), `docs.html` (the `/docs` page: the RENDERING PIPELINE map — hand-built HTML/CSS mirroring the mermaid source in `docs/PIPELINE.md`, which GitHub renders — plus the persistent-vs-per-frame table, the cost model and links to every doc; serve.py routes `/docs` to it, `/docs/*.md` stay real files), `render-tests.html` (RENDER TESTS: a renderer-only harness — no wasm, no game — that drives `initRenderer`/`frameRender` with hand-built command streams so the smooth pixel-group composite can be eyeballed in isolation on any GPU; tests `square` (rocking black square), `sway` (the exact game sway over a checker/walls scene), `split` (smooth vs hard composite side by side); tweak via `?px=&amp=&period=&smooth=&zoom=`)

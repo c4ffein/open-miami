@@ -1,5 +1,4 @@
 use crate::math::{Color, Vec2};
-#[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -8,10 +7,18 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use web_sys::HtmlCanvasElement;
 
+pub mod stream;
+
 // The renderer lives entirely in JS/WebGL (see renderer.js). Rust describes
 // each frame as a flat f32 command stream plus a text arena, and hands both to
 // `window.frameRender` once per frame — a single wasm->JS boundary crossing;
 // the &[f32] slice is passed as a zero-copy Float32Array view into wasm memory.
+//
+// Only the SURFACE is browser-bound (the canvas: `new`, `sync_size`, `width`
+// / `height`, `flush`). The RECORDER — every draw call below — is plain Rust
+// and compiles natively too: `Graphics::new_headless(w, h)` records the very
+// same stream into memory and `take_frame` hands it to a test, so everything
+// that draws (camera, level, render*, props, HUD) is host-testable.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 extern "C" {
@@ -20,9 +27,9 @@ extern "C" {
 }
 
 // Command opcodes. Each command is the opcode followed by its fixed number of
-// f32 arguments. renderer.js holds the mirror of this table — keep in sync.
-#[cfg(target_arch = "wasm32")]
-mod op {
+// f32 arguments. renderer.js holds the mirror of this table — keep in sync
+// (the arity table + the test pinning it to renderer.js: `stream`).
+pub mod op {
     pub const CLEAR: f32 = 0.0; // r g b a
     pub const RECT: f32 = 1.0; // x y w h  r g b a
     pub const RECT_LINES: f32 = 2.0; // x y w h thickness  r g b a
@@ -58,31 +65,88 @@ mod op {
 
 /// Separator between entries in the per-frame text arena. renderer.js splits
 /// on the same character; it can never appear in game text.
-#[cfg(target_arch = "wasm32")]
-const TEXT_SEP: char = '\u{1f}';
+pub const TEXT_SEP: char = '\u{1f}';
 
-#[cfg(target_arch = "wasm32")]
-pub struct Graphics {
-    canvas: HtmlCanvasElement,
-    // devicePixelRatio the backing buffer was last sized with. The game keeps
-    // recording in CSS-pixel coordinates (width()/height() divide by this);
-    // renderer.js reads the same value back from the canvas's `data-dpr`
-    // attribute and scales at the viewport, so one canvas pixel is one
-    // physical screen pixel — no browser rescale, no blur on HiDPI.
-    dpr: RefCell<f64>,
+/// The per-frame recording: the f32 command stream + the text arena.
+struct Recorder {
     // Interior mutability keeps the draw API `&self`, matching the previous
     // canvas-context backend so no call site changes.
     cmds: RefCell<Vec<f32>>,
     texts: RefCell<String>,
     text_count: RefCell<u32>,
     /// Which static-geometry key has been emitted in full (see
-    /// [`static_layer`](Self::static_layer)); mirrors the renderer's cache.
+    /// [`Graphics::static_layer`]); mirrors the renderer's cache.
     static_key: RefCell<crate::static_geo::StaticKey>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub struct Graphics;
+impl Recorder {
+    fn new() -> Self {
+        Self {
+            cmds: RefCell::new(Vec::with_capacity(4096)),
+            texts: RefCell::new(String::new()),
+            text_count: RefCell::new(0),
+            static_key: RefCell::new(crate::static_geo::StaticKey::new()),
+        }
+    }
+}
 
+pub struct Graphics {
+    #[cfg(target_arch = "wasm32")]
+    canvas: HtmlCanvasElement,
+    // devicePixelRatio the backing buffer was last sized with. The game keeps
+    // recording in CSS-pixel coordinates (width()/height() divide by this);
+    // renderer.js reads the same value back from the canvas's `data-dpr`
+    // attribute and scales at the viewport, so one canvas pixel is one
+    // physical screen pixel — no browser rescale, no blur on HiDPI.
+    #[cfg(target_arch = "wasm32")]
+    dpr: RefCell<f64>,
+    /// Headless surface: the logical (CSS-pixel) size a test asked for.
+    #[cfg(not(target_arch = "wasm32"))]
+    size: (f32, f32),
+    rec: Recorder,
+}
+
+/// One recorded frame, as `window.frameRender` would receive it (headless).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Frame {
+    pub cmds: Vec<f32>,
+    /// The text arena, entries joined by [`TEXT_SEP`].
+    pub texts: String,
+}
+
+/// The HEADLESS surface (native builds: tests, tools): same recorder, no
+/// canvas, no JS.
+#[cfg(not(target_arch = "wasm32"))]
+impl Graphics {
+    /// A recorder over a virtual `w x h` CSS-pixel canvas.
+    pub fn new_headless(w: f32, h: f32) -> Self {
+        Self {
+            size: (w, h),
+            rec: Recorder::new(),
+        }
+    }
+
+    pub fn width(&self) -> f32 {
+        self.size.0
+    }
+
+    pub fn height(&self) -> f32 {
+        self.size.1
+    }
+
+    /// The headless `flush`: return the accumulated frame and reset for the
+    /// next one.
+    pub fn take_frame(&self) -> Frame {
+        *self.rec.text_count.borrow_mut() = 0;
+        Frame {
+            cmds: std::mem::take(&mut *self.rec.cmds.borrow_mut()),
+            texts: std::mem::take(&mut *self.rec.texts.borrow_mut()),
+        }
+    }
+}
+
+/// The BROWSER surface: the canvas, its sizing, and the hand-off to JS.
 #[cfg(target_arch = "wasm32")]
 impl Graphics {
     pub fn new() -> Result<Self, String> {
@@ -100,10 +164,7 @@ impl Graphics {
         let graphics = Graphics {
             canvas,
             dpr: RefCell::new(1.0),
-            cmds: RefCell::new(Vec::with_capacity(4096)),
-            texts: RefCell::new(String::new()),
-            text_count: RefCell::new(0),
-            static_key: RefCell::new(crate::static_geo::StaticKey::new()),
+            rec: Recorder::new(),
         };
         graphics.sync_size();
         Ok(graphics)
@@ -165,16 +226,19 @@ impl Graphics {
     /// Hand the accumulated frame to the JS renderer and reset for the next
     /// one. Called once at the end of every game-loop tick.
     pub fn flush(&self) {
-        let mut cmds = self.cmds.borrow_mut();
-        let mut texts = self.texts.borrow_mut();
+        let mut cmds = self.rec.cmds.borrow_mut();
+        let mut texts = self.rec.texts.borrow_mut();
         frame_render(&cmds, &texts);
         cmds.clear();
         texts.clear();
-        *self.text_count.borrow_mut() = 0;
+        *self.rec.text_count.borrow_mut() = 0;
     }
+}
 
+/// The RECORDER: every draw call, identical on both surfaces.
+impl Graphics {
     fn push(&self, vals: &[f32]) {
-        self.cmds.borrow_mut().extend_from_slice(vals);
+        self.rec.cmds.borrow_mut().extend_from_slice(vals);
     }
 
     pub fn clear(&self, color: Color) {
@@ -253,8 +317,8 @@ impl Graphics {
     /// through untouched.
     pub fn draw_text(&self, text: &str, pos: Vec2, font_size: f32, color: Color) {
         let idx = {
-            let mut texts = self.texts.borrow_mut();
-            let mut count = self.text_count.borrow_mut();
+            let mut texts = self.rec.texts.borrow_mut();
+            let mut count = self.rec.text_count.borrow_mut();
             if *count > 0 {
                 texts.push(TEXT_SEP);
             }
@@ -693,7 +757,7 @@ impl Graphics {
     /// frame-invariant (tint / debug variants must bypass this API and draw
     /// plainly instead). Do not call inside a pixel-art group.
     pub fn static_layer(&self, key: u32, content: impl FnOnce()) {
-        let record = self.static_key.borrow_mut().needs_record(key);
+        let record = self.rec.static_key.borrow_mut().needs_record(key);
         self.push(&crate::static_geo::open_ops(record, key));
         if record {
             content();

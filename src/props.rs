@@ -2106,11 +2106,11 @@ pub fn rot_box(bounds: (f32, f32, f32, f32), px: f32) -> (f32, f32, f32, f32) {
     snap_box((-r, -r, 2.0 * r, 2.0 * r), px)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub use wasm::{draw_prop, draw_prop_ex, draw_prop_layer};
+pub use draw::{draw_prop, draw_prop_ex, draw_prop_layer};
 
-#[cfg(target_arch = "wasm32")]
-mod wasm {
+// Drawing only RECORDS into `Graphics`, so it builds natively too (headless
+// recording — see the tests).
+mod draw {
     use super::{
         gate_angle, prop_px, rot_box, snap_box, turnstile_angle, PixelMode, PropDrawOpts,
         MAX_LAYERS, PROP_COUNT, PROP_LAYERS,

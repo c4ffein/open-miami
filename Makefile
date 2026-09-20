@@ -51,7 +51,7 @@ check-test:
 check-clippy:
 	@echo "$(YELLOW)Running clippy (linting)...$(NC)"
 	cargo clippy --all-targets --all-features -- -D warnings
-	@echo "$(YELLOW)Running clippy for the wasm32 target (audio/graphics/input/render/camera/lib are wasm-only)...$(NC)"
+	@echo "$(YELLOW)Running clippy for the wasm32 target (the audio engine, input, editor_ui and the lib.rs entry are wasm-only)...$(NC)"
 	cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
 	@echo "$(GREEN)✓ Clippy passed$(NC)"
 

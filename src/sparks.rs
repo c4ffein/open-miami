@@ -200,7 +200,6 @@ pub fn dot_offset(seed: u32, step: u32, dot: u32, life: f32) -> Option<Vec2> {
 /// under the camera transform — call it in the ACTORS layer of
 /// `render_world`, after the robots and OUTSIDE the `?pixel=N` scenery
 /// group: sparks belong to the hit bot, over it, at native placement).
-#[cfg(target_arch = "wasm32")]
 pub fn render_sparks(
     pool: &SparkPool,
     graphics: &crate::graphics::Graphics,

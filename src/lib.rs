@@ -2,9 +2,10 @@
 pub mod math;
 pub mod palette;
 
-// WASM-only modules for browser integration
+// Browser integration. `graphics` is the frame RECORDER: only its canvas
+// surface is wasm-only, the draw API compiles natively (headless recording
+// for tests). `input` and the audio engine really are browser-only.
 pub mod audio;
-#[cfg(target_arch = "wasm32")]
 pub mod graphics;
 #[cfg(target_arch = "wasm32")]
 pub mod input;
@@ -26,11 +27,8 @@ pub mod pathfinding;
 pub mod props;
 #[rustfmt::skip]
 pub mod props_data;
-#[cfg(target_arch = "wasm32")]
 pub mod render;
-#[cfg(target_arch = "wasm32")]
 pub mod render_comms;
-#[cfg(target_arch = "wasm32")]
 pub mod render_dialogue;
 pub mod scenario;
 pub mod sim;
@@ -40,15 +38,14 @@ pub mod systems;
 
 // Where the floor hides the void backdrop (pure math, host-tested)
 pub mod backdrop_clip;
-// Camera and level rendering (WASM-only, depend on the canvas Graphics)
-#[cfg(target_arch = "wasm32")]
+// Camera and level rendering: they only record into `Graphics`, so they
+// build (and are tested) natively too
 pub mod camera;
+pub mod floor_props;
+pub mod level;
+// The level editor's immediate-mode UI reads the browser input
 #[cfg(target_arch = "wasm32")]
 pub mod editor_ui;
-#[cfg(target_arch = "wasm32")]
-pub mod floor_props;
-#[cfg(target_arch = "wasm32")]
-pub mod level;
 
 // WASM entry point - browser game initialization and main loop
 #[cfg(target_arch = "wasm32")]
