@@ -21,7 +21,7 @@
     10 ROTATE     angle
     11 ROBOT      colorIdx weaponIdx flags x y angle sizePx + 11 pose scalars
     12 SCALE      sx sy
-    13 SHOGGOTH   x y sizePx heading reveal time
+    13 SHOGGOTH   x y sizePx maskAt   (the boss: consumes the SPHERE run before it)
     14 POSTFX     kind t r g b                        (full-screen post pass)
     15 PIX_BEGIN  px w h smooth                       (open a pixel-art group)
     16 PIX_END    x y                                 (close it, draw at x y)
@@ -67,6 +67,12 @@
                                                       the floor: baked-once
                                                       pixel-art sprite, quad
                                                       spun in 2D by `angle`)
+    26 SPHERE     m00..m03 m10..m13 m20..m23  r g b id  ar ag ab emission
+                                                      (one sphere of the boss,
+                                                      placed by the engine:
+                                                      queued for the next
+                                                      SHOGGOTH, which draws the
+                                                      run — [maskAt..) depth-OFF)
 
    Everything is drawn as vertex-colored, textured triangles in one
    interleaved dynamic buffer (a 1x1 white texture stands in for solid
@@ -158,7 +164,7 @@
 
 import { createRobotPipeline, planFromScalars, POSE_SCALARS } from "./robot-core.js";
 import { wrapGpuProbe } from "./gpu-probe.js";
-import { createShoggothPipeline } from "./shoggoth-core.js";
+import { createShoggothPipeline, SPHERE_FLOATS } from "./shoggoth-core.js";
 import { OP, OP_ARGS, TEXT_SEP } from "./ops.js";
 import {
   VS, FS, POST_VS, POST_FS, WARP_FS, DRIVE_VS, DRIVE_FS, BACKDROP_FS,
@@ -508,11 +514,17 @@ export function initRenderer(canvas) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   const shogPipe = createShoggothPipeline(gl, { rt: SHOG_TILE });
   // Bosses queued for the current batch: (heading, reveal, time) per slot.
-  const shogQueue = new Float32Array(shogSlots * 3);
+  // The boss arrives as a run of SPHERE ops closed by a SHOGGOTH op: spheres
+  // accumulate in `spherePending`, and the SHOGGOTH copies the run into its
+  // slot's own list (the tile is only rendered at flush, and a second boss may
+  // queue before then). The engine placed every sphere (src/render/shoggoth.rs);
+  // nothing here animates. ~230 spheres at most; the arrays grow on demand.
+  let spherePending = new Float32Array(256 * SPHERE_FLOATS);
+  let spherePendingN = 0;
+  const shogSpheres = [];
+  for (let i = 0; i < shogSlots; i++) shogSpheres.push({ data: new Float32Array(256 * SPHERE_FLOATS), n: 0, maskAt: 0 });
   let shogUsed = 0;
-  const shogOpts = {
-    reveal: 0, time: 0, heading: 0, wander: false, px: SHOG_PX, transparent: true,
-  };
+  const shogOpts = { spheres: null, px: SHOG_PX, transparent: true };
   const shogTarget = { fbo: shogFbo, x: 0, y: 0, w: SHOG_TILE, h: SHOG_TILE };
 
   /* ---- pixel-sprite cache: baked-once sprites, rotated in 2D ----
@@ -1398,10 +1410,7 @@ export function initRenderer(canvas) {
       robotPipe.batchEnd(robotTarget, robotCols, robotUsed, ROBOT_PX, true);
     }
     for (let i = 0; i < shogUsed; i++) {
-      const q = i * 3;
-      shogOpts.heading = shogQueue[q];
-      shogOpts.reveal = shogQueue[q + 1];
-      shogOpts.time = shogQueue[q + 2];
+      shogOpts.spheres = shogSpheres[i];
       shogTarget.x = (i % shogCols) * SHOG_TILE;
       shogTarget.y = Math.floor(i / shogCols) * SHOG_TILE;
       shogPipe.render(shogOpts, shogTarget);
@@ -1916,14 +1925,27 @@ export function initRenderer(canvas) {
   // stack. `heading` (radians, screen convention: 0 = +x, PI/2 = +y/down) is
   // what the mask leans toward; `reveal` 0..1 is the mask-off progress (0 =
   // masked, 1 = raw form); `time` is the engine's continuous clock.
-  function drawShoggoth(x, y, sizePx, heading, reveal, time) {
+  function queueSphere(cmds, a) {
+    if ((spherePendingN + 1) * SPHERE_FLOATS > spherePending.length) {
+      const grown = new Float32Array(spherePending.length * 2);
+      grown.set(spherePending);
+      spherePending = grown;
+    }
+    const o = spherePendingN++ * SPHERE_FLOATS;
+    for (let k = 0; k < SPHERE_FLOATS; k++) spherePending[o + k] = cmds[a + k];
+  }
+  // SHOGGOTH x y sizePx maskAt: the pending SPHERE run becomes this boss.
+  function drawShoggoth(x, y, sizePx, maskAt) {
     setTexture(shogTex);
     if (shogUsed >= shogSlots || vCount + 6 > MAX_VERTS) flush();
     const slot = shogUsed++;
-    const q = slot * 3;
-    shogQueue[q] = heading;
-    shogQueue[q + 1] = reveal;
-    shogQueue[q + 2] = time;
+    const sp = shogSpheres[slot];
+    const floats = spherePendingN * SPHERE_FLOATS;
+    if (sp.data.length < floats) sp.data = new Float32Array(spherePending.length);
+    sp.data.set(spherePending.subarray(0, floats));
+    sp.n = spherePendingN;
+    sp.maskAt = maskAt | 0;
+    spherePendingN = 0;
     const inset = 0.5;
     const tx = (slot % shogCols) * SHOG_TILE;
     const ty = Math.floor(slot / shogCols) * SHOG_TILE;
@@ -2041,6 +2063,7 @@ export function initRenderer(canvas) {
 
   /* ---- frame execution ---- */
   function frameRender(cmds, textArena) {
+    spherePendingN = 0; // a SPHERE run never outlives its frame
     // Perf (?perf): the `walk` span covers the opcode loop + batch building
     // (including the intermediate flushes it triggers); `sprites` is the
     // accumulated live robot/boss passes, `submit` the final upload + draw,
@@ -2194,9 +2217,8 @@ export function initRenderer(canvas) {
           i += 2;
           break;
         case 13: // SHOGGOTH
-          drawShoggoth(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4],
-            cmds[i + 5]);
-          i += 6;
+          drawShoggoth(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3]);
+          i += 4;
           break;
         case 14: // POSTFX (already picked up by the pre-scan)
           i += 5;
@@ -2241,6 +2263,10 @@ export function initRenderer(canvas) {
           drawBackdrop(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3],
             cmds[i + 4], cmds[i + 5], cmds[i + 6], cmds[i + 7]);
           i += 8;
+          break;
+        case 26: // SPHERE
+          queueSphere(cmds, i);
+          i += 20;
           break;
         case 25: // HEAD
           drawHead(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4]);

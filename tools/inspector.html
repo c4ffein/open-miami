@@ -118,8 +118,8 @@
 <script type="module">
 import { createRenderer, bakeSprite, PALETTES, WEAPONS } from "../web/robot-core.js";
 // Poses come from the ENGINE (the wasm): one implementation, src/render/pose.rs.
-import { POSES, poseFor } from "./engine-pose.js";
-import { createShoggothRenderer, bakeShoggoth, MASK_OFF_SECS, SPHERE_TESS, DEFAULT_TESS } from "../web/shoggoth-core.js";
+import { POSES, poseFor, bossSpheres, MASK_OFF_SECS } from "./engine-pose.js";
+import { createShoggothRenderer, bakeShoggoth, SPHERE_TESS, DEFAULT_TESS } from "../web/shoggoth-core.js";
 
 /* ---------- URL params: which character, and its initial setup ---------- */
 const _p = new URLSearchParams(location.search);
@@ -282,11 +282,14 @@ function frame(){
   if(KIND==="shoggoth"){
     const reveal = currentReveal(t);
     revealVal.textContent = reveal.toFixed(2);
-    const common = { reveal, time:t, px:state.px, wander:true, tess:state.tess };
-    // LEFT: live 3D orbit view (two-axis rotation of the camera)
-    orbit.render({ ...common, orbit:{yaw:state.yaw, pitch:state.pitch} });
+    const common = { px:state.px, tess:state.tess };
+    // The boss is PLACED by the engine (src/render/shoggoth.rs): ask the wasm.
+    // LEFT: live 3D orbit view (two-axis rotation of the camera), wandering
+    orbit.render({ ...common, spheres: bossSpheres({ reveal, time:t, wander:true }),
+                   orbit:{yaw:state.yaw, pitch:state.pitch} });
     // RIGHT: the in-game top-down frame via bakeShoggoth() (one-axis heading)
-    sprite = bakeShoggoth({ ...common, heading:state.facingDeg*Math.PI/180, size:gameCanvas.width });
+    sprite = bakeShoggoth({ ...common, size:gameCanvas.width,
+      spheres: bossSpheres({ reveal, time:t, wander:true, heading:state.facingDeg*Math.PI/180 }) });
   } else {
     // LEFT: live 3D orbit view (two-axis rotation of the camera)
     const plan = poseFor(state.pose, t, state.weapon);
@@ -313,7 +316,7 @@ window.__editor = {
   set:(patch)=>{ Object.assign(state,patch); refreshPose(); refreshColor(); refreshWeapon(); refreshPhase(); refreshTrigger(); refreshTess(); },
   // `o.pose` / `o.time` are resolved to a plan by the engine
   bake:(o)=>bakeSprite({ ...o, plan: o.plan || poseFor(o.pose || "idle", o.time || 0, o.weapon || "fist") }),
-  bakeShoggoth:(o)=>bakeShoggoth(o),
+  bakeShoggoth:(o)=>bakeShoggoth({ ...o, spheres: o.spheres || bossSpheres(o) }),
   state,
 };
 </script>

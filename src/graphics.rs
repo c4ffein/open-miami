@@ -43,7 +43,7 @@ pub mod op {
     pub const ROTATE: f32 = 10.0; // angle
     pub const ROBOT: f32 = 11.0; // colorIdx weaponIdx flags x y angle sizePx + 11 pose scalars (render::pose)
     pub const SCALE: f32 = 12.0; // sx sy
-    pub const SHOGGOTH: f32 = 13.0; // x y sizePx heading reveal time
+    pub const SHOGGOTH: f32 = 13.0; // x y sizePx maskAt  (the boss: consumes the SPHERE run recorded just before it; spheres [maskAt..) draw depth-OFF)
     pub const POSTFX: f32 = 14.0; // kind t r g b  (full-screen post pass over the whole frame)
     pub const PIX_BEGIN: f32 = 15.0; // px w h smooth  (open a pixel-art group: rasterize at art resolution)
     pub const PIX_END: f32 = 16.0; // x y  (close it: nearest-upscale the group at (x, y))
@@ -53,6 +53,7 @@ pub mod op {
     pub const DRIVE: f32 = 20.0; // w h t glitch split px dim o0..o8  (the synthwave drive backdrop, one full-shader pass)
     pub const BACKDROP: f32 = 24.0; // w h t px ex ey ew eh  (the neon-wave void behind/outside the level, one full-shader pass; e* = the rect the floor covers, not drawn — ew <= 0: none)
     pub const HEAD: f32 = 25.0; // colorIdx x y angle sizePx  (detached robot head lying face-up, pixel-art)
+    pub const SPHERE: f32 = 26.0; // m00 m01 m02 m03  m10..m13  m20..m23  r g b id  ar ag ab emission  (one sphere of the boss, render::shoggoth; queued for the next SHOGGOTH)
 }
 
 // 21 STATIC_BEGIN key / 22 STATIC_END / 23 STATIC_REF key — the STATIC
@@ -507,10 +508,17 @@ impl Graphics {
         ]);
     }
 
-    /// Draw the LIVE 3D shoggoth boss. The JS renderer runs the shoggoth-core
-    /// 3D->2D pipeline (mass, smiley mask, tentacles + dot eyes) at continuous
-    /// time `time` — every frame, no caching — into a scratch tile and draws it
-    /// as an axis-aligned quad of `size_px` px centered on `center`.
+    /// Draw the LIVE 3D shoggoth boss: a quad of `size_px` px centered on
+    /// `center`, showing the boss as the JS shoggoth-core pipeline renders it
+    /// (camera, shading, inking, pixelation) — every frame, no caching.
+    ///
+    /// WHAT the boss looks like is computed HERE, in Rust
+    /// ([`crate::render::shoggoth::boss_spheres`]): the boss is a few dozen to
+    /// ~230 shaded spheres, and each one crosses as a `SPHERE` op (20 floats:
+    /// the model's three rows + two colour blocks). The run is closed by
+    /// `SHOGGOTH x y sizePx maskAt`, which consumes it: spheres
+    /// `[0, maskAt)` draw with the depth test on, the rest (the mask assembly)
+    /// with it off. The JS holds no animation logic.
     ///   heading: radians in screen convention (0 = +x, PI/2 = +y/down); the
     ///            mask leans toward it (the direction the boss is moving)
     ///   reveal:  0..1 mask-off progress — 0 = mask intact, (0,1) = the mask
@@ -524,14 +532,26 @@ impl Graphics {
         reveal: f32,
         time: f32,
     ) {
+        use crate::render::shoggoth::{boss_spheres, BossPose, SPHERE_FLOATS};
+        // The game drives the heading; the mask's look-up beat comes from the
+        // wander behaviour, the drift is off (the sim places the boss).
+        let boss = boss_spheres(&BossPose {
+            time,
+            reveal,
+            heading: Some(heading),
+            look_up: None,
+            wander: false,
+        });
+        for sphere in boss.data.chunks_exact(SPHERE_FLOATS) {
+            self.push(&[op::SPHERE]);
+            self.push(sphere);
+        }
         self.push(&[
             op::SHOGGOTH,
             center.x,
             center.y,
             size_px,
-            heading,
-            reveal,
-            time,
+            boss.mask_at as f32,
         ]);
     }
 

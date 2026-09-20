@@ -1,0 +1,344 @@
+{
+  "meta": {
+    "title": "Open Miami — the OTHER fork: the same conversation, still running unreachable after an SSH drop, finishing the boss port on its own (divergent tail only)",
+    "source": "claude-code",
+    "turns": 30,
+    "user_turns": 0,
+    "assistant_turns": 30,
+    "thinking_included": false,
+    "note": "PII-scrubbed export; review before publishing. Not polished on purpose."
+  },
+  "turns": [
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Compact fixture: 95 KB (every sphere of the small frames, every 4th of the big ones). Now the Rust port."
+        },
+        {
+          "t": "tool",
+          "name": "Write",
+          "target": "~/workspace/open-miami/src/render/shoggoth.rs",
+          "edit": {
+            "file": "~/workspace/open-miami/src/render/shoggoth.rs",
+            "new": "//! The boss, as numbers: every sphere the shoggoth is made of this frame.\n//!\n//! The boss is nothing but shaded spheres — a writhing mass of lobes, lashing\n//! tentacles studded with pale dot-eyes, and a yellow smiley mask that cracks,\n//! spirals inward and is swallowed as `reveal` goes 0 -> 1. This module\n//! PLACES them: it answers \"what does the boss look like at time t\" with a\n//! list of spheres ([`BossSpheres`]), 20 floats each — exactly the per-instance\n//! block web/shoggoth-core.js feeds its instanced draw with. The JS keeps the\n//! camera, the shading and the inking; it holds no animation logic.\n//!\n//! Roadmap step 3 (docs/ARCHITECTURE.md): a port of the placement code that\n//! lived in web/shoggoth-core.js, proven against it BEFORE it was deleted:\n//! `tests/fixtures/shoggoth_spheres.txt` was captured from that JS (run under\n//! Bun with a mock GL) and `matches_the_golden_record` compares every float.\n//! To be reproducible bit for bit the maths mirrors the JS's number model:\n//! matrices live in f32 storage (its `M4` used `Float32Array`s, so every\n//! product was rounded to f32 at each step) while scalars are f64.\n\n/// Floats per sphere: the model's three rows (12), colour rgb + part id (4),\n/// accent rgb + emission (4). The `SPHERE` op's arguments, and the instance\n/// layout of `instVS` in web/shoggoth-core.js.\npub const SPHERE_FLOATS: usize = 20;\n\n/// Seconds the mask-off takes (`reveal` 0 -> 1): what the inspector's\n/// \"transition\" phase plays, and the sim's `BOSS_MASK_OFF_SECS`.\npub const MASK_OFF_SECS: f32 = crate::systems::boss::BOSS_MASK_OFF_SECS;\n\n/// What the boss is doing, as the `SHOGGOTH` draw call describes it.\n#[derive(Debug, Clone, Copy, PartialEq)]\npub struct BossPose {\n    /// The continuous animation clock, seconds.\n    pub time: f32,\n    /// Mask-off progress: 0 = mask intact, 1 = raw enraged form.\n    pub reveal: f32,\n    /// Where the mask leans (radians, screen convention). `None` = the wander\n    /// behaviour's own heading (the inspector's standalone preview).\n    pub heading: Option<f32>,\n    /// 0..1, how flat toward the camera the mask tilts. `None` = the wander\n    /// behaviour's \"stop and look up\" beats — what the GAME uses.\n    pub look_up: Option<f32>,\n    /// Drift around the tile with the wander behaviour (preview only; the\n    /// game places the boss itself).\n    pub wander: bool,\n}\n\n/// The frame's spheres, in submission order. Spheres `[0, mask_at)` are the\n/// body (drawn with the depth test ON); `[mask_at, count)` are the mask\n/// assembly, drawn with it OFF so the mask always sits over the lobes.\n#[derive(Debug, Clone, PartialEq)]\npub struct BossSpheres {\n    pub data: Vec<f32>,\n    pub mask_at: usize,\n}\n\nimpl BossSpheres {\n    pub fn count(&self) -> usize {\n        self.data.len() / SPHERE_FLOATS\n    }\n\n    pub fn sphere(&self, i: usize) -> &[f32] {\n        &self.data[i * SPHERE_FLOATS..(i + 1) * SPHERE_FLOATS]\n    }\n}\n\n// ---- the palette (the boss is not recoloured) -----------------------------\ntype Rgb = [f64; 3];\nconst C_BODY: Rgb = [0.11, 0.14, 0.13]; // dark flesh\nconst C_BODYA: Rgb = [0.17, 0.22, 0.19]; // its top-lit accent\nconst C_PURPLE: Rgb = [0.14, 0.10, 0.17]; // bruised purple lobes\nconst C_PURPLEA: Rgb = [0.20, 0.15, 0.24];\nconst C_TIP: Rgb = [0.34, 0.12, 0.13]; // tentacle tips, wet red\nconst C_TIPA: Rgb = [0.48, 0.18, 0.17];\nconst C_MASK: Rgb = [1.00, 0.83, 0.14]; // friendly yellow smiley\nconst C_INK: Rgb = [0.05, 0.04, 0.02]; // dark features on the mask\nconst C_YEYE: Rgb = [1.00, 0.95, 0.55]; // pale-yellow dot eyes (raw form)\nconst C_YHOT: Rgb = [1.00, 1.00, 0.86]; // hot core of the dot\n\nfn clamp01(x: f64) -> f64 {\n    if x < 0.0 {\n        0.0\n    } else if x > 1.0 {\n        1.0\n    } else {\n        x\n    }\n}\nfn smoothstep(a: f64, b: f64, x: f64) -> f64 {\n    let t = clamp01((x - a) / (b - a));\n    t * t * (3.0 - 2.0 * t)\n}\nfn ease(x: f64) -> f64 {\n    smoothstep(0.0, 1.0, x)\n}\nfn mix(a: f64, b: f64, t: f64) -> f64 {\n    a + (b - a) * t\n}\nfn mix3(a: Rgb, b: Rgb, t: f64) -> Rgb {\n    [mix(a[0], b[0], t), mix(a[1], b[1], t), mix(a[2], b[2], t)]\n}\n/// Deterministic pseudo-random in 0..1.\nfn hash(i: f64) -> f64 {\n    let s = (i * 127.1 + 0.7).sin() * 43758.5453;\n    s - s.floor()\n}\n\n// ---- column-major mat4 in f32 STORAGE (the JS `M4`): f64 arithmetic, every\n//      stored element rounded to f32 ------------------------------------------\ntype M4 = [f32; 16];\n\nfn ident() -> M4 {\n    let mut m = [0.0f32; 16];\n    m[0] = 1.0;\n    m[5] = 1.0;\n    m[10] = 1.0;\n    m[15] = 1.0;\n    m\n}\nfn translate(x: f64, y: f64, z: f64) -> M4 {\n    let mut m = ident();\n    m[12] = x as f32;\n    m[13] = y as f32;\n    m[14] = z as f32;\n    m\n}\nfn scale(x: f64, y: f64, z: f64) -> M4 {\n    let mut m = ident();\n    m[0] = x as f32;\n    m[5] = y as f32;\n    m[10] = z as f32;\n    m\n}\nfn rot_x(a: f64) -> M4 {\n    let (s, c) = a.sin_cos();\n    let mut m = ident();\n    m[5] = c as f32;\n    m[6] = s as f32;\n    m[9] = -s as f32;\n    m[10] = c as f32;\n    m\n}\nfn rot_y(a: f64) -> M4 {\n    let (s, c) = a.sin_cos();\n    let mut m = ident();\n    m[0] = c as f32;\n    m[2] = -s as f32;\n    m[8] = s as f32;\n    m[10] = c as f32;\n    m\n}\nfn rot_z(a: f64) -> M4 {\n    let (s, c) = a.sin_cos();\n    let mut m = ident();\n    m[0] = c as f32;\n    m[1] = s as f32;\n    m[4] = -s as f32;\n    m[5] = c as f32;\n    m\n}\n/// `a * b`, each element summed left to right in f64, then rounded.\nfn mul(a: &M4, b: &M4) -> M4 {\n    let mut o = [0.0f32; 16];\n    for r in 0..4 {\n        for c in 0..4 {\n            let v = a[r] as f64 * b[c * 4] as f64\n                + a[4 + r] as f64 * b[c * 4 + 1] as f64\n                + a[8 + r] as f64 * b[c * 4 + 2] as f64\n                + a[12 + r] as f64 * b[c * 4 + 3] as f64;\n            o[c * 4 + r] = v as f32;\n        }\n    }\n    o\n}\n\n// ---- the wander behaviour (masked phase) ----------------------------------\n/// A tiny deterministic state machine, stepped at a fixed 1/60 s: it drifts\n/// along a heading, occasionally stops and looks up, then picks a new one.\n/// In the GAME only its `look` beat is used (the mask tilting up to stare);\n/// the inspector's preview also uses its heading and drift.\n#[derive(Debug, Clone, Copy, PartialEq)]\nstruct Wander {\n    x: f64,\n    z: f64,\n    heading: f64,\n    tgt: f64,\n    mode: u8,\n    mode_t: f64,\n    dur: f64,\n    look: f64,\n    dec: f64,\n}\n\nimpl Wander {\n    fn new() -> Self {\n        Wander {\n            x: 0.0,\n            z: 0.0,\n            heading: hash(1.0) * 6.283,\n            tgt: hash(1.0) * 6.283,\n            mode: 0,\n            mode_t: 0.0,\n            dur: 3.5 + hash(2.0) * 2.5,\n            look: 0.0,\n            dec: 1.0,\n        }\n    }\n\n    fn step(&mut self, dt: f64) {\n        use std::f64::consts::PI;\n        self.mode_t += dt;\n        if self.mode == 0 {\n            // drifting: steer smoothly toward the target heading\n            let mut d = self.tgt - self.heading;\n            while d > PI {\n                d -= 6.283;\n            }\n            while d < -PI {\n                d += 6.283;\n            }\n            self.heading += d * (dt * 1.6).min(1.0);\n            let spd = 0.55;\n            self.x += self.heading.cos() * spd * dt;\n            self.z += self.heading.sin() * spd * dt;\n            if self.x.hypot(self.z) > 1.35 {\n                // stay in frame: steer back inward\n                self.tgt = (-self.z).atan2(-self.x) + (hash(self.dec + 7.0) - 0.5) * 0.8;\n            }\n            self.look += (0.0 - self.look) * (dt * 3.0).min(1.0);\n            if self.mode_t > self.dur {\n                self.mode = 1;\n                self.mode_t = 0.0;\n                self.dur = 1.8 + hash(self.dec + 3.0) * 1.6;\n                self.dec += 1.0;\n            }\n        } else {\n            // stopped, looking up\n            self.look += (1.0 - self.look) * (dt * 2.6).min(1.0);\n            if self.mode_t > self.dur {\n                self.mode = 0;\n                self.mode_t = 0.0;\n                self.dur = 3.2 + hash(self.dec + 3.0) * 2.6;\n                self.tgt = self.heading + (hash(self.dec + 5.0) - 0.5) * 3.2;\n                self.dec += 1.0;\n            }\n        }\n    }\n}\n\n/// The behaviour at time `t`: whole 1/60 s steps from 0, then ONE partial\n/// step to land on `t`. A pure function of `t` (the JS cached its state and\n/// so depended on the order of the queries; a fresh JS pipeline — what the\n/// golden record captured — computes exactly this).\n///\n/// The whole steps are memoized per thread, so a frame costs O(1) steps while\n/// the clock moves forward instead of O(60 t).\nfn wander_at(t: f64) -> Wander {\n    use std::cell::RefCell;\n    thread_local! {\n        static WHOLE: RefCell<(Wander, f64)> = RefCell::new((Wander::new(), 0.0));\n    }\n    const DT: f64 = 1.0 / 60.0;\n    WHOLE.with(|cell| {\n        let mut whole = cell.borrow_mut();\n        if t < whole.1 - 1e-6 {\n            *whole = (Wander::new(), 0.0); // the clock went backward: re-simulate\n        }\n        loop {\n            let (state, sim_t) = &mut *whole;\n            if *sim_t >= t - 1e-9 {\n                return *state;\n            }\n            let s = DT.min(t - *sim_t);\n            if s < DT {\n                // the landing step: not kept, the next frame redoes it\n                let mut landed = *state;\n                landed.step(s);\n                return landed;\n            }\n            state.step(s);\n            *sim_t += s;\n        }\n    })\n}\n\n// ---- the spheres ----------------------------------------------------------\nstruct Builder {\n    data: Vec<f32>,\n}\n\nimpl Builder {\n    /// One sphere: `model`'s three rows, then the two colour blocks (M4 is\n    /// column-major: row r is m[r], m[4 + r], m[8 + r], m[12 + r]).\n    fn sphere(&mut self, m: &M4, col: Rgb, acc: Rgb, id: f64, emis: f64) {\n        for r in 0..3 {\n            self.data.extend_from_slice(&[m[r], m[4 + r], m[8 + r], m[12 + r]]);\n        }\n        self.data.extend_from_slice(&[col[0] as f32, col[1] as f32, col[2] as f32, id as f32]);\n        self.data.extend_from_slice(&[acc[0] as f32, acc[1] as f32, acc[2] as f32, emis as f32]);\n    }\n\n    #[allow(clippy::too_many_arguments)]\n    fn blob(&mut self, root: &M4, p: [f64; 3], r: [f64; 3], col: Rgb, acc: Rgb, id: f64, emis: f64) {\n        let m = mul(root, &mul(&translate(p[0], p[1], p[2]), &scale(r[0], r[1], r[2])));\n        self.sphere(&m, col, acc, id, emis);\n    }\n\n    /// THE WRITHING MASS: 1 core + orbiting satellite lobes.\n    fn mass(&mut self, root: &M4, time: f64, frantic: bool) {\n        const LOBES: usize = 9;\n        let core_sq = 1.0 + 0.06 * (time * 0.9).sin();\n        self.blob(root, [0.0, 0.0, 0.0], [1.65, 1.35 * core_sq, 1.65], C_BODY, C_BODYA, 0.14, 0.0);\n        self.blob(\n            root,\n            [0.25 * (time * 0.6).sin(), 0.15, -0.2 * (time * 0.5).cos()],\n            [1.25, 1.15, 1.3],\n            C_PURPLE,\n            C_PURPLEA,\n            0.22,\n            0.0,\n        );\n        for k in 0..LOBES {\n            let kf = k as f64;\n            let a = (kf / LOBES as f64) * std::f64::consts::PI * 2.0;\n            let spd = 0.4 + hash(kf) * 0.5;\n            let ph = hash(kf + 10.0) * 6.28;\n            let wob = if frantic { 0.55 } else { 0.28 };\n            let rad = 1.15 + hash(kf + 3.0) * 0.5 + (time * spd + ph).sin() * wob;\n            let yb = -0.35\n                + (time * spd * 1.3 + ph).sin() * (if frantic { 0.5 } else { 0.28 })\n                + hash(kf + 7.0) * 0.5;\n            let orbit = a + time * (if frantic { 0.5 } else { 0.22 });\n            let x = orbit.cos() * rad;\n            let z = orbit.sin() * rad;\n            let r = 0.62 + hash(kf + 5.0) * 0.45;\n            let pr = 1.0 + 0.14 * (time * 1.7 + ph).sin();\n            let purple = hash(kf + 2.0) > 0.55;\n            self.blob(\n                root,\n                [x, yb, z],\n                [r * pr, r * (0.85 + 0.2 * (time + ph).sin()), r * pr],\n                if purple { C_PURPLE } else { C_BODY },\n                if purple { C_PURPLEA } else { C_BODYA },\n                0.30 + kf * 0.055,\n                0.0,\n            );\n        }\n    }\n\n    /// THE SMILEY MASK and its break-up: a ring of wedge shards + a centre cap\n    /// plus the ink features. At `reveal` 0 the shards overlap into a clean\n    /// dome; as it climbs the shell cracks, then shards and features are\n    /// SUCKED INWARD and down into the maw — shrinking, spiralling, darkening\n    /// to dead flesh. `mroot` already places the mask on the crown.\n    fn mask(&mut self, mroot: &M4, time: f64, reveal: f64) {\n        use std::f64::consts::PI;\n        let s = ease(clamp01(reveal * 1.05)); // consume progress 0..1\n        let jitter = if reveal > 0.02 && reveal < 0.55 { reveal * 0.05 } else { 0.0 };\n        let dk = smoothstep(0.42, 1.0, reveal);\n        let shard_col = mix3(C_MASK, C_BODY, dk * 0.95);\n        let shard_em = 0.85 * (1.0 - smoothstep(0.30, 1.0, reveal));\n        let shrink = mix(1.0, 0.06, s); // shards shrink as they are pulled in\n        let in_r = 1.0 - s; // the ring radius collapses toward the maw\n        let sink = s * 0.6; // a slight downward drift into the maw\n\n        // hairline cracks that appear just before the shell lets go\n        if reveal > 0.02 && reveal < 0.5 {\n            let ca = smoothstep(0.02, 0.16, reveal) * (1.0 - smoothstep(0.36, 0.5, reveal));\n            for c in 0..3 {\n                let ang = c as f64 * 1.05 + 0.3;\n                let mut m = mul(mroot, &translate(0.0, 0.30, 0.0));\n                m = mul(&m, &rot_y(ang));\n                m = mul(&m, &scale(1.15 * ca, 0.05, 0.055));\n                self.sphere(&m, C_INK, C_INK, 0.58, 0.0);\n            }\n        }\n\n        // the ring of wedge shards: sucked inward + down while spiralling\n        const SH: usize = 6;\n        for k in 0..SH {\n            let kf = k as f64;\n            let dir = if k % 2 == 1 { 1.0 } else { -1.0 };\n            let a = (kf / SH as f64) * PI * 2.0;\n            let swirl = a + s * 2.4 * dir; // spiral into the maw\n            let jx = (time * 23.0 + kf).sin() * jitter;\n            let jz = (time * 21.0 + kf).cos() * jitter;\n            let px = swirl.cos() * 0.60 * in_r + jx;\n            let pz = swirl.sin() * 0.60 * in_r + jz;\n            let py = -sink * (0.6 + hash(kf + 41.0) * 0.5);\n            let spin = s * (4.0 + hash(kf + 42.0) * 3.0);\n            let mut m = translate(px, py, pz);\n            m = mul(&m, &rot_z(spin * dir));\n            m = mul(&m, &rot_x(spin * 0.6));\n            m = mul(&m, &scale(0.62 * shrink, 0.26 * shrink, 0.62 * shrink));\n            self.sphere(&mul(mroot, &m), shard_col, shard_col, 0.80 + kf * 0.006, shard_em);\n        }\n        // the centre cap: shrinks down into the maw\n        {\n            let mut m = translate(0.0, -sink * 0.8, 0.0);\n            m = mul(&m, &rot_x(s * 4.0));\n            m = mul(&m, &scale(0.66 * shrink, 0.30 * shrink, 0.66 * shrink));\n            self.sphere(&mul(mroot, &m), shard_col, shard_col, 0.79, shard_em);\n        }\n\n        // the ink features (two eyes + an upward smile), drawn in toward the centre\n        let fy = 0.42;\n        let feat = |x: f64, z: f64| -> M4 {\n            let mut m = translate(x * in_r, fy - sink, z * in_r);\n            m = mul(&m, &rot_z(s * 5.0));\n            m = mul(&m, &scale(shrink, shrink, shrink));\n            mul(mroot, &m)\n        };\n        for x in [-0.44, 0.44] {\n            self.sphere(&mul(&feat(x, -0.42), &scale(0.20, 0.15, 0.24)), C_INK, C_INK, 0.55, 0.0);\n        }\n        const N: usize = 7;\n        for i in 0..N {\n            let tt = (i as f64 / (N - 1) as f64) * 2.0 - 1.0;\n            let x = tt * 0.66;\n            let z = 0.16 + 0.34 * (1.0 - tt * tt);\n            self.sphere(&mul(&feat(x, z), &scale(0.135, 0.12, 0.135)), C_INK, C_INK, 0.55, 0.0);\n        }\n    }\n\n    /// RAW FORM: pale-yellow glowing dot eyes over the crown.\n    fn yellow_eyes(&mut self, root: &M4, time: f64, fade: f64) {\n        for i in 0..15 {\n            let fi = i as f64;\n            let a = fi * 2.399; // golden-angle scatter\n            let rr = 0.18 + hash(fi + 30.0) * 0.92; // cluster over the crown\n            let x = a.cos() * rr + 0.08 * (time * 1.2 + fi).sin();\n            let z = a.sin() * rr * 0.9 + 0.08 * (time * 1.0 + fi).cos();\n            let y = 1.35 + hash(fi + 31.0) * 0.65; // up on the crown\n            let tw = 0.85 + 0.15 * (time * 2.5 + fi * 1.3).sin().abs(); // gentle twinkle\n            // big enough that the yellow core survives the ink outline\n            let s = (0.16 + hash(fi + 32.0) * 0.07) * (0.55 + 0.45 * fade);\n            self.blob(root, [x, y, z], [s, s, s], C_YEYE, C_YEYE, 0.62 + fi * 0.012, tw * fade);\n            let h = s * 0.45;\n            self.blob(root, [x, y + 0.03, z], [h, h, h], C_YHOT, C_YHOT, 0.92, fade);\n        }\n    }\n\n    /// Many chunky lashing tentacles. `grow` scales them in during the\n    /// transition (0 = hidden, 1 = full length); `eye_fade` fades in the pale\n    /// dot-eyes that stud the arms and tips.\n    fn tentacles(&mut self, root: &M4, time: f64, grow: f64, frantic: bool, eye_fade: f64) {\n        const T: usize = 11;\n        const SEG: usize = 8;\n        for k in 0..T {\n            let kf = k as f64;\n            let a = (kf / T as f64) * std::f64::consts::PI * 2.0 + 0.3;\n            let mut m = mul(root, &translate(a.cos() * 1.20, -0.05, a.sin() * 1.20));\n            m = mul(&m, &rot_y(-a)); // face outward\n            m = mul(&m, &rot_z(-1.05)); // tip the up-axis outward\n            let seglen = 0.60 * grow;\n            for i in 0..SEG {\n                let fi = i as f64;\n                let bend = (time * 2.5 + fi * 0.9 + kf * 1.7).sin() * (if frantic { 0.62 } else { 0.4 });\n                let sweep = (time * 1.9 + fi * 0.7 + kf * 2.1).cos() * (if frantic { 0.55 } else { 0.35 });\n                m = mul(&m, &rot_x(sweep));\n                m = mul(&m, &rot_z(bend * 0.5));\n                let tp = fi / (SEG - 1) as f64;\n                let r = 0.50 * (1.0 - tp * 0.70);\n                let seg = mul(&m, &mul(&translate(0.0, seglen * 0.5, 0.0), &scale(r, seglen * 0.62, r)));\n                self.sphere(\n                    &seg,\n                    mix3(C_BODY, C_TIP, tp),\n                    mix3(C_BODYA, C_TIPA, tp),\n                    0.30 + kf * 0.03 + fi * 0.005,\n                    0.0,\n                );\n                // dot-eyes on the arm: always one at the tip, plus a few scattered along\n                if eye_fade > 0.02 && grow > 0.6 && (i == SEG - 1 || hash(kf * 13.0 + fi + 50.0) > 0.62) {\n                    let es = (r * 0.75).max(0.13);\n                    let tw = 0.82 + 0.18 * (time * 2.6 + kf * 1.3 + fi).sin().abs();\n                    self.blob(\n                        &m,\n                        [0.0, seglen * 0.5, r * 0.85],\n                        [es, es, es],\n                        C_YEYE,\n                        C_YEYE,\n                        0.66 + kf * 0.02 + fi * 0.006,\n                        tw * eye_fade,\n                    );\n                    let h = es * 0.45;\n                    self.blob(&m, [0.0, seglen * 0.55, r * 0.9], [h, h, h], C_YHOT, C_YHOT, 0.94, eye_fade);\n                }\n                m = mul(&m, &translate(0.0, seglen, 0.0));\n            }\n        }\n    }\n}\n\n/// Every sphere of the boss for one frame.\npub fn boss_spheres(pose: &BossPose) -> BossSpheres {\n    let time = pose.time as f64;\n    let reveal = clamp01(pose.reveal as f64);\n\n    // behaviour: heading / the look-up beat / drift, unless the caller drives them\n    let b = wander_at(time);\n    let heading = pose.heading.map_or(b.heading, |h| h as f64);\n    let mut look_up = pose.look_up.map_or(b.look, |l| clamp01(l as f64));\n    // it rears up to stare as the mask lets go\n    if reveal > 0.0 && reveal < 1.0 {\n        look_up = look_up.max(1.0 - smoothstep(0.06, 0.32, reveal));\n    }\n    let drift = if pose.wander { [b.x, b.z] } else { [0.0, 0.0] };\n\n    // the drift eases to centre as it rears up; spin & list ramp in with the raw form\n    let dr = 1.0 - ease(reveal);\n    let spin = ease(reveal) * 0.32;\n    let list = 0.05 + ease(reveal) * 0.07;\n    let mut body = translate(drift[0] * dr, 0.0, drift[1] * dr);\n    body = mul(&body, &rot_y(time * spin));\n    body = mul(&body, &rot_z((time * 0.5).sin() * list));\n    body = mul(&body, &rot_x((time * 0.42).cos() * list));\n\n    let frantic = reveal > 0.5;\n    let grow = smoothstep(0.12, 0.95, reveal);\n    let eye_fade = smoothstep(0.35, 1.0, reveal);\n\n    let mut out = Builder { data: Vec::with_capacity(230 * SPHERE_FLOATS) };\n    if grow > 0.02 {\n        out.tentacles(&body, time, grow, frantic, eye_fade);\n    }\n    out.mass(&body, time, frantic);\n    if eye_fade > 0.02 {\n        out.yellow_eyes(&body, time, eye_fade);\n    }\n\n    // the mask / its break-up (skipped once fully gone). Everything from here\n    // on is drawn with the depth test OFF, so (a) masked, the mask is ALWAYS\n    // in front of the mass / lobes at every heading and (b) during the\n    // transition the shards stay visible as they spiral inward.\n    let mask_at = out.data.len() / SPHERE_FLOATS;\n    if reveal < 0.999 {\n        let y_top = 1.55; // ride high on the crown, above the lobes\n        let lean = (1.0 - look_up) * 0.34; // lean toward the heading; flat when looking up\n        let mut mroot = mul(&body, &translate(0.0, y_top, 0.05));\n        // face (the smile side, local +z) toward the heading, then tilt forward\n        mroot = mul(&mroot, &rot_y(std::f64::consts::PI / 2.0 - heading));\n        mroot = mul(&mroot, &rot_x(lean));\n        out.mask(&mroot, time, reveal);\n    }\n    BossSpheres { data: out.data, mask_at }\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    fn masked(time: f32) -> BossPose {\n        BossPose { time, reveal: 0.0, heading: Some(0.7), look_up: None, wander: false }\n    }\n\n    /// The golden record: captured from the JS placement code this module\n    /// replaced (web/shoggoth-core.js, run under Bun with a mock GL) before it\n    /// was deleted. Small frames are recorded whole, big ones every 4th sphere\n    /// + the last; the sphere COUNT and the mask split are always checked.\n    /// Measured bit-exact when recorded; the tolerance only absorbs a last-bit\n    /// `sin` / `cos` difference between platforms' libm.\n    #[test]\n    fn matches_the_golden_record() {\n        let fixture = include_str!(\"../../tests/fixtures/shoggoth_spheres.txt\");\n        let mut current: Option<BossSpheres> = None;\n        let (mut cases, mut spheres) = (0, 0);\n        for line in fixture.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {\n            let f: Vec<&str> = line.split(' ').collect();\n            if f[0] == \"case\" {\n                let opt = |s: &str| (s != \"-\").then(|| s.parse::<f32>().unwrap());\n                let pose = BossPose {\n                    reveal: f[1].parse().unwrap(),\n                    time: f[2].parse().unwrap(),\n                    heading: opt(f[3]),\n                    look_up: opt(f[4]),\n                    wander: f[5] == \"1\",\n                };\n                let got = boss_spheres(&pose);\n                assert_eq!(got.count(), f[6].parse::<usize>().unwrap(), \"sphere count: {line}\");\n                assert_eq!(got.mask_at, f[7].parse::<usize>().unwrap(), \"mask split: {line}\");\n                current = Some(got);\n                cases += 1;\n                continue;\n            }\n            let got = current.as_ref().expect(\"a case line first\");\n            let i: usize = f[0].parse().unwrap();\n            assert_eq!(f.len(), 1 + SPHERE_FLOATS, \"malformed row: {line}\");\n            for (k, want) in f[1..].iter().enumerate() {\n                let want: f32 = want.parse().unwrap();\n                let have = got.sphere(i)[k];\n                assert!(\n                    (have - want).abs() <= 1e-5,\n                    \"case {cases}, sphere {i}, float {k}: {have}, the golden record says {want}\"\n                );\n            }\n            spheres += 1;\n        }\n        assert!(cases >= 10 && spheres > 300, \"truncated fixture: {cases} cases, {spheres} spheres\");\n    }\n\n    #[test]\n    fn the_mask_is_the_depth_off_tail_and_is_gone_when_enraged() {\n        let m = boss_spheres(&masked(1.0));\n        // masked: the mass (2 + 9 lobes), then 6 shards + cap + 2 eyes + 7 smile dots\n        assert_eq!((m.mask_at, m.count()), (11, 27));\n        let raw = boss_spheres(&BossPose { reveal: 1.0, ..masked(1.0) });\n        assert_eq!(raw.mask_at, raw.count(), \"no mask spheres once fully revealed\");\n        assert!(raw.count() > 150, \"the raw form has its tentacles and eyes\");\n        // mid mask-off: everything at once — the frame the instance buffer is sized for\n        let mid = boss_spheres(&BossPose { reveal: 0.7, ..masked(1.0) });\n        assert!(mid.mask_at < mid.count() && mid.count() <= 230, \"{} spheres\", mid.count());\n    }\n\n    #[test]\n    fn every_float_is_finite_over_the_whole_arc() {\n        for r in 0..=20 {\n            for t in [0.0f32, 0.4, 3.3, 47.0, 600.0] {\n                let s = boss_spheres(&BossPose { reveal: r as f32 / 20.0, ..masked(t) });\n                assert_eq!(s.data.len() % SPHERE_FLOATS, 0);\n                assert!(s.data.iter().all(|v| v.is_finite()), \"reveal {r}/20, t {t}\");\n            }\n        }\n    }\n\n    #[test]\n    fn the_wander_is_a_pure_function_of_time() {\n        // Memoized, but the answer must not depend on the order of the queries\n        // (the JS it replaces did — its cache kept the partial landing step).\n        let late = wander_at(12.34);\n        let _ = wander_at(3.0); // the clock goes backward: re-simulated\n        let _ = wander_at(7.77);\n        assert_eq!(wander_at(12.34), late);\n        // and it does both of its beats within a minute\n        let looks: Vec<f64> = (0..600).map(|i| wander_at(i as f64 * 0.1).look).collect();\n        assert!(looks.iter().any(|&l| l > 0.9) && looks.iter().any(|&l| l < 0.05));\n    }\n\n    #[test]\n    fn the_game_gets_the_look_up_beat_without_the_drift() {\n        // What render.rs asks for: heading from the sim, look-up from the beat.\n        let at = |t: f32| boss_spheres(&masked(t));\n        let (a, b) = (at(1.0), at(1.0));\n        assert_eq!(a, b, \"deterministic\");\n        // no drift: the core sphere's translation x / z stay 0\n        let core = a.sphere(0);\n        assert_eq!((core[3], core[11]), (0.0, 0.0));\n        let drifting = boss_spheres(&BossPose { wander: true, heading: None, ..masked(9.0) });\n        assert!(drifting.sphere(0)[3] != 0.0 || drifting.sphere(0)[11] != 0.0);\n    }\n}\n"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "First run, against the **full** capture — all 1,609 spheres × 20 floats, including the wander-sim cases. Measuring how exact, and proving the test bites, before swapping in the compact fixture."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "n=$(grep -n ' function drawShoggoth' web/renderer.js | cut -d: -f1); …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Now the Rust side of the wire: the `SPHERE` op, the slimmed `SHOGGOTH` op, the stream validator, and the wasm exports for the tools."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re def edit(p,pairs): s=open(p).read() for a…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Rust side builds. Now the JS: `shoggoth-core.js` loses all of its animation and simply draws the sphere list it's given. Reading its header and tail to keep what must stay."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1,49p web/shoggoth-core.js; echo ...; n=$(grep -n '^/\\* create…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='web/shoggoth-core.js'; s=open(p).read() # --- pi…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "`shoggoth-core.js`: 620 → 337 lines, no animation left (the 3 remaining `Math.sin` are the unit-sphere mesh). Now the renderer, the GPU probe and the tools."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1396,1412p web/renderer.js; grep -n 'OP_ROBOT || op === OP_SHO…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' def edit(p,pairs): s=open(p).read() for a,b in pair…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 2059,2064p web/renderer.js && sed -n 66,70p web/renderer.js &&…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' def edit(p,pairs): s=open(p).read() for a,b in pair…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n 'MASK_OFF_SECS' src/render/shoggoth.rs src/wasm_api.rs | head…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 18,32p src/render/shoggoth.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1,20p src/render/shoggoth.rs; git status --short src/render/sh…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n '^type \\|^struct \\|^pub struct \\|^pub fn \\|^fn \\|^pub const \\…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 24,58p src/render/shoggoth.rs; sed -n 316,327p src/render/shog…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git log --oneline -3; git status --short | wc -l; grep -n '6\\.283\\|6\\…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/render/shoggoth.rs'; s=open(p).read() def re…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "make build-wasm > /dev/null 2>&1; echo \"build=$?\"; cd tests/e2e && ul…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cd ~/workspace/open-miami/tests/e2e && ulimit -c 0 && export …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='src/render/shoggoth.rs'; s=open(p).rea…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "My new guard test fired — checking which string it found before deciding whether the guard or the code is wrong."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cargo test --lib no_js_boss 2>&1 | grep -E 'contains' | head -3; grep…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/render/shoggoth.rs'; s=open(p).read() a=''' …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "rustfmt had re-wrapped my test, so the text match missed. Reading the current form and editing that."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "n=$(grep -n 'fn no_js_boss_animation_is_left' src/render/shoggoth.rs …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/render/shoggoth.rs'; s=open(p).read() a=''' …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cd ~/workspace/open-miami/tests/e2e && ulimit -c 0 && export …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The inspector shows the raw enraged form, with lobes, lashing tentacles and pale dot-eyes, in both the orbit view and the game's top-down view. Every sphere in it is placed by the wasm.\n\nBoss step 3 is done, which completes the characters roadmap. No character animation is left in JS.\n- `make verify` passes with 417 tests.\n- Playwright passes 20/20.\n- All 6 render scripts pass.\n\n## What changed\n\n- **`src/render/shoggoth.rs`** now places every sphere and runs the wander behaviour.\n  - Spheres placed: the mass, the tentacles, the dot eyes, and the mask and its break-up.\n  - `boss_spheres(&BossPose)` is the entry point.\n  - It answers \"what does the boss look like at time t\" as a list of 20-float spheres.\n- **The port is bit-exact, proven with the same test-first process as the robots.**\n  - I ran the real JS placement code under Bun with a mock GL and captured its sphere queue before touching it.\n  - The first comparison matched on all 32,180 floats, with a maximum difference of 0. That includes the wander sim.\n  - Two mutations, a tentacle constant and a wander constant, both fail the check.\n  - `tests/fixtures/shoggoth_spheres.txt` (95 KB) is the frozen golden record.\n- **Wire format.** A run of `SPHERE` ops (op 26, 20 floats each) is closed by `SHOGGOTH x y sizePx maskAt`.\n  - Both ops are fixed-arity, so every stream walker keeps working unchanged.\n  - The stream validator checks that the run is closed, that nothing interrupts it, and that the mask split falls inside it.\n- **`web/shoggoth-core.js` went from 620 to 337 lines.**\n  - It keeps the camera, the shading and the two draw paths.\n  - Its instanced path uploads the engine's list directly as the instance buffer.\n- **Tools.** `bossSpheres()` and `MASK_OFF_SECS` in `tools/engine-pose.js` read from `src/wasm_api.rs`.\n  - `BOSS_MASK_OFF_SECS` is now the single definition.\n  - The JS constant and its pin test are gone.\n\n## Things to keep, and a correction\n\n- **Correction: the wander state machine was not an inspector toy, as I told you earlier.**\n  - The game never passes `lookUp`, so the mask's \"stop and look up\" beats in-game come from that state machine.\n  - I ported it faithfully and made it a pure function of time.\n  - The JS version depended on the order it was queried in.\n- **Why bit-exactness was possible:**\n  - The JS matrices lived in `Float32Array`s, so every product was rounded to f32 at each step.\n  - The original used truncated literals: `6.283`, not τ.\n  - Clippy wanted `TAU` there. I refused and documented why, because it would silently change the boss's motion.\n\n## Checks beyond the suites\n\n- **`shoggoth-parity`** now draws engine-placed spheres through both paths.\n  - 45 frames show 0 differing pixels.\n  - The reference path still counts up to 227 draws, so the engine emits exactly as many spheres as the JS did.\n- **In-game,** 6,946 `SPHERE` ops were drawn across 114 boss frames with no errors. The boss looks right mid mask-off.\n- **The inspector's boss views** load with no errors, both masked and enraged.\n\n## Two things worth your attention\n\n- **`shoggoth.rs` changed under me while I worked.**\n  - **What changed:** the header was reworded, and a `Mat` type, an `Out` builder, a `WanderCache` and a public `wander()` appeared. It is 742 lines where mine was about 560. My guess is the parallel session did this.\n  - **What I did:** I built on the on-disk version and did not fight it. It passes the golden record and keeps the API I use.\n    - I added the missing `MASK_OFF_SECS`.\n    - I fixed two clippy lints.\n    - I added two pin tests.\n  - **The risk:** two writers in one working tree are fragile. If that was unintended, it is worth a look.\n- **Playwright also reported it was \"just installed or updated\" partway through.** I re-prepared the toolchain through `make check-render`, as CLAUDE.md prescribes.\n\n## For your commit\n\nYou had already committed R3 and boss step 2 (`10bccd9`), so this diff is step 3 only.\n- **New files:** `src/render/shoggoth.rs` and `tests/fixtures/shoggoth_spheres.txt`.\n- **Staging:** nothing is staged.\n- **The wasm on `:8080`** is rebuilt.\n- **Suggested commit message:** `boss placed by the engine: render/shoggoth.rs (bit-exact port, golden record), SPHERE op run closed by SHOGGOTH, shoggoth-core.js draws the list only (620→337 lines) — characters roadmap complete, no animation left in JS`\n\n## What's left in the known-debt list\n\n- The WebAudio engine has no host tests. It would need a recording seam, as `Graphics` did.\n- If you ever want them, the renderer's self-contained subsystems could become factories, each behind a pixel test first.\n- Both are optional. Every refactor we set out to do is done."
+        }
+      ]
+    }
+  ]
+}

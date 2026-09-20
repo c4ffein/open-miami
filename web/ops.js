@@ -30,7 +30,7 @@ const TABLE = [
   ["ROTATE", 1],       // 10  angle
   ["ROBOT", 18],       // 11  colorIdx weaponIdx flags x y angle sizePx + 11 pose scalars
   ["SCALE", 2],        // 12  sx sy
-  ["SHOGGOTH", 6],     // 13  x y sizePx heading reveal time
+  ["SHOGGOTH", 4],     // 13  x y sizePx maskAt  (consumes the SPHERE run before it)
   ["POSTFX", 5],       // 14  kind t r g b
   ["PIX_BEGIN", 4],    // 15  px w h smooth
   ["PIX_END", 2],      // 16  x y
@@ -43,6 +43,7 @@ const TABLE = [
   ["STATIC_REF", 1],   // 23  key
   ["BACKDROP", 8],     // 24  w h t px ex ey ew eh
   ["HEAD", 5],         // 25  colorIdx x y angle sizePx
+  ["SPHERE", 20],      // 26  model rows 0..2 (12)  r g b id  ar ag ab emission
 ];
 
 /** Opcode values by name: `OP.RECT === 1`. */

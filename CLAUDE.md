@@ -2,7 +2,9 @@
 - This file = the RULES + a short map, loaded into every session: keep it
   short. Detail lives in `docs/` — read the relevant page BEFORE working in
   an area, and update it (not this file) when detail changes:
-  `ARCHITECTURE.md` (the four layers, where code goes, known debt, roadmap) ·
+  `ARCHITECTURE.md` (the four layers, where code goes, known debt, the
+  characters roadmap = DONE, and "What's next" = THE OPEN-WORK LIST a new
+  session starts from) ·
   `RENDERING.md` (every opcode, the why, the GPU measurements) ·
   `PIPELINE.md` (one frame, as a diagram) · `CODEMAP.md` (what lives where) ·
   `TESTING.md` (the four suites; where a new test belongs) · `TOOLS.md`
@@ -90,14 +92,18 @@
   `src/wasm_api.rs`; loading the wasm does not start the game).
   tests/fixtures/pose_plan.txt = a FROZEN golden record of the JS function
   that was replaced: a deliberate pose change updates its rows in the same
-  commit. THE BOSS: step 2 DONE — web/shoggoth-core.js draws it as TWO
-  instanced draws (body depth-ON, then the mask depth-OFF, in order; up to
-  227 per-sphere draws before), the per-sphere path kept as the REFERENCE
-  (`pipe.instanced = false`), held pixel-identical by
-  `tests/e2e/render/shoggoth-parity.js` (tools/shoggoth-parity.html, the
-  boss's first pixel test). NEXT: its sphere placement in Rust, filling that
-  instance list. Never add animation logic to JS
-  (`no_js_pose_logic_is_left`)
+  commit. THE BOSS is the same story: `boss_spheres` in
+  src/render/shoggoth.rs places every sphere (and runs the wander behaviour
+  whose look-up beats the game uses) — bit-exact port, frozen golden record
+  tests/fixtures/shoggoth_spheres.txt; KEEP its f32-rounded matrix maths and
+  its truncated literals (`6.283`, not `TAU`): parity depends on them. It
+  crosses as a run of `SPHERE` ops closed by `SHOGGOTH x y sizePx maskAt`;
+  web/shoggoth-core.js only draws that list — TWO instanced draws (body
+  depth-ON, then the mask depth-OFF, in order — never merge them), the
+  per-sphere path kept as the REFERENCE (`pipe.instanced = false`), held
+  pixel-identical by `tests/e2e/render/shoggoth-parity.js`. ROADMAP
+  COMPLETE: never add character animation to JS
+  (`no_js_pose_logic_is_left`, `no_js_boss_animation_is_left`)
 - EVERY FRAME DRAWS A SCREEN: a screen switch (`self.screen = …`, a modal
   flag) takes effect AFTER the current screen is drawn — record the intent,
   draw, then switch. Never `switch; return;` before drawing (a one-frame
@@ -127,7 +133,7 @@
   `render::world::render_world` + `render::hud::render_hud` on every floor
   and every prop at every px. A
   new draw path gets a stream test there FIRST (~1 s vs ~50 s in a browser)
-- THE OPCODE TABLE (26 ops; what each does: docs/RENDERING.md) exists twice,
+- THE OPCODE TABLE (27 ops; what each does: docs/RENDERING.md) exists twice,
   PINNED by `cargo test` (`src/graphics/stream.rs`): Rust (`mod op` in
   graphics.rs + `OP_ARGS` in stream.rs; ops 21-23 in `src/static_geo.rs`) and
   JS (`web/ops.js`: `["NAME", args]` rows, row index = opcode — read by
@@ -145,8 +151,8 @@
   `planFromScalars`, PINNED); the rig's ROTATION ORDER
   per joint chain inside web/robot-core.js (`leg()` / `arm()`, the CPU rig =
   the reference <-> `rigVS`, the GPU rig; `tests/e2e/render/rig-parity.js`);
-  `PIX_DEPTH` (stream.rs <-> renderer.js); `BOSS_MASK_OFF_SECS` <->
-  `MASK_OFF_SECS` (PINNED, src/systems/boss.rs)
+  `PIX_DEPTH` (stream.rs <-> renderer.js); the 20-float SPHERE layout
+  (src/render/shoggoth.rs <-> `instVS` in web/shoggoth-core.js, PINNED)
 - PIXEL-ART GROUPS (`pixel_begin` / `pixel_end`, ops 15/16): never average or
   point-sample a hi-res image — RASTERIZE AT THE ART RESOLUTION, upscale
   NEAREST. Groups nest <= 4 deep, <= 1024 texels a side (beyond = pass-through).
@@ -210,8 +216,8 @@
 - FILES THAT TOOLS PARSE (moving / renaming breaks a generator):
   `PROP_NAMES` in `src/props.rs` (tools/gen_props.py), `title_glyph` in
   `src/render/title.rs` (tools/gen_title.py -> index.html's loading SVG),
-  `POSE_SCALARS` / `planFromScalars` in `web/robot-core.js` (cargo tests), the `TABLE` rows of `web/ops.js` + `MASK_OFF_SECS` in
-  `web/shoggoth-core.js` + the `case N: // NAME` labels of `web/renderer.js`
+  `POSE_SCALARS` / `planFromScalars` in `web/robot-core.js` (cargo tests), the `TABLE` rows of `web/ops.js` + `SPHERE_FLOATS` / the `instVS`
+  attributes of `web/shoggoth-core.js` + the `case N: // NAME` labels of `web/renderer.js`
   (cargo tests)
 - NEW PROPS are APPENDED (ids are persisted in props/props.json): a name in
   `PROP_NAMES`, a table entry + a draw fn in its family's two files, a

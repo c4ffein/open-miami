@@ -10,6 +10,7 @@
 
 use crate::render::pose::PoseKind;
 use crate::render::robots::robot_pose;
+use crate::render::shoggoth::{boss_spheres as engine_boss_spheres, BossPose, MASK_OFF_SECS};
 use wasm_bindgen::prelude::*;
 
 /// The pose names, comma-separated, in engine index order.
@@ -29,4 +30,31 @@ pub fn pose_plan_scalars(pose_idx: u32, time: f32, weapon_idx: u32) -> Vec<f32> 
     let mut out = pose.scalars().to_vec();
     out.push(pose.flags() as f32);
     out
+}
+
+/// Every sphere of the boss for one frame (`render::shoggoth`): element 0 is
+/// the mask split (spheres from there on draw depth-OFF), then 20 floats per
+/// sphere — exactly the `SPHERE` run + `SHOGGOTH` the game records. `heading`
+/// / `look_up` = NaN leaves them to the boss's wander behaviour (the game
+/// does that for `look_up`); `wander` adds its drift (preview only).
+#[wasm_bindgen]
+pub fn boss_spheres(time: f32, reveal: f32, heading: f32, look_up: f32, wander: bool) -> Vec<f32> {
+    let some = |v: f32| (!v.is_nan()).then_some(v);
+    let boss = engine_boss_spheres(&BossPose {
+        time,
+        reveal,
+        heading: some(heading),
+        look_up: some(look_up),
+        wander,
+    });
+    let mut out = Vec::with_capacity(1 + boss.data.len());
+    out.push(boss.mask_at as f32);
+    out.extend_from_slice(&boss.data);
+    out
+}
+
+/// Seconds the boss's mask-off takes (the inspector's "transition" phase).
+#[wasm_bindgen]
+pub fn boss_mask_off_secs() -> f32 {
+    MASK_OFF_SECS
 }

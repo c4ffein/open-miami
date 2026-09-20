@@ -34,10 +34,12 @@ the DRAW code too.
 - **`tests/perf_audit.rs`** — tick-cost benches (informational timings).
 - **Cross-language pins** (unit tests that parse a JS file): the opcode table
   vs `web/ops.js` and the renderer's dispatch (`src/graphics/stream.rs`),
-  `MASK_OFF_SECS` vs `web/shoggoth-core.js` (`src/systems/boss.rs`), the pose
-  scalar order + flag bits vs `web/robot-core.js` (`src/render/pose.rs`). And
-  one GOLDEN RECORD: `tests/fixtures/pose_plan.txt`, generated from the JS
-  `posePlan()` before it was deleted, which `pose_plan` must keep matching.
+  the pose scalar order + flag bits vs `web/robot-core.js`
+  (`src/render/pose.rs`), the 20-float sphere layout vs `web/shoggoth-core.js`
+  (`src/render/shoggoth.rs`). And two GOLDEN RECORDS, captured from JS
+  animation code before it was deleted, which the Rust ports must keep
+  matching: `tests/fixtures/pose_plan.txt` (robots) and
+  `tests/fixtures/shoggoth_spheres.txt` (the boss).
 
 The simulation tick is SHARED, not duplicated: the browser loop and
 `Simulation` both call `sim::GameSystems::step`, so what these tests play is

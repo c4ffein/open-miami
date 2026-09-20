@@ -39,6 +39,7 @@ const {
   STATIC_END: OP_STATIC_END,
   STATIC_REF: OP_STATIC_REF,
   BACKDROP: OP_BACKDROP,
+  SPHERE: OP_SPHERE,
 } = OP;
 const POSTFX_TV_STATIC = 13;
 
@@ -61,7 +62,8 @@ const CONFIGS = [
   { name: "no big rects", note: "RECTs covering >= 25% of the screen (fades, washes, floor fills)",
     drop: (op, c, i, ctx) => op === OP_RECT && ctx.bigRect },
   { name: "no robots", note: "ROBOT + SHOGGOTH (sprite passes + their quads)",
-    drop: (op) => op === OP_ROBOT || op === OP_SHOGGOTH },
+    // (a boss = its SPHERE run + the SHOGGOTH that consumes it: drop both)
+    drop: (op) => op === OP_ROBOT || op === OP_SHOGGOTH || op === OP_SPHERE },
   { name: "no text", note: "TEXT", drop: (op) => op === OP_TEXT },
   { name: "clear only", note: "nothing but the CLEAR: the floor cost of presenting this canvas",
     drop: (op) => op !== OP_CLEAR },

@@ -24,8 +24,8 @@ flowchart LR
 | Layer | Question | May touch | May NOT touch | Where |
 |---|---|---|---|---|
 | **sim** | What is the state of the world? | the `World`, its components, `dt` | `Graphics`, input, the browser, wall-clock time | `ecs/`, `components/`, `systems/`, `scenario.rs`, `game.rs`, `sim.rs`, `pathfinding.rs`, `collision.rs`, `hud_ammo.rs` / `hud_msg.rs` (HUD *state*), `editor.rs` (the editor *document*) |
-| **render** | What does this state look like? | state READ-ONLY + `&Graphics` | input, mutation of game state, the browser, audio | `render.rs`, `render/` (`world`, `hud`, `robots`, `comms`, `dialogue`, `floor_props`, `title`), `level.rs`, `camera.rs`, the `draw` submodules of `props.rs` / `drive.rs` / `ending.rs`, `sparks::render_sparks` |
-| **app** | What happens THIS FRAME? | everything: input, the clock, audio, settings, the URL, `&mut GameState` | — (but it should hold no drawing of its own, see below) | `app.rs`, `app/` (wasm-only), `editor_ui.rs`, `input.rs`, `audio/engine.rs` |
+| **render** | What does this state look like? | state READ-ONLY + `&Graphics` | input, mutation of game state, the browser, audio | `render.rs`, `render/` (`world`, `hud`, `robots`, `pose` = the robots' joint numbers, `shoggoth` = the boss's spheres, `comms`, `dialogue`, `floor_props`, `title`), `level.rs`, `camera.rs`, the `draw` submodules of `props.rs` / `drive.rs` / `ending.rs`, `sparks::render_sparks` |
+| **app** | What happens THIS FRAME? | everything: input, the clock, audio, settings, the URL, `&mut GameState` | — (but it should hold no drawing of its own, see below) | `app.rs`, `app/` (wasm-only), `editor_ui.rs`, `input.rs`, `audio/engine.rs`, `wasm_api.rs` (what the engine exports to the JS tool pages) |
 | **renderer** | How do commands become pixels? | the GPU | game state (it only ever sees the stream) | `web/`: `renderer.js` + `renderer/shaders.js`, `ops.js`, `robot-core.js`, `shoggoth-core.js`, `gpu-probe.js` |
 
 ## The test for "is this render code?"
@@ -143,11 +143,18 @@ ships.
   (`drive.rs` ↔ `DRIVE_FS`) and the robot rig's rotation order
   (`leg()` / `arm()` ↔ `rigVS`, covered by `rig-parity.js` in the browser).
 
-## Roadmap — characters: Rust computes poses, GLSL evaluates rigs, JS ferries
+## Roadmap — characters: Rust computes poses, GLSL evaluates rigs, JS ferries (COMPLETE)
 
-The robots and the boss are the one place where the layering is not settled:
-their ANIMATION (what the body does at time `t`) lives in JS, outside the
-native test boundary. The target is one rule for both characters:
+STATUS: DONE, every step below. This section is kept as the record of WHY
+the characters are built the way they are and HOW each move was proven — read
+it before touching `render/pose.rs`, `render/shoggoth.rs`, `web/robot-core.js`
+or `web/shoggoth-core.js`. For what is still open, see "What's next" at the
+end of this page.
+
+WHERE IT STARTED: the robots and the boss were the one place where the
+layering was not settled — their ANIMATION (what the body does at time `t`)
+lived in JS, outside the native test boundary. The target was one rule for
+both characters:
 
 > **Rust computes poses (numbers). GLSL evaluates the rig. JS only ferries.**
 
@@ -159,9 +166,9 @@ up with them — gameplay choreography mirrored across two languages, pinned by
 nothing. What moves is only the middle piece: `(pose, time)` -> joint
 numbers, which by the test above is render-layer code.
 
-Where each character stands:
+Where each character STOOD at the start (historical):
 
-- **Robots — the seam already exists.** `posePlan(pose, time, relaxed)` in
+- **Robots — the seam already existed.** `posePlan(pose, time, relaxed)` in
   `web/robot-core.js` is a PURE ~150-line function (no state, no randomness,
   no browser) returning a handful of scalars, and the GPU rig (`rigVS`)
   already consumes exactly that: 16 floats per instance. The interface is
@@ -170,9 +177,9 @@ Where each character stands:
   sphere on the CPU and issues one draw per sphere; there is no "pose
   numbers" layer to cut along. (The command is already minimal — 6 floats,
   `x y size heading reveal time` — so this is about where the expansion
-  runs, not about stream size.) Its small wander state machine is the
-  inspector's standalone preview, not game logic: in-game Rust sends the
-  real `heading`.
+  runs, not about stream size.) (This page first claimed here that its
+  small wander state machine was only the inspector's preview. WRONG — see
+  step 3: the game takes the mask's look-up beats from it.)
 
 Planned order (each step lands with its test FIRST):
 
@@ -234,11 +241,33 @@ Planned order (each step lands with its test FIRST):
    on the context. Mutation-tested (a shifted sphere; the mask drawn WITH
    depth) — both fail it. This is the boss's FIRST pixel test, and the seam
    step 3 needs: the instance list is what Rust will fill.
-3. **Boss: move the sphere placement to Rust**, filling that instance list
-   (`render/shoggoth.rs`). Removes the mirrored `MASK_OFF_SECS` /
-   `BOSS_MASK_OFF_SECS`.
-4. **Tools load the wasm for poses** — DONE for the robots (see R3); the
-   boss's inspector view follows when step 3 moves its placement to Rust.
+3. **Boss: move the sphere placement to Rust** — DONE.
+   `src/render/shoggoth.rs` (`boss_spheres(&BossPose) -> BossSpheres`) places
+   every sphere — mass, tentacles, dot eyes, the mask and its break-up — AND
+   runs the WANDER behaviour. (A correction to an earlier belief: that little
+   state machine is not an inspector toy. The game never passes `lookUp`, so
+   the mask's "stop and look up" beats in-game come from it; it was ported
+   faithfully, and made a pure function of time — the JS cached its state and
+   so depended on the order it was queried in.) Proven BIT-EXACT before the JS
+   was deleted: the placement code was run under Bun with a mock GL and its
+   sphere queue captured (13 frames, 1,609 spheres, 32,180 floats — max
+   difference 0); `tests/fixtures/shoggoth_spheres.txt` is the compact frozen
+   golden record (`matches_the_golden_record`). What made bit-exactness
+   possible, and must be kept: the JS matrices lived in `Float32Array`s, so
+   every product was ROUNDED TO f32 at each step (mirrored in Rust), and the
+   original's truncated literals (`6.283`, not `TAU`) are kept on purpose.
+   WIRE FORMAT: a run of `SPHERE` ops (20 floats each) closed by
+   `SHOGGOTH x y sizePx maskAt`, which consumes it — fixed-arity ops, so every
+   stream walker keeps working; `graphics::stream::check` validates the run
+   (closed, never interrupted, split inside it). web/shoggoth-core.js went
+   620 -> 337 lines: camera, shading, the two draw paths, NO animation — its
+   instanced path uploads the engine's list AS the instance buffer.
+   `BOSS_MASK_OFF_SECS` is now the one definition (the JS constant and its
+   pin are gone). Tools: `bossSpheres()` / `MASK_OFF_SECS` in
+   tools/engine-pose.js -> `src/wasm_api.rs`. Pins:
+   `the_sphere_layout_matches_the_op_and_the_js`,
+   `no_js_boss_animation_is_left`.
+4. **Tools load the wasm for poses** — DONE, robots (R3) and boss (step 3).
 
 Costs accepted knowingly: look-dev on a pose goes from edit + refresh to a
 wasm rebuild (15 s release today; a dev-profile build should cut that — not
@@ -246,7 +275,34 @@ yet measured), and the tools pages gain a wasm dependency. Decide robots and
 boss TOGETHER — moving only one leaves two conventions, which is worse than
 either.
 
-Interim guard until step 3: `BOSS_MASK_OFF_SECS` (src/systems/boss.rs) and
-`MASK_OFF_SECS` (web/shoggoth-core.js) are PINNED by a `cargo test` that
-parses the JS constant (`mask_off_secs_matches_shoggoth_core_js`, the
-`web/ops.js` pattern).
+THE ROADMAP IS COMPLETE: no character animation is left in JS. What the JS
+still decides about a character is how it is LIT, INKED and FRAMED — renderer
+questions by the layering above.
+
+## What's next (open work, in the order I would take it)
+
+Everything the refactor set out to do is done; nothing below is urgent, and
+each item is optional. A new session can start from this list.
+
+1. **Pixel tests for the renderer's untested subsystems** — the postfx kinds,
+   text (the glyph atlas) and the DRIVE backdrop have none (docs/TESTING.md,
+   "Not covered"). Cheap, in the style of `tests/e2e/render/*.js`, and the
+   precondition for item 3. Highest value per hour.
+2. **Pin the last unpinned mirror: the DRIVE scene geometry** (`src/drive.rs`
+   tunables <-> `DRIVE_FS` in web/renderer/shaders.js) — a `cargo test` that
+   parses the shader's constants, like the opcode / pose / sphere pins.
+3. **The renderer's self-contained subsystems as factories** (postfx + warp,
+   drive + backdrop, the glyph atlas) — ONLY behind item 1's pixel tests, and
+   never the batch core: see "Known debt" for why `initRenderer` stays one
+   closure.
+4. **Host tests for the WebAudio engine** — needs a recording `AudioGraph`
+   seam (what `Graphics::new_headless` is to drawing). A real design change;
+   worth it only if the SFX / voice recipes start changing often.
+5. **Splitting `update_game`'s orchestration** (input handling, the
+   event-to-sound bridge) — app code by nature, reachable only by Playwright,
+   so the payoff is readability, not testability. Lowest priority.
+
+Housekeeping that is NOT code: run `claude` inside `tmux` on the dev box. A
+dropped SSH connection otherwise leaves the session running unreachable, and
+`claude --continue` then starts a SECOND agent on the same working tree (it
+happened during the boss port; the two forks even shared one transcript).

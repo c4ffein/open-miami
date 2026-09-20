@@ -5,8 +5,9 @@
 <title>SHOGGOTH PARITY — per-sphere reference vs instanced</title>
 <!-- The boss is drawn two ways by web/shoggoth-core.js: the REFERENCE (one
      draw + six uniform uploads per sphere — the original code path) and the
-     INSTANCED path the game runs (every sphere queued as 20 instance floats,
-     TWO instanced draws: body depth-ON, then the mask depth-OFF). This page
+     INSTANCED path the game runs (the engine's sphere list uploaded as the
+     instance buffer, TWO instanced draws: body depth-ON, then the mask
+     depth-OFF). The spheres come from the wasm (tools/engine-pose.js). This page
      renders the same frames through both, at the GAME's settings (384-px
      tile, px 4), and diffs them: REFERENCE | INSTANCED | DIFF.
      Headless acceptance: tests/e2e/render/shoggoth-parity.js reads
@@ -32,6 +33,9 @@
 <canvas id="gl" width="384" height="384" style="display:none"></canvas>
 <script type="module">
 import { createShoggothPipeline } from "../web/shoggoth-core.js";
+// The boss is placed by the ENGINE: both paths draw the very sphere lists the
+// game records (src/render/shoggoth.rs), not a JS re-implementation.
+import { bossSpheres } from "./engine-pose.js";
 
 const TILE = 384, PX = 4; // = renderer.js SHOG_TILE / SHOG_PX
 const gl = document.getElementById("gl").getContext("webgl", { antialias: false, preserveDrawingBuffer: true });
@@ -75,6 +79,7 @@ if (pipe.instExt) {
 }
 
 function shot(opts, instanced) {
+  opts = { ...opts, spheres: bossSpheres(opts) };
   pipe.instanced = instanced;
   counting = instanced ? "inst" : "ref"; frameDraws = 0;
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);

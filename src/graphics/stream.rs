@@ -12,7 +12,7 @@ use super::{op, TEXT_SEP};
 use crate::static_geo::{OP_STATIC_BEGIN, OP_STATIC_END, OP_STATIC_REF};
 
 /// Number of opcodes (the highest opcode + 1).
-pub const OP_COUNT: usize = 26;
+pub const OP_COUNT: usize = 27;
 
 /// Argument count per opcode (index = opcode). Mirror of the `TABLE` in
 /// web/ops.js — the tests below parse that file and compare.
@@ -30,7 +30,7 @@ pub const OP_ARGS: [usize; OP_COUNT] = [
     1,  // 10 ROTATE
     18, // 11 ROBOT
     2,  // 12 SCALE
-    6,  // 13 SHOGGOTH
+    4,  // 13 SHOGGOTH
     5,  // 14 POSTFX
     4,  // 15 PIX_BEGIN
     2,  // 16 PIX_END
@@ -43,6 +43,7 @@ pub const OP_ARGS: [usize; OP_COUNT] = [
     1,  // 23 STATIC_REF
     8,  // 24 BACKDROP
     5,  // 25 HEAD
+    20, // 26 SPHERE
 ];
 
 /// Pixel-art groups nest at most this deep (renderer.js `PIX_DEPTH`).
@@ -82,8 +83,10 @@ pub fn walk(cmds: &[f32]) -> Result<Vec<Cmd<'_>>, String> {
 /// Validate a whole frame the way the renderer depends on it: it decodes,
 /// every float is finite, SAVE/RESTORE balance (never popping an empty
 /// stack), pixel groups balance and nest within [`PIX_DEPTH`], static
-/// sections are framed and hold SOLID primitives only, and every TEXT index
-/// points into the text arena. Returns the decoded commands.
+/// sections are framed and hold SOLID primitives only, every TEXT index
+/// points into the text arena, and every run of SPHEREs is closed by the
+/// SHOGGOTH that consumes it (with a mask split inside the run). Returns the
+/// decoded commands.
 pub fn check<'a>(cmds: &'a [f32], texts: &str) -> Result<Vec<Cmd<'a>>, String> {
     let decoded = walk(cmds)?;
     let text_count = if texts.is_empty() {
@@ -96,7 +99,28 @@ pub fn check<'a>(cmds: &'a [f32], texts: &str) -> Result<Vec<Cmd<'a>>, String> {
     // saves made inside it (see renderer.js pixEnd).
     let mut groups: Vec<i32> = Vec::new();
     let mut in_static = false;
+    // SPHEREs queued for the next SHOGGOTH (the renderer's pending run).
+    let mut spheres: usize = 0;
     for (n, c) in decoded.iter().enumerate() {
+        if c.op == op::SPHERE {
+            spheres += 1;
+        } else if c.op == op::SHOGGOTH {
+            let mask_at = c.args[3];
+            if spheres == 0 {
+                return Err(format!("cmd {n}: SHOGGOTH without a SPHERE run before it"));
+            }
+            if mask_at < 0.0 || mask_at.fract() != 0.0 || mask_at as usize > spheres {
+                return Err(format!(
+                    "cmd {n}: SHOGGOTH mask split {mask_at} of {spheres} spheres"
+                ));
+            }
+            spheres = 0;
+        } else if spheres > 0 {
+            return Err(format!(
+                "cmd {n}: op {} interrupts a SPHERE run (no SHOGGOTH closed it)",
+                c.op
+            ));
+        }
         if let Some(bad) = c.args.iter().find(|v| !v.is_finite()) {
             return Err(format!("cmd {n} (op {}) has a non-finite arg {bad}", c.op));
         }
@@ -164,6 +188,9 @@ pub fn check<'a>(cmds: &'a [f32], texts: &str) -> Result<Vec<Cmd<'a>>, String> {
     }
     if in_static {
         return Err("static section left open".into());
+    }
+    if spheres > 0 {
+        return Err(format!("{spheres} SPHERE(s) never consumed by a SHOGGOTH"));
     }
     Ok(decoded)
 }
@@ -264,6 +291,7 @@ mod tests {
         (OP_STATIC_REF, "STATIC_REF"),
         (op::BACKDROP, "BACKDROP"),
         (op::HEAD, "HEAD"),
+        (op::SPHERE, "SPHERE"),
     ];
 
     /// The `["NAME", args],` rows of `web/ops.js`, in order (row = opcode).
@@ -469,6 +497,35 @@ mod tests {
             0.0,
         ];
         assert!(check(&group, "").is_ok());
+        // A SPHERE run must be closed by its SHOGGOTH, split inside the run.
+        let sphere = {
+            let mut v = vec![op::SPHERE];
+            v.extend([0.5; 20]);
+            v
+        };
+        let boss = |mask_at: f32| {
+            let mut v = sphere.clone();
+            v.extend(sphere.clone());
+            v.extend([op::SHOGGOTH, 0.0, 0.0, 64.0, mask_at]);
+            v
+        };
+        assert!(check(&boss(1.0), "").is_ok());
+        assert!(
+            check(&boss(2.0), "").is_ok(),
+            "no mask spheres = the raw form"
+        );
+        assert!(
+            check(&boss(3.0), "").is_err(),
+            "the mask split is past the run"
+        );
+        assert!(check(&sphere, "").is_err(), "spheres nobody consumes");
+        assert!(
+            check(&[op::SHOGGOTH, 0.0, 0.0, 64.0, 0.0], "").is_err(),
+            "a boss made of nothing"
+        );
+        let mut cut = sphere.clone();
+        cut.extend([op::SAVE, op::RESTORE]);
+        assert!(check(&cut, "").is_err(), "a run interrupted by another op");
         // Sprites / text may not be baked into the static cache.
         let mut bad = vec![OP_STATIC_BEGIN, 1.0];
         bad.extend_from_slice(&text);

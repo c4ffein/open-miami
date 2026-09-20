@@ -27,8 +27,10 @@ Moved verbatim out of `CLAUDE.md`; keep it current when the renderer changes.
   ceil(128 / 3) = 43 texels per robot, one per pixelate block — into the
   NEAREST-sampled robot atlas (the same image a 1:1 tile gives; the quad
   covers 128/3 of those texels)); the boss the same way through shoggoth-core.js
-  (`createShoggothPipeline(gl)`, a bigger 256px scratch tile, opcode SHOGGOTH
-  = 13: `x y sizePx heading reveal time`)
+  (`createShoggothPipeline(gl)`, a bigger scratch tile; the boss crosses as a
+  run of `SPHERE` ops — op 26, 20 floats: the model's rows 0..2, rgb + id,
+  accent rgb + emission, placed by src/render/shoggoth.rs — closed by opcode
+  SHOGGOTH = 13: `x y sizePx maskAt`, spheres from `maskAt` on drawn depth-OFF)
 - THE ROBOT SKELETON EXISTS TWICE in robot-core.js, on purpose. The GPU RIG
   (`rigVS`, what the game's batches run): the joint hierarchy is evaluated
   IN THE VERTEX SHADER from 16 per-INSTANCE floats (tile, facing, palette

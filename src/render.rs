@@ -13,6 +13,7 @@ pub mod floor_props;
 pub mod hud;
 pub mod pose;
 pub mod robots;
+pub mod shoggoth;
 pub mod title;
 pub mod world;
 

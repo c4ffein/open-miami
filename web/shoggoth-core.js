@@ -3,15 +3,18 @@
    OPEN MIAMI - the FLOOR 13½ boss: the SHOGGOTH, 3D -> stylized 2D.
    Vanilla WebGL 1, no libraries. Built on robot-core.js's SpritePipeline
    (same pass-1 target, same "inked" edge/posterize/pixelate post pass, same
-   pooled mat4 helpers) — only the scene is its own: a writhing mass of
-   overlapping spheres, a friendly yellow smiley mask riding on the crown,
-   and, once the mask is consumed, lashing tentacles studded with pale-yellow
-   dot eyes.
+   pooled mat4 helpers) — only the scene is its own: shaded SPHERES.
+
+   THERE IS NO ANIMATION HERE. What the boss looks like at time t — the
+   writhing mass, the lashing tentacles, the yellow mask cracking and being
+   swallowed, even the mask's "look up" beats — is computed by the ENGINE
+   (src/render/shoggoth.rs `boss_spheres`) as a list of spheres, 20 floats
+   each. The game ships it as a run of SPHERE ops closed by SHOGGOTH; the
+   tool pages ask the wasm (tools/engine-pose.js `bossSpheres`). This file
+   owns the CAMERA, the SHADING and the two draw paths.
 
    Exports:
-     PHASES                            - ["masked", "transition", "enraged"]
-     MASK_OFF_SECS                     - the mask-off animation length (3.4 s;
-                                         mirrors src/systems/boss.rs)
+     SPHERE_FLOATS                     - 20: floats per sphere (= instVS)
      SPHERE_TESS / DEFAULT_TESS        - sphere tessellation presets
                                          ("high" 16x20, "low" 8x10; the game
                                          default is LOW)
@@ -22,54 +25,22 @@
          transparent background when opts.transparent. This is what the game
          renderer runs live, every frame, inside its own GL context.
            opts: {
-             phase:   "masked" | "transition" | "enraged"   (default "masked")
-             reveal:  0..1 mask-off progress; overrides phase when given
-                      (0 = mask intact, 1 = raw form). "transition" without a
-                      reveal plays it from time (t / MASK_OFF_SECS).
-             time:    continuous seconds — drives all the writhing
-             heading: radians, the direction it is moving in the XZ / screen
-                      plane (0 = +x/right, PI/2 = +z/screen-down); the mask
-                      leans toward it. Default: the wander behaviour's heading.
-             lookUp:  0..1, how flat toward the camera the mask tilts (the
-                      "it notices you" stare). Default: the wander behaviour's
-                      periodic look-up beat, forced to 1 by the transition.
-             wander:  true -> the mass also DRIFTS on the floor along the
-                      behaviour's heading (the inspector's masked idle). The
-                      game passes false: position comes from the simulation.
+             spheres: REQUIRED — { data: Float32Array, n, maskAt }: `n`
+                      spheres of SPHERE_FLOATS floats in `data` (the model's
+                      rows 0..2, rgb + part id, accent rgb + emission);
+                      spheres [0, maskAt) draw with the depth test ON, the
+                      rest — the mask assembly — with it OFF, in order
              px:      pixelation block size (post pass), default 5
              tess:    "low" | "high" — switch the sphere preset live
                       (rebuilds the shared buffers only when it changes)
              transparent, orbit:{yaw,pitch,halfV}, halfV — as robot-core
            }
+         .instanced = false forces the per-sphere REFERENCE path
      createShoggothRenderer(canvas)    - a CanvasRenderer of the pipeline
      bakeShoggoth({...opts, size})     - one baked top-down frame -> canvas
    ========================================================================= */
 
 import { M4, SpritePipeline, CanvasRenderer, makeBaker, orbitVP } from "./robot-core.js";
-
-export const PHASES = ["masked", "transition", "enraged"];
-/* seconds of mask-off animation (masked -> raw); src/systems/boss.rs drives
-   the in-game `reveal` over the same duration */
-export const MASK_OFF_SECS = 3.4;
-
-/* ---------- palette (the boss is not recolored) ---------- */
-const C_BODY   = [0.11,0.14,0.13];  // dark flesh
-const C_BODYA  = [0.17,0.22,0.19];  // its top-lit accent
-const C_PURPLE = [0.14,0.10,0.17];  // bruised purple lobes
-const C_PURPLEA= [0.20,0.15,0.24];
-const C_TIP    = [0.34,0.12,0.13];  // tentacle tips, wet red
-const C_TIPA   = [0.48,0.18,0.17];
-const C_MASK   = [1.00,0.83,0.14];  // friendly yellow smiley
-const C_INK    = [0.05,0.04,0.02];  // dark features on the mask
-const C_YEYE   = [1.00,0.95,0.55];  // pale-yellow dot eyes (raw form)
-const C_YHOT   = [1.00,1.00,0.86];  // hot core of the dot
-
-function clamp01(x){return x<0?0:(x>1?1:x);}
-function smoothstep(a,b,x){const t=clamp01((x-a)/(b-a));return t*t*(3-2*t);}
-function ease(x){return smoothstep(0,1,x);}
-function mix(a,b,t){return a+(b-a)*t;}
-/* deterministic pseudo-random */
-function hash(i){ const s=Math.sin(i*127.1+0.7)*43758.5453; return s-Math.floor(s); }
 
 /* ---------- scene shader: lit surfaces + per-part id in alpha (for edges),
    plus an emissive term so the yellow mask and eyes glow flat through the
@@ -107,7 +78,7 @@ void main(){
 
 /* ---------- unit sphere geometry (positions + normals) ---------- */
 /* THE INSTANCED PATH (what the game runs). The boss is nothing but spheres —
-   every one goes through `_sphere(model, colour, accent, id, emission)` — so a
+   placed by the engine (src/render/shoggoth.rs) — so a
    sphere is 20 floats of per-INSTANCE data (the model's three rows + two
    colour vec4s) and the whole boss is TWO instanced draws instead of one draw
    + six uniform uploads per sphere (a few dozen of them): the body with the
@@ -122,7 +93,7 @@ void main(){
    7 vertex attributes in all (WebGL 1 guarantees 8). Needs
    ANGLE_instanced_arrays; without it the per-sphere REFERENCE path serves, and
    `pipe.instanced = false` forces it (the parity page's A/B switch). */
-const SHOG_INST_FLOATS = 20;
+export const SPHERE_FLOATS = 20;
 const instVS = `
 attribute vec3 aPos;
 attribute vec3 aNormal;
@@ -203,39 +174,6 @@ function bossVP(halfV){
 }
 
 /* =========================================================================
-   WANDER BEHAVIOUR (masked phase)
-   A tiny deterministic state machine, stepped at a fixed dt. It drifts along
-   a heading, occasionally stops and looks up, then picks a new heading. The
-   sim state is cached per pipeline so live playback is cheap and a frame at
-   any `time` is reproducible (re-simulated from 0 when time goes backward).
-   ========================================================================= */
-function newBeh(){
-  return { t:0, x:0, z:0, heading:hash(1)*6.283, tgt:hash(1)*6.283,
-           mode:0, modeT:0, dur:3.5+hash(2)*2.5, look:0, dec:1 };
-}
-function stepBeh(b,dt){
-  b.t+=dt; b.modeT+=dt;
-  if(b.mode===0){                       // drifting
-    let d=b.tgt-b.heading; while(d>Math.PI)d-=6.283; while(d<-Math.PI)d+=6.283;
-    b.heading += d*Math.min(1,dt*1.6);  // steer smoothly toward target heading
-    const spd=0.55;
-    b.x += Math.cos(b.heading)*spd*dt;
-    b.z += Math.sin(b.heading)*spd*dt;
-    if(Math.hypot(b.x,b.z)>1.35){        // stay in frame: steer back inward
-      b.tgt = Math.atan2(-b.z,-b.x) + (hash(b.dec+7)-0.5)*0.8;
-    }
-    b.look += (0-b.look)*Math.min(1,dt*3.0);
-    if(b.modeT>b.dur){ b.mode=1; b.modeT=0; b.dur=1.8+hash(b.dec+3)*1.6; b.dec++; }
-  } else {                              // stopped, looking up
-    b.look += (1-b.look)*Math.min(1,dt*2.6);
-    if(b.modeT>b.dur){
-      b.mode=0; b.modeT=0; b.dur=3.2+hash(b.dec+3)*2.6;
-      b.tgt = b.heading + (hash(b.dec+5)-0.5)*3.2; b.dec++;
-    }
-  }
-}
-
-/* =========================================================================
    The pipeline
    ========================================================================= */
 class ShoggothPipeline extends SpritePipeline {
@@ -254,7 +192,6 @@ class ShoggothPipeline extends SpritePipeline {
     };
     this.tess = null;
     this.setTess(tess || DEFAULT_TESS);
-    this.simState = null; this.simT = -1;
     this.VP = null;
 
     // the instanced path (see instVS): on by default when the extension is there
@@ -269,11 +206,10 @@ class ShoggothPipeline extends SpritePipeline {
         uVP: gl.getUniformLocation(this.instProg,"uVP"),
       };
       this.instBuf = gl.createBuffer();
-      this.instData = new Float32Array(128 * SHOG_INST_FLOATS); // grows on demand
     }
-    this._collect = false; // true while a frame's spheres are being queued
-    this._instN = 0;       // spheres queued so far
-    this._maskAt = -1;     // index of the first mask sphere (drawn depth-OFF)
+    // reference-path scratch (no per-sphere allocation)
+    this._model = new Float32Array(16); this._model[15] = 1;
+    this._col = new Float32Array(3); this._acc = new Float32Array(3);
   }
 
   /* switch the sphere tessellation preset ("low" | "high"); rebuilds the
@@ -291,285 +227,71 @@ class ShoggothPipeline extends SpritePipeline {
     this.nrmBuf = this._staticBuffer(this.sphere.nrm);
   }
 
-  /* wander behaviour state at time t (cached, deterministic) */
-  _behaviorAt(t){
-    if(this.simState===null || t < this.simT-1e-6){ this.simState=newBeh(); this.simT=0; }
-    const dt=1/60; let guard=0;
-    while(this.simT < t-1e-9 && guard<300000){
-      const s=Math.min(dt, t-this.simT); stepBeh(this.simState,s); this.simT+=s; guard++;
-    }
-    return this.simState;
-  }
-
-  /* ---------- draw one sphere instance ---------- */
-  _sphere(model, colBody, accent, id, emis){
-    if(this._collect){ this._queue(model, colBody, accent, id, emis); return; }
-    const gl=this.gl, sLoc=this.sLoc;
-    gl.uniformMatrix4fv(sLoc.uMVP, false, M4.mul(this.VP, model));
-    gl.uniformMatrix3fv(sLoc.uNormalMat, false, M4.normalFromModel(model));
-    gl.uniform3fv(sLoc.uColor, colBody);
-    gl.uniform3fv(sLoc.uAccent, accent);
-    gl.uniform1f(sLoc.uId, id);
-    gl.uniform1f(sLoc.uEmis, emis||0.0);
-    gl.drawArrays(gl.TRIANGLES, 0, this.sphere.count);
-  }
-  /* one sphere -> SHOG_INST_FLOATS instance floats (M4 is column-major: row r
-     of the model is m[r], m[4+r], m[8+r], m[12+r]) */
-  _queue(model, colBody, accent, id, emis){
-    if((this._instN + 1) * SHOG_INST_FLOATS > this.instData.length){
-      const grown = new Float32Array(this.instData.length * 2);
-      grown.set(this.instData);
-      this.instData = grown;
-    }
-    const I = this.instData, o = (this._instN++) * SHOG_INST_FLOATS, m = model;
-    I[o]    = m[0]; I[o+1]  = m[4]; I[o+2]  = m[8];  I[o+3]  = m[12];
-    I[o+4]  = m[1]; I[o+5]  = m[5]; I[o+6]  = m[9];  I[o+7]  = m[13];
-    I[o+8]  = m[2]; I[o+9]  = m[6]; I[o+10] = m[10]; I[o+11] = m[14];
-    I[o+12] = colBody[0]; I[o+13] = colBody[1]; I[o+14] = colBody[2]; I[o+15] = id;
-    I[o+16] = accent[0];  I[o+17] = accent[1];  I[o+18] = accent[2];  I[o+19] = emis || 0.0;
-  }
-  /* draw everything queued: the body (depth test ON), then the mask assembly
-     (OFF, submission order) — what the per-sphere path does one draw at a time.
-     Leaves every instanced attribute disabled with its divisor back at 0: a
-     divisor is per attribute INDEX, global to the context — leaking one would
-     poison whichever program the renderer binds next. */
-  _flushInstances(){
-    const gl=this.gl, ext=this.instExt, L=this.iLoc, n=this._instN;
-    const split = this._maskAt < 0 ? n : this._maskAt;
-    if(n > 0){
-      const stride = SHOG_INST_FLOATS * 4;
-      gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, this.instData.subarray(0, n * SHOG_INST_FLOATS), gl.DYNAMIC_DRAW);
-      const range = (first, count) => {
-        if(count <= 0) return;
-        for(let k=0;k<5;k++){
-          gl.enableVertexAttribArray(L.inst[k]);
-          gl.vertexAttribPointer(L.inst[k], 4, gl.FLOAT, false, stride, first*stride + k*16);
-          ext.vertexAttribDivisorANGLE(L.inst[k], 1);
-        }
-        ext.drawArraysInstancedANGLE(gl.TRIANGLES, 0, this.sphere.count, count);
-      };
-      range(0, split);
-      if(n > split){
-        gl.disable(gl.DEPTH_TEST);
-        range(split, n - split);
-        gl.enable(gl.DEPTH_TEST);
-      }
+  /* THE INSTANCED PATH: the engine's sphere list IS the instance buffer —
+     uploaded as is, then the body (depth test ON) and the mask assembly (OFF,
+     submission order). Leaves every instanced attribute disabled with its
+     divisor back at 0: a divisor is per attribute INDEX, global to the
+     context — leaking one would poison whichever program the renderer binds
+     next. */
+  _drawInstanced(sp){
+    const gl=this.gl, ext=this.instExt, L=this.iLoc, n=sp.n;
+    const split = Math.min(Math.max(sp.maskAt|0, 0), n);
+    if(n <= 0) return;
+    const stride = SPHERE_FLOATS * 4;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, sp.data.subarray(0, n * SPHERE_FLOATS), gl.DYNAMIC_DRAW);
+    const range = (first, count) => {
+      if(count <= 0) return;
       for(let k=0;k<5;k++){
-        ext.vertexAttribDivisorANGLE(L.inst[k], 0);
-        gl.disableVertexAttribArray(L.inst[k]);
+        gl.enableVertexAttribArray(L.inst[k]);
+        gl.vertexAttribPointer(L.inst[k], 4, gl.FLOAT, false, stride, first*stride + k*16);
+        ext.vertexAttribDivisorANGLE(L.inst[k], 1);
       }
-    }
-    this._instN = 0; this._maskAt = -1;
-  }
-  _blob(root, x,y,z, rx,ry,rz, col,acc, id, emis){
-    const m = M4.mul(root, M4.mul(M4.translate(x,y,z), M4.scale(rx,ry,rz)));
-    this._sphere(m, col, acc, id, emis);
-  }
-
-  /* ---------- THE WRITHING MASS: 1 core + orbiting satellite lobes ---------- */
-  _drawMass(root, time, frantic){
-    const LOBES = 9;
-    const coreSq = 1.0 + 0.06*Math.sin(time*0.9);
-    this._blob(root, 0,0,0, 1.65, 1.35*coreSq, 1.65, C_BODY, C_BODYA, 0.14, 0.0);
-    this._blob(root, 0.25*Math.sin(time*0.6), 0.15, -0.2*Math.cos(time*0.5),
-         1.25,1.15,1.3, C_PURPLE, C_PURPLEA, 0.22, 0.0);
-    for(let k=0;k<LOBES;k++){
-      const a = (k/LOBES)*Math.PI*2;
-      const spd = 0.4 + hash(k)*0.5;
-      const ph = hash(k+10)*6.28;
-      const wob = frantic ? 0.55 : 0.28;
-      const rad = 1.15 + hash(k+3)*0.5 + Math.sin(time*spd+ph)*wob;
-      const yb  = -0.35 + Math.sin(time*spd*1.3+ph)*(frantic?0.5:0.28) + hash(k+7)*0.5;
-      const x = Math.cos(a + time*(frantic?0.5:0.22))*rad;
-      const z = Math.sin(a + time*(frantic?0.5:0.22))*rad;
-      const r = 0.62 + hash(k+5)*0.45;
-      const pr = 1.0 + 0.14*Math.sin(time*1.7+ph);
-      const purple = hash(k+2) > 0.55;
-      this._blob(root, x, yb, z, r*pr, r*(0.85+0.2*Math.sin(time+ph)), r*pr,
-           purple?C_PURPLE:C_BODY, purple?C_PURPLEA:C_BODYA, 0.30 + k*0.055, 0.0);
-    }
-  }
-
-  /* ---------- THE SMILEY MASK / MASK-OFF TRANSITION ----------
-     An assembly of yellow shards (a ring of wedges + a centre cap) plus the
-     ink features. At reveal=0 the shards overlap into a clean dome (the intact
-     mask). As reveal climbs the shell cracks, then the shards and the features
-     are SUCKED INWARD and down into the maw — shrinking, spiralling, darkening
-     to dead flesh — uncovering the raw form. `mroot` already places/rotates
-     the mask on the crown (heading + look tilt). */
-  _drawMaskAssembly(mroot, time, reveal){
-    const s = ease(clamp01(reveal*1.05));   // consume progress 0..1
-    const jitter = (reveal>0.02 && reveal<0.55) ? (reveal*0.05) : 0.0;
-    const dk = smoothstep(0.42,1.0,reveal);
-    const shardCol = [mix(C_MASK[0],C_BODY[0],dk*0.95), mix(C_MASK[1],C_BODY[1],dk*0.95), mix(C_MASK[2],C_BODY[2],dk*0.95)];
-    const shardEm  = 0.85*(1.0 - smoothstep(0.30,1.0,reveal));
-    const shrink   = mix(1.0, 0.06, s);     // shards shrink as they are pulled in
-    const inR      = 1.0 - s;               // ring radius collapses toward the maw
-    const sink     = s*0.6;                 // slight downward drift into the maw
-
-    // hairline cracks that appear just before the shell lets go
-    if(reveal>0.02 && reveal<0.5){
-      const ca = smoothstep(0.02,0.16,reveal) * (1.0-smoothstep(0.36,0.5,reveal));
-      for(let c=0;c<3;c++){
-        const ang=c*1.05+0.3;
-        let m=M4.mul(mroot, M4.translate(0,0.30,0));
-        m=M4.mul(m, M4.rotY(ang));
-        m=M4.mul(m, M4.scale(1.15*ca, 0.05, 0.055));
-        this._sphere(m, C_INK, C_INK, 0.58, 0.0);
-      }
-    }
-
-    // ring of wedge shards: sucked inward + down while spiralling
-    const SH=6;
-    for(let k=0;k<SH;k++){
-      const a=(k/SH)*Math.PI*2;
-      const swirl=a + s*2.4*((k%2)?1:-1);          // spiral into the maw
-      const jx=Math.sin(time*23+k)*jitter, jz=Math.cos(time*21+k)*jitter;
-      const px=Math.cos(swirl)*0.60*inR + jx;
-      const pz=Math.sin(swirl)*0.60*inR + jz;
-      const py=-sink*(0.6+hash(k+41)*0.5);
-      const spin=s*(4.0+hash(k+42)*3.0);
-      let m=M4.translate(px,py,pz);
-      m=M4.mul(m, M4.rotZ(spin*((k%2)?1:-1)));
-      m=M4.mul(m, M4.rotX(spin*0.6));
-      m=M4.mul(m, M4.scale(0.62*shrink,0.26*shrink,0.62*shrink));
-      this._sphere(M4.mul(mroot,m), shardCol, shardCol, 0.80+k*0.006, shardEm);
-    }
-    // centre cap: shrinks down into the maw
-    {
-      let m=M4.translate(0, -sink*0.8, 0);
-      m=M4.mul(m, M4.rotX(s*4.0));
-      m=M4.mul(m, M4.scale(0.66*shrink,0.30*shrink,0.66*shrink));
-      this._sphere(M4.mul(mroot,m), shardCol, shardCol, 0.79, shardEm);
-    }
-
-    // ink features (two eyes + upward smile) are drawn in toward the centre
-    const fy=0.42;
-    const feat=(x,z)=>{
-      let m=M4.translate(x*inR, fy - sink, z*inR);
-      m=M4.mul(m, M4.rotZ(s*5.0));
-      m=M4.mul(m, M4.scale(shrink,shrink,shrink));
-      return M4.mul(mroot,m);
+      ext.drawArraysInstancedANGLE(gl.TRIANGLES, 0, this.sphere.count, count);
     };
-    this._sphere(M4.mul(feat(-0.44,-0.42), M4.scale(0.20,0.15,0.24)), C_INK,C_INK,0.55,0.0);
-    this._sphere(M4.mul(feat( 0.44,-0.42), M4.scale(0.20,0.15,0.24)), C_INK,C_INK,0.55,0.0);
-    const N=7;
-    for(let i=0;i<N;i++){
-      const tt=(i/(N-1))*2-1;
-      const x=tt*0.66;
-      const z=0.16+0.34*(1.0-tt*tt);
-      this._sphere(M4.mul(feat(x,z), M4.scale(0.135,0.12,0.135)), C_INK,C_INK,0.55,0.0);
+    range(0, split);
+    if(n > split){
+      gl.disable(gl.DEPTH_TEST);
+      range(split, n - split);
+      gl.enable(gl.DEPTH_TEST);
+    }
+    for(let k=0;k<5;k++){
+      ext.vertexAttribDivisorANGLE(L.inst[k], 0);
+      gl.disableVertexAttribArray(L.inst[k]);
     }
   }
 
-  /* ---------- RAW FORM: pale-yellow glowing dot eyes over the crown ---------- */
-  _drawYellowEyes(root, time, fade){
-    const N=15;
-    for(let i=0;i<N;i++){
-      const a=i*2.399;                       // golden-angle scatter
-      const rr=0.18 + hash(i+30)*0.92;       // cluster over the crown
-      const x=Math.cos(a)*rr + 0.08*Math.sin(time*1.2+i);
-      const z=Math.sin(a)*rr*0.9 + 0.08*Math.cos(time*1.0+i);
-      const y=1.35 + hash(i+31)*0.65;        // up on the crown, in front of the cam
-      const tw=0.85 + 0.15*Math.abs(Math.sin(time*2.5 + i*1.3)); // gentle twinkle
-      // big enough that the yellow core survives the ink outline at this px size
-      const s=(0.16 + hash(i+32)*0.07) * (0.55+0.45*fade);
-      this._blob(root, x,y,z, s,s,s, C_YEYE, C_YEYE, 0.62+i*0.012, tw*fade);
-      this._blob(root, x,y+0.03,z, s*0.45,s*0.45,s*0.45, C_YHOT, C_YHOT, 0.92, fade);
+  /* THE REFERENCE PATH: one draw + six uniform uploads per sphere, from the
+     same list (row r of the model is data[o+4r .. o+4r+3]; M4 is column-major).
+     uMVP = VP * model in JS, the normal matrix = the model's upper 3x3 as is. */
+  _drawReference(sp){
+    const gl=this.gl, sLoc=this.sLoc, D=sp.data, m=this._model, n=sp.n;
+    const split = Math.min(Math.max(sp.maskAt|0, 0), n);
+    for(let i=0;i<n;i++){
+      if(i === split) gl.disable(gl.DEPTH_TEST);
+      const o = i * SPHERE_FLOATS;
+      m[0]=D[o];   m[4]=D[o+1]; m[8]=D[o+2];   m[12]=D[o+3];
+      m[1]=D[o+4]; m[5]=D[o+5]; m[9]=D[o+6];   m[13]=D[o+7];
+      m[2]=D[o+8]; m[6]=D[o+9]; m[10]=D[o+10]; m[14]=D[o+11];
+      this._col[0]=D[o+12]; this._col[1]=D[o+13]; this._col[2]=D[o+14];
+      this._acc[0]=D[o+16]; this._acc[1]=D[o+17]; this._acc[2]=D[o+18];
+      gl.uniformMatrix4fv(sLoc.uMVP, false, M4.mul(this.VP, m));
+      gl.uniformMatrix3fv(sLoc.uNormalMat, false, M4.normalFromModel(m));
+      gl.uniform3fv(sLoc.uColor, this._col);
+      gl.uniform3fv(sLoc.uAccent, this._acc);
+      gl.uniform1f(sLoc.uId, D[o+15]);
+      gl.uniform1f(sLoc.uEmis, D[o+19]);
+      gl.drawArrays(gl.TRIANGLES, 0, this.sphere.count);
     }
-  }
-
-  /* many chunky lashing tentacles. `grow` scales them in during the transition
-     (0 -> hidden, 1 -> full length). `eyeFade` fades in the little pale-yellow
-     dot-eyes that also stud the arms & tips. */
-  _drawTentacles(root, time, grow, frantic, eyeFade){
-    const T=11, SEG=8;
-    for(let k=0;k<T;k++){
-      const a=(k/T)*Math.PI*2 + 0.3;
-      let m=M4.mul(root, M4.translate(Math.cos(a)*1.20, -0.05, Math.sin(a)*1.20));
-      m=M4.mul(m, M4.rotY(-a));               // face outward
-      m=M4.mul(m, M4.rotZ(-1.05));            // tip the up-axis outward
-      const seglen=0.60*grow;
-      for(let i=0;i<SEG;i++){
-        const bend = Math.sin(time*2.5 + i*0.9 + k*1.7)*(frantic?0.62:0.4);
-        const sweep= Math.cos(time*1.9 + i*0.7 + k*2.1)*(frantic?0.55:0.35);
-        m=M4.mul(m, M4.rotX(sweep));
-        m=M4.mul(m, M4.rotZ(bend*0.5));
-        const tp=i/(SEG-1);
-        const r=0.50*(1.0 - tp*0.70);
-        const seg=M4.mul(m, M4.mul(M4.translate(0, seglen*0.5, 0), M4.scale(r, seglen*0.62, r)));
-        const col=[mix(C_BODY[0],C_TIP[0],tp), mix(C_BODY[1],C_TIP[1],tp), mix(C_BODY[2],C_TIP[2],tp)];
-        const acc=[mix(C_BODYA[0],C_TIPA[0],tp),mix(C_BODYA[1],C_TIPA[1],tp),mix(C_BODYA[2],C_TIPA[2],tp)];
-        this._sphere(seg, col, acc, 0.30 + k*0.03 + i*0.005, 0.0);
-        // dot-eyes on the arm: always one at the tip, plus a few scattered along
-        if(eyeFade>0.02 && grow>0.6 && (i===SEG-1 || hash(k*13+i+50) > 0.62)){
-          const es = Math.max(0.13, r*0.75);
-          const tw = 0.82 + 0.18*Math.abs(Math.sin(time*2.6 + k*1.3 + i));
-          this._blob(m, 0, seglen*0.5, r*0.85, es,es,es, C_YEYE, C_YEYE, 0.66 + k*0.02 + i*0.006, tw*eyeFade);
-          this._blob(m, 0, seglen*0.55, r*0.9,  es*0.45,es*0.45,es*0.45, C_YHOT, C_YHOT, 0.94, eyeFade);
-        }
-        m=M4.mul(m, M4.translate(0, seglen, 0));
-      }
-    }
-  }
-
-  /* ---------- the whole boss for one frame (pass 1 scene) ---------- */
-  _renderShoggoth(time, reveal, heading, lookUp, drift){
-    const gl=this.gl;
-    // drift eases to centre as it rears up; spin & list ramp in with the raw form
-    const dr    = 1.0-ease(reveal);
-    const spin  = ease(reveal)*0.32;
-    const list  = 0.05 + ease(reveal)*0.07;
-    let bodyRoot = M4.translate(drift[0]*dr, 0, drift[1]*dr);
-    bodyRoot = M4.mul(bodyRoot, M4.rotY(time*spin));
-    bodyRoot = M4.mul(bodyRoot, M4.rotZ(Math.sin(time*0.5)*list));
-    bodyRoot = M4.mul(bodyRoot, M4.rotX(Math.cos(time*0.42)*list));
-
-    const frantic = reveal>0.5;
-    const grow    = smoothstep(0.12,0.95,reveal);
-    const eyeFade = smoothstep(0.35,1.0,reveal);
-
-    if(grow>0.02)     this._drawTentacles(bodyRoot, time, grow, frantic, eyeFade);
-    this._drawMass(bodyRoot, time, frantic);
-    if(eyeFade>0.02)  this._drawYellowEyes(bodyRoot, time, eyeFade);
-
-    // the mask / its break-up (skip once fully gone)
-    if(reveal < 0.999){
-      const yTop=1.55;                       // ride high on the crown, above the lobes
-      const lean=(1.0-lookUp)*0.34;          // lean toward heading when moving; flat when looking up
-      let mroot=M4.mul(bodyRoot, M4.translate(0,yTop,0.05));
-      // face (the smile side, local +z) toward the heading, then tilt forward
-      mroot=M4.mul(mroot, M4.rotY(Math.PI/2 - heading));
-      mroot=M4.mul(mroot, M4.rotX(lean));
-      // Draw the mask with depth-test OFF so (a) in masked/look-up it is ALWAYS in
-      // front of the mass/lobes at every heading, and (b) during the transition the
-      // shards stay visible as they spiral inward and are consumed.
-      // (instanced path: the mask spheres are queued after this mark and
-      // `_flushInstances` draws them depth-OFF, in the same order)
-      if(this._collect) this._maskAt = this._instN; else gl.disable(gl.DEPTH_TEST);
-      this._drawMaskAssembly(mroot, time, reveal);
-      if(!this._collect) gl.enable(gl.DEPTH_TEST);
-    }
+    if(n > split) gl.enable(gl.DEPTH_TEST);
   }
 
   /* render one shoggoth — opts / target: see the module header. */
   render(opts, target){
     const gl=this.gl;
     if(opts.tess) this.setTess(opts.tess);
-    const time = opts.time || 0;
-    const phase = PHASES.includes(opts.phase) ? opts.phase : "masked";
-    let reveal;
-    if(typeof opts.reveal === "number" && !Number.isNaN(opts.reveal)) reveal = clamp01(opts.reveal);
-    else reveal = phase==="enraged" ? 1.0 : (phase==="transition" ? clamp01(time/MASK_OFF_SECS) : 0.0);
-
-    // behaviour: heading / look-up beat / drift, unless the caller drives them
-    const b = this._behaviorAt(time);
-    const heading = (typeof opts.heading === "number") ? opts.heading : b.heading;
-    let lookUp = (typeof opts.lookUp === "number") ? clamp01(opts.lookUp) : b.look;
-    // it rears up to stare as the mask lets go
-    if(reveal>0 && reveal<1) lookUp = Math.max(lookUp, 1.0 - smoothstep(0.06, 0.32, reveal));
-    const drift = opts.wander ? [b.x, b.z] : [0, 0];
+    const sp = opts.spheres;
+    if(!sp || !sp.data) throw new Error("shoggoth-core: opts.spheres is required — the boss is placed by the engine (src/render/shoggoth.rs); tools get it from tools/engine-pose.js");
 
     // pass 1: scene -> FBO
     this._beginScene();
@@ -582,15 +304,10 @@ class ShoggothPipeline extends SpritePipeline {
     gl.bindBuffer(gl.ARRAY_BUFFER,this.posBuf); gl.enableVertexAttribArray(loc.aPos); gl.vertexAttribPointer(loc.aPos,3,gl.FLOAT,false,0,0);
     gl.bindBuffer(gl.ARRAY_BUFFER,this.nrmBuf); gl.enableVertexAttribArray(loc.aNormal); gl.vertexAttribPointer(loc.aNormal,3,gl.FLOAT,false,0,0);
     if(inst){
-      // queue every sphere, then TWO instanced draws (body, then mask)
       gl.uniformMatrix4fv(this.iLoc.uVP, false, this.VP);
-      this._collect = true; this._instN = 0; this._maskAt = -1;
-      this._renderShoggoth(time, reveal, heading, lookUp, drift);
-      this._collect = false;
-      this._flushInstances();
+      this._drawInstanced(sp);
     } else {
-      // the REFERENCE: one draw + six uniform uploads per sphere
-      this._renderShoggoth(time, reveal, heading, lookUp, drift);
+      this._drawReference(sp);
     }
     gl.disableVertexAttribArray(loc.aNormal);
 
@@ -609,7 +326,7 @@ const makeShoggothPipeline = (gl, rt) => new ShoggothPipeline(gl, rt);
 /* a CanvasRenderer bound to one canvas (owns a context + a pipeline) */
 export function createShoggothRenderer(canvas){ return new CanvasRenderer(canvas, makeShoggothPipeline); }
 
-/* bakeShoggoth({phase, reveal, time, heading, lookUp, wander, px, size, transparent})
+/* bakeShoggoth({spheres, px, tess, size, transparent})
    -> HTMLCanvasElement: ONE baked top-down frame (the inspector's 2D view). */
 const _bakeShoggoth = makeBaker(makeShoggothPipeline);
 export function bakeShoggoth({size=384, ...opts} = {}){
