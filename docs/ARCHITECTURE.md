@@ -100,8 +100,13 @@ ships.
 - `update_game` is still one ~600-line function (input, tick, event bridge
   and HUD drawing in sequence). Its HUD / comms drawing half is render code
   by the test above and should move behind a view struct like the world did.
-- `renderer.js` is one ~2,300-line closure; `props.rs` and `audio/engine.rs`
-  are each several thousand lines. Splits are planned, not done.
+- `renderer.js` is one ~2,300-line closure (split planned, not done).
+- `audio/engine.rs` + `audio/engine/*` is split by concern but stays
+  browser-only: unlike `Graphics` it is not a recorder — it builds live
+  WebAudio node graphs — so none of the SFX / voice recipes are host-tested
+  (the sequencer, song data and bake specs in `audio/songs.rs` /
+  `compose.rs` / `sfx.rs` are). A recording `AudioGraph` seam would fix
+  that; it is a real design change, not a move.
 - Mirrored constants without a test yet: the drive scene geometry
   (`drive.rs` ↔ `DRIVE_FS`) and the robot rig's rotation order
   (`leg()` / `arm()` ↔ `rigVS`, covered by `rig-parity.js` in the browser).
