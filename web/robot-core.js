@@ -7,11 +7,13 @@
 
    Exports:
      PALETTES                       - color name -> {body,accent,trim}
-     posePlan(pose, time, relaxed)  - the joint scalars of a pose at time t (pure).
-                                      MIRRORED in Rust (src/render/pose.rs) and pinned
-                                      by tests/fixtures/pose_plan.txt (make gen-pose /
-                                      check-pose): edit both, then regenerate
-     POSES                          - list of pose names
+     POSE_SCALARS / planFromScalars - the PLAN a robot is drawn from: 11 joint
+                                      scalars + 2 flags. There is NO pose logic in
+                                      this file: the engine computes every pose
+                                      (src/render/pose.rs) — the game ships it in the
+                                      ROBOT / PORTRAIT ops, the tools ask the wasm
+                                      (tools/engine-pose.js). render() / batchDraw()
+                                      REQUIRE `opts.plan`
      WEAPONS                        - list of weapon names (fist/pistol/machinegun/shotgun)
      WEAPON_MODELS                  - name -> array of box parts (the 3D weapon models)
      GROUND_WEAPON_MODELS           - [bar, pistol, machinegun, shotgun] box models
@@ -40,7 +42,7 @@
      createRenderer(canvas)         - a robot CanvasRenderer (owns a context +
                                       a pipeline); .render({...,weapon}) draws
                                       the held weapon
-     bakeSprite({pose,color,facingDeg,px,time,size,weapon}) -> HTMLCanvasElement
+     bakeSprite({plan,color,facingDeg,px,size,weapon}) -> HTMLCanvasElement
                                       renders ONE baked top-down sprite frame.
 
    The robot is built from boxes + a tiny skeleton. A two-pass pipeline:
@@ -56,9 +58,6 @@ export const PALETTES = {
   magenta: {body:[0.86,0.18,0.72], accent:[1.0,0.45,0.95], trim:[0.30,0.06,0.24]},
   violet:  {body:[0.55,0.35,0.90], accent:[0.75,0.60,1.0], trim:[0.18,0.12,0.34]},
 };
-
-export const POSES = ["idle", "walk", "shoot", "hit", "downed",
-                      "downed_headless", "kick", "stomp"];
 
 /* ---------- weapons ----------
    Box-built weapon models in the same style as the robot. Each model is a small
@@ -492,8 +491,8 @@ function rigBoxLocal(slot){
        CPU rig's `headless` already used), so the vertex count is fixed and
        one draw serves every loadout;
      - a robot is 16 floats of per-INSTANCE data: its tile, facing, palette
-       and posePlan()'s scalars (the pose LOGIC stays in JS: branchy scalar
-       code, a few dozen flops). The shader walks the vertex's own joint
+       and the pose PLAN's scalars (computed by the engine, src/render/pose.rs:
+       branchy scalar code, a few dozen flops). The shader walks the vertex's own joint
        chain — at most 5 rotations — for position and normal;
      - the tile is placed in the shader (clip-space offset into the batch
        target, one big viewport) and clipped by a fragment discard on the
@@ -709,21 +708,27 @@ export function orbitVP(yaw, pitch, halfV, center){
   return M4.mul(proj, M4.lookAt(eye,center,up));
 }
 
-/* ---------- pose -> skeleton drive ---------- */
-// Returns the per-frame joint angles / offsets for a pose at a given time.
-// `relaxed` (no weapon held) softens idle/walk into an off-duty stance: arms
-// hanging loose at the sides, slightly splayed out from the hips with a soft
-// elbow bend, and an easy walk swing. Combat/impact poses ignore it.
+/* ---------- pose -> skeleton drive ----------
+   There is NO pose logic here. What a body does at time t is computed by the
+   ENGINE (src/render/pose.rs `pose_plan`): the game ships the numbers in the
+   ROBOT / PORTRAIT ops, the tool pages ask the wasm for them
+   (tools/engine-pose.js). This file only turns a PLAN — the scalars below +
+   two flags — into a skeleton (`_renderRobot`, the CPU rig; `rigVS`, the GPU
+   rig), so render() / batchDraw() REQUIRE `opts.plan`. */
 /* The pose SCALARS, in the order they cross the wasm boundary: the tail of the
    ROBOT op (src/graphics.rs `draw_robot` <- `Pose::scalars()`), the columns of
-   tests/fixtures/pose_plan.txt, and what `planFromScalars` unpacks. ONE list:
-   the renderer and the fixture generator both read it, and
-   `scalar_order_matches_the_js` (src/render/pose.rs) holds Rust to it. */
+   tests/fixtures/pose_plan.txt, what the wasm's `pose_plan_scalars` returns,
+   and what `planFromScalars` unpacks. ONE list: `scalar_order_matches_the_js`
+   (src/render/pose.rs) holds Rust to it. */
 export const POSE_SCALARS = ["bob", "lean", "zback", "recoil", "legA", "legB",
   "armLp", "armRp", "armRaise", "armOut", "elbow"];
 /* Fill `plan` from POSE_SCALARS.length floats at arr[o..] + the op's flags
-   (bit 0 = the gun hand aims, bit 1 = headless). The game's poses arrive this
-   way, computed in Rust; posePlan() below serves the tools + the bakes. */
+   (bit 0 = the gun hand aims, bit 1 = headless — `Pose::flags`, pinned by
+   `flag_bits_match_the_js`). Every pose arrives this way. */
+function requirePlan(opts){
+  if(!opts.plan) throw new Error("robot-core: opts.plan is required — poses are computed by the engine (src/render/pose.rs); tools get them from tools/engine-pose.js");
+  return opts.plan;
+}
 export function planFromScalars(plan, arr, o, flags){
   for(let k=0;k<POSE_SCALARS.length;k++) plan[POSE_SCALARS[k]] = arr[o+k];
   plan.shoot = (flags & 1) !== 0;
@@ -731,135 +736,6 @@ export function planFromScalars(plan, arr, o, flags){
   return plan;
 }
 
-export function posePlan(pose, time, relaxed){
-  const walkPhase = time*2.0*Math.PI;
-  const swing  = Math.sin(walkPhase)*0.6;
-  const swing2 = Math.sin(walkPhase+Math.PI)*0.6;
-  const ss = (v)=>{ v = Math.min(Math.max(v, 0), 1); return v*v*(3-2*v); };
-
-  // defaults (a neutral standing rig)
-  const P = {
-    bob:0, lean:0, zback:0,
-    legA:0, legB:0,
-    armLp:0.05, armRp:0.05, shoot:false,
-    armRaise:0,          // extra shoulder-raise for both arms (defensive/idle)
-    armOut:0,            // sideways splay of both arms (relaxed hang)
-    elbow:0,             // forearm bend at the elbow (relaxed hang)
-    recoil:0,
-  };
-
-  switch(pose){
-    case "walk":
-      P.bob = Math.abs(Math.sin(walkPhase))*0.08;
-      P.legA = swing;  P.legB = swing2;
-      P.armLp = swing2; P.armRp = swing;   // arms counter-swing to legs
-      if(relaxed){
-        // natural unarmed walk: an easy half swing, arms loose at the sides
-        P.armLp = swing2*0.55; P.armRp = swing*0.55;
-        P.armOut = 0.10; P.elbow = 0.28;
-      }
-      break;
-
-    case "shoot":
-      P.shoot = true;
-      P.legA = 0.12; P.legB = -0.12;
-      P.armLp = 0.5;                        // support arm braces forward-ish
-      P.recoil = Math.max(0.0, Math.sin(time*10.0))*0.18;
-      break;
-
-    case "idle": {
-      const breath = Math.sin(time*1.9);
-      P.bob   = breath*0.045;               // gentle chest/torso bob
-      P.legA  = 0.015; P.legB = -0.015;     // weight shift, feet planted
-      P.armLp = 0.08 + breath*0.05;         // arms sway slightly out of phase
-      P.armRp = 0.08 - breath*0.05;
-      if(relaxed){
-        // at ease: arms hang straight down the sides, breathing gently
-        P.armLp = 0.02 + breath*0.03;
-        P.armRp = 0.02 - breath*0.03;
-        P.armOut = 0.14 + breath*0.02;
-        P.elbow = 0.14;
-      }
-      break;
-    }
-
-    case "hit": {
-      // periodic flinch: a sharp recoil back that decays, then repeats.
-      const period = 1.3;
-      const p = (time % period) / period;   // 0..1
-      const env = Math.exp(-p*7.0);         // spike at impact, quick decay
-      P.lean  = 0.55*env;                   // whole body rocks backward
-      P.zback = -0.28*env;                  // and shoves back off its feet
-      P.bob   = -0.05*env;
-      P.legA  = -0.25*env; P.legB = 0.18*env;
-      P.armRaise = 0.9*env;                 // arms fling up defensively
-      P.armLp = 0.2; P.armRp = 0.2;
-      break;
-    }
-
-    case "downed_headless": // a KICK victim: same sprawl, head cubes skipped
-    case "downed": {
-      // knocked flat on its back, limbs askew. `time` is seconds since the
-      // knockdown landed: the first ~0.25s eases from upright to sprawled
-      // (the fall), with a decaying landing wobble, then the body lies still.
-      // The game sets the facing so the body topples AWAY from the blow
-      // (the lean rotates it backward, i.e. opposite the sprite's facing).
-      const k = Math.min(time/0.25, 1);
-      const e = k*k*(3-2*k);                // smoothstep fall
-      const s = time > 0.25
-        ? Math.sin((time-0.25)*9.0)*Math.exp(-(time-0.25)*3.0) : 0;
-      P.lean  = 1.42*e + 0.10*s;            // topple flat onto its back
-      P.zback = 0.35*e;                     // slide with the blow's momentum
-      P.bob   = -0.06*e;
-      P.legA  = 0.55*e; P.legB = -0.38*e;   // legs splayed
-      P.armLp = -0.45*e; P.armRp = 0.35*e;  // arms askew...
-      P.armRaise = 1.25*e;                  // ...flung up past the head
-      P.headless = (pose === "downed_headless");
-      break;
-    }
-
-    case "kick": {
-      // The head-kick finisher. `time` is seconds into the finisher (the
-      // impact lands at ~0.28s, see FinisherKind::Kick): the kicking leg
-      // cocks back, sweeps through horizontally at the impact, then eases
-      // back down while the body leans back off the kick for balance.
-      const t = Math.max(time, 0);
-      const wind   = ss(t/0.16);            // cock the leg back...
-      const sweep  = ss((t-0.16)/0.12);     // ...sweep it clean through
-      const settle = ss((t-0.36)/0.19);     // ...and put it back down
-      const k = 1 - settle*0.85;
-      P.legA  = 0.14;                       // support leg planted
-      P.legB  = (0.60*wind - 2.20*sweep)*k; // windup -> full forward extension
-      P.lean  = (0.14*wind + 0.38*sweep)*k; // torso leans back off the kick
-      P.bob   = -0.05*sweep*k;
-      P.armLp = -0.70*sweep*k;              // arms scissor for balance:
-      P.armRp = 0.55*sweep*k;               // left forward, right back
-      P.armOut = 0.16; P.elbow = 0.20;
-      break;
-    }
-
-    case "stomp": {
-      // The two-hit quick stomp finisher. `time` is seconds into it: the
-      // stomping knee jerks up ahead of each scheduled impact (0.14s and
-      // 0.34s, see FinisherKind::Stomp) and slams down ON it.
-      const t = Math.max(time, 0);
-      const pulse = (ti)=>
-        Math.max(0, ss((t-(ti-0.13))/0.085) - ss((t-(ti-0.045))/0.045));
-      const lift = Math.max(pulse(0.14), pulse(0.34));
-      P.legA  = 0.10;                       // support leg planted
-      P.legB  = -1.05*lift;                 // stomping knee hiked up forward
-      P.lean  = -0.10*lift;                 // slight crouch over the body
-      P.bob   = 0.05*lift - 0.02;
-      P.armRaise = 0.35*lift;               // arms pump with each stomp
-      P.armLp = 0.25; P.armRp = 0.25;
-      break;
-    }
-
-    default: // "idle"-like neutral if unknown
-      break;
-  }
-  return P;
-}
 
 /* ---------- SpritePipeline: the shared two-pass skeleton ----------
    Owns everything that is NOT scene-specific: the shader compile helpers, the
@@ -1271,10 +1147,7 @@ class RobotPipeline extends SpritePipeline {
       ? orbitVP(opts.orbit.yaw||0, opts.orbit.pitch||0, opts.orbit.halfV, opts.orbit.center)
       : topDownVP(opts.halfV);
     // Unarmed robots stand / walk at ease rather than in the combat rig.
-    // `opts.plan` = a ready-made pose (the GAME: computed in Rust,
-    // src/render/pose.rs); without it (tools, the portrait bake) the JS copy.
-    const plan = opts.plan || posePlan(pose, time, weapon === "fist");
-    this._renderRobot(VP, pal, plan, facingRad, weapon);
+    this._renderRobot(VP, pal, requirePlan(opts), facingRad, weapon);
   }
 
   /* BATCH: n robots in one go (see SpritePipeline's batch section) —
@@ -1295,7 +1168,7 @@ class RobotPipeline extends SpritePipeline {
     const facingRad = (opts.facingDeg || 0) * Math.PI/180;
     if(this.gpuRig && this.rigReady && !opts.orbit && !opts.halfV){
       // GPU rig: 16 floats into the instance array; drawn by batchEnd
-      this._rigQueue(i, pal, opts.plan || posePlan(pose, opts.time || 0, weapon === "fist"), facingRad, weapon);
+      this._rigQueue(i, pal, requirePlan(opts), facingRad, weapon);
       return;
     }
     // CPU rig: this robot right now, into its own tile viewport + scissor
@@ -1549,6 +1422,6 @@ export function makeBaker(makePipeline){
    Renders ONE baked, top-down, inked/pixelated sprite frame. (The game itself
    does not bake: it runs createRobotPipeline() live inside its own context.) */
 const _bakeRobot = makeBaker(makeRobotPipeline);
-export function bakeSprite({pose="idle", color="coral", facingDeg=0, px=5, time=0, size=384, weapon="fist", transparent=false} = {}){
-  return _bakeRobot({pose, color, px, time, facingDeg, weapon, transparent}, size); // top-down (no orbit)
+export function bakeSprite({plan, color="coral", facingDeg=0, px=5, size=384, weapon="fist", transparent=false} = {}){
+  return _bakeRobot({plan, color, px, facingDeg, weapon, transparent}, size); // top-down (no orbit)
 }

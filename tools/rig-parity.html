@@ -34,7 +34,10 @@
 <div id="out">running…</div>
 <canvas id="gl" width="16" height="16" style="display:none"></canvas>
 <script type="module">
-import { createRobotPipeline, POSES, WEAPONS, PALETTES } from "../web/robot-core.js";
+import { createRobotPipeline, WEAPONS, PALETTES } from "../web/robot-core.js";
+// Poses come from the ENGINE (the wasm): the rigs are compared on the very
+// plans the game draws (src/render/pose.rs), not on a JS re-implementation.
+import { POSES, poseFor } from "./engine-pose.js";
 
 const RT = 128, PX = 3, COLS = 8, B = Math.ceil(RT / PX), ATLAS = 512;
 const TIMES = [0, 0.13, 0.31, 0.77, 1.9];
@@ -60,7 +63,7 @@ const target = { fbo, x: 0, y: 0 };
 const cases = [];
 let k = 0;
 for (const pose of POSES) for (const weapon of WEAPONS) for (const time of TIMES) {
-  cases.push({ pose, weapon, time, color: COLORS[k % COLORS.length], facingDeg: [0, 0, 90, 180, 270, 33][k % 6], transparent: true });
+  cases.push({ pose, weapon, time, plan: poseFor(pose, time, weapon), color: COLORS[k % COLORS.length], facingDeg: [0, 0, 90, 180, 270, 33][k % 6], transparent: true });
   k++;
 }
 const batches = [];

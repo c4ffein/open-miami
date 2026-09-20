@@ -25,7 +25,8 @@
     14 POSTFX     kind t r g b                        (full-screen post pass)
     15 PIX_BEGIN  px w h smooth                       (open a pixel-art group)
     16 PIX_END    x y                                 (close it, draw at x y)
-    17 PORTRAIT   colorIdx x y sizePx time mode       (dialogue portrait: baked-once
+    17 PORTRAIT   colorIdx x y sizePx time mode + the bake's pose (11 scalars, flags)
+                  (dialogue portrait: baked-once
                                                       pixel-art face, rocked in 2D
                                                       by `time`; mode 0 = bust,
                                                       1 = headshot)
@@ -203,7 +204,6 @@ const HEAD_ART = 16; // detached-head art resolution (texels) within a tile
    (the true top-down camera makes spinning the flat model and rotating its
    baked sprite equivalent) and the quad is spun in 2D by the opcode angle. */
 const PORTRAIT_ATLAS_SIZE = 512; // 8x8 64px tiles; 8 portraits + 4 guns used
-const PORTRAIT_BAKE_TIME = 0.35; // frozen clock for the bake: a neutral idle frame
 const PORTRAIT_ROCK_AMP = 5 * (Math.PI / 180); // rocking amplitude (~5 deg)
 const PORTRAIT_ROCK_W = 1.5; // rocking angular speed (rad/s of `time`)
 const PORTRAIT_YAW = 0.6; // 3/4 base yaw (rad)
@@ -535,7 +535,10 @@ export function initRenderer(canvas) {
   // colorIdx * 2 + mode -> baked slot; ground guns use key -1 - weaponIdx.
   const portraitCache = new Map();
   const portraitOpts = {
-    pose: "idle", color: "coral", weapon: "fist", time: 0, facingDeg: 0,
+    color: "coral", weapon: "fist", facingDeg: 0,
+    // The pose the portrait is baked in arrives with the PORTRAIT op (the
+    // engine's `portrait_pose()`): no animation logic lives in JS.
+    plan: planFromScalars({}, new Float32Array(POSE_SCALARS.length), 0, 0),
     // rt/FX_TILE post blocks: one output texel per block = 64-texel art
     px: ROBOT_TILE / FX_TILE, transparent: true,
     orbit: {
@@ -547,7 +550,7 @@ export function initRenderer(canvas) {
   // Slot of the (colorIdx, mode) portrait, baking it on first use. The bake
   // is a mid-stream 3D render: flush what is pending, keep the pipelines'
   // attrib state disjoint (see renderQueuedSprites), rebind the batch after.
-  function portraitSlotFor(colorIdx, mode) {
+  function portraitSlotFor(colorIdx, mode, cmds, a) {
     const key = colorIdx * 2 + mode;
     let slot = portraitCache.get(key);
     if (slot !== undefined) return slot;
@@ -558,7 +561,7 @@ export function initRenderer(canvas) {
     gl.disableVertexAttribArray(loc.aColor);
     const headshot = mode > 0;
     portraitOpts.color = ROBOT_COLORS[colorIdx] || ROBOT_COLORS[0];
-    portraitOpts.time = PORTRAIT_BAKE_TIME;
+    planFromScalars(portraitOpts.plan, cmds, a + 6, cmds[a + 6 + POSE_SCALARS.length] | 0);
     portraitOpts.orbit.yaw = headshot ? HEADSHOT_YAW : PORTRAIT_YAW;
     portraitOpts.orbit.pitch = headshot ? HEADSHOT_PITCH : PORTRAIT_PITCH;
     portraitOpts.orbit.halfV = headshot ? HEADSHOT_HALFV : PORTRAIT_HALFV;
@@ -1940,9 +1943,13 @@ export function initRenderer(canvas) {
   // mode 0 = bust (slightly-elevated full-body camera), mode 1 = headshot
   // (pushed in / raised to head height: the face fills the tile). Screen
   // space (through the transform stack, like everything).
-  function drawPortrait(colorIdx, x, y, sizePx, time, mode) {
+  // Args at cmds[a..]: colorIdx x y sizePx time mode + the bake's pose
+  // (11 scalars + flags, read only when the portrait is not baked yet).
+  function drawPortrait(cmds, a) {
+    const colorIdx = cmds[a], x = cmds[a + 1], y = cmds[a + 2], sizePx = cmds[a + 3],
+      time = cmds[a + 4], mode = cmds[a + 5];
     const ci = ROBOT_COLORS[colorIdx | 0] ? colorIdx | 0 : 0;
-    const slot = portraitSlotFor(ci, mode > 0.5 ? 1 : 0); // bakes on first use
+    const slot = portraitSlotFor(ci, mode > 0.5 ? 1 : 0, cmds, a); // bakes on first use
     setTexture(portraitTex);
     if (vCount + 6 > MAX_VERTS) flush();
     const tx = (slot % portraitCols) * FX_TILE;
@@ -2203,8 +2210,8 @@ export function initRenderer(canvas) {
           i += 2;
           break;
         case 17: // PORTRAIT
-          drawPortrait(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4], cmds[i + 5]);
-          i += 6;
+          drawPortrait(cmds, i);
+          i += 18;
           break;
         case 18: // GUN_PICKUP
           drawGunPickup(cmds[i], cmds[i + 1], cmds[i + 2], cmds[i + 3], cmds[i + 4]);

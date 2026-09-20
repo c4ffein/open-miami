@@ -79,23 +79,25 @@
   `GameState::render_world`, the app-side wrapper). Immediate-mode UI (a
   button = draw + click test in one call: menus, `?viz`, `editor_ui`) is
   legitimately APP code
-- CHARACTERS ROADMAP (docs/ARCHITECTURE.md "Roadmap" — decided direction,
-  robots R1 + R2 DONE): Rust computes poses (numbers), GLSL evaluates rigs,
-  JS only ferries. THE GAME's robots are animated by `pose_plan` in
-  src/render/pose.rs (kick / stomp timing derived from
-  `FinisherKind::impacts()`); the `ROBOT` op carries its 11 scalars, in the
-  order of `POSE_SCALARS` (web/robot-core.js — the ONE list behind the
-  renderer's `planFromScalars` and the fixture's columns; Rust pinned to it).
-  UNTIL R3 THE POSE LOGIC STILL EXISTS TWICE: JS `posePlan()` serves the
-  portrait bake + tools/inspector.html + tools/rig-parity.html (no wasm
-  there) and must stay BIT-IDENTICAL — change a pose = edit BOTH, `make
-  gen-pose`, `cargo test` (`matches_the_js_pose_plan` vs
-  tests/fixtures/pose_plan.txt; `make check-pose`, run by `check-render`,
-  fails if the JS drifts). Robots first (`posePlan` is pure and the GPU rig's 16 instance
-  floats are already the seam; port behind a scalar-parity test), then the
-  boss (instanced spheres in JS behind a pixel-parity page, THEN placement
-  in Rust). Do not move only one of the two; do not add new animation logic
-  to JS that gameplay timers depend on without noting it there
+- CHARACTERS ROADMAP (docs/ARCHITECTURE.md "Roadmap"; ROBOTS DONE): Rust
+  computes poses (numbers), GLSL evaluates rigs, JS only ferries. There is
+  ONE pose implementation — `pose_plan` in src/render/pose.rs (kick / stomp
+  timing derived from `FinisherKind::impacts()`) — and NO pose logic in JS:
+  the `ROBOT` and `PORTRAIT` ops carry its 11 scalars + flags (order =
+  `POSE_SCALARS` in web/robot-core.js, unpacked by `planFromScalars`; Rust
+  pinned to both), web/robot-core.js REQUIRES `opts.plan`, and the tool
+  pages get poses from the wasm (`tools/engine-pose.js` ->
+  `src/wasm_api.rs`; loading the wasm does not start the game).
+  tests/fixtures/pose_plan.txt = a FROZEN golden record of the JS function
+  that was replaced: a deliberate pose change updates its rows in the same
+  commit. THE BOSS: step 2 DONE — web/shoggoth-core.js draws it as TWO
+  instanced draws (body depth-ON, then the mask depth-OFF, in order; up to
+  227 per-sphere draws before), the per-sphere path kept as the REFERENCE
+  (`pipe.instanced = false`), held pixel-identical by
+  `tests/e2e/render/shoggoth-parity.js` (tools/shoggoth-parity.html, the
+  boss's first pixel test). NEXT: its sphere placement in Rust, filling that
+  instance list. Never add animation logic to JS
+  (`no_js_pose_logic_is_left`)
 - EVERY FRAME DRAWS A SCREEN: a screen switch (`self.screen = …`, a modal
   flag) takes effect AFTER the current screen is drawn — record the intent,
   draw, then switch. Never `switch; return;` before drawing (a one-frame
@@ -139,7 +141,8 @@
   (`src/drive.rs` tunables <-> `DRIVE_FS`) and its integer hash (`hash01` <->
   `driveHash`); the robot index tables (src/render/robots.rs <-> renderer.js
   `ROBOT_COLORS` / `ROBOT_WEAPONS` — no pose table: poses cross as numbers);
-  the pose logic itself until R3 (PINNED bit-exact, see Layering); the rig's ROTATION ORDER
+  the pose scalar ORDER + flag bits (src/render/pose.rs <-> `POSE_SCALARS` /
+  `planFromScalars`, PINNED); the rig's ROTATION ORDER
   per joint chain inside web/robot-core.js (`leg()` / `arm()`, the CPU rig =
   the reference <-> `rigVS`, the GPU rig; `tests/e2e/render/rig-parity.js`);
   `PIX_DEPTH` (stream.rs <-> renderer.js); `BOSS_MASK_OFF_SECS` <->
@@ -174,7 +177,8 @@
   evidence: docs/ARCHITECTURE.md). MEASURE with `?gpuprobe` BEFORE optimizing
   a layer; `?perf` + **P** = the CPU trace (viewer: tools/perf.html)
 - Robots render LIVE every frame through web/robot-core.js as ONE instanced
-  batch (the GPU rig); the boss through web/shoggoth-core.js; portraits, guns
+  batch (the GPU rig); the boss through web/shoggoth-core.js as TWO
+  instanced draws (the mask is depth-OFF on purpose — never merge them); portraits, guns
   and heads are baked ONCE into a persistent NEAREST atlas and drawn as rigid
   pixel sprites rotated in 2D. Where their animation should live long-term:
   the Roadmap in docs/ARCHITECTURE.md
@@ -206,8 +210,7 @@
 - FILES THAT TOOLS PARSE (moving / renaming breaks a generator):
   `PROP_NAMES` in `src/props.rs` (tools/gen_props.py), `title_glyph` in
   `src/render/title.rs` (tools/gen_title.py -> index.html's loading SVG),
-  `posePlan` / `POSES` / `POSE_SCALARS` / `planFromScalars` exported by
-  `web/robot-core.js` (tools/gen_pose_fixture.ts + a cargo test), the `TABLE` rows of `web/ops.js` + `MASK_OFF_SECS` in
+  `POSE_SCALARS` / `planFromScalars` in `web/robot-core.js` (cargo tests), the `TABLE` rows of `web/ops.js` + `MASK_OFF_SECS` in
   `web/shoggoth-core.js` + the `case N: // NAME` labels of `web/renderer.js`
   (cargo tests)
 - NEW PROPS are APPENDED (ids are persisted in props/props.json): a name in
@@ -251,7 +254,9 @@
     `tests/e2e/render/composite-coherence.js` (~7 s) + `props-stability.js` (~60 s,
     fixed-sleep bound) + `rig-parity.js` (~5 s, the robots' GPU rig vs the
     CPU rig) + `grain-fold.js` (~15 s, the opt-in folded TV static vs the quad) +
-    `backdrop-clip.js` (~30 s, the floor-occluded backdrop vs the full quad), in parallel against a `serve.py` the target starts on
+    `backdrop-clip.js` (~30 s, the floor-occluded backdrop vs the full quad) +
+    `shoggoth-parity.js` (~20 s, the boss's instanced path vs its per-sphere
+    reference), in parallel against a `serve.py` the target starts on
     `RENDER_PORT` (a free ephemeral port by default) and kills; logs in `tests/e2e/test-results/render-*.log`
 - Both depend on `make e2e-prep`: `make build-wasm` (installs the wasm32
   target and `wasm-bindgen-cli` pinned to the `wasm-bindgen` version in

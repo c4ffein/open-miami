@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SHOGGOTH PARITY — per-sphere reference vs instanced</title>
+<!-- The boss is drawn two ways by web/shoggoth-core.js: the REFERENCE (one
+     draw + six uniform uploads per sphere — the original code path) and the
+     INSTANCED path the game runs (every sphere queued as 20 instance floats,
+     TWO instanced draws: body depth-ON, then the mask depth-OFF). This page
+     renders the same frames through both, at the GAME's settings (384-px
+     tile, px 4), and diffs them: REFERENCE | INSTANCED | DIFF.
+     Headless acceptance: tests/e2e/render/shoggoth-parity.js reads
+     `window.shoggothParity`. The boss's animation was tuned by eye and had no
+     pixel test before this page: keep it green when touching the boss. -->
+<style>
+  body { margin: 0; background: #0b0d12; color: #9ab; font: 13px/1.4 monospace; padding: 12px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  figure { margin: 0; } figcaption { margin-bottom: 4px; }
+  canvas.view { width: 384px; height: 384px; image-rendering: pixelated; background: #000; border: 1px solid #234; }
+  button { font: inherit; background: #123; color: #9cf; border: 1px solid #345; padding: 2px 8px; }
+  #sum { margin: 8px 0; white-space: pre; }
+</style>
+</head>
+<body>
+<div>case <button id="prev">&lt;</button> <span id="ci">0</span> <button id="next">&gt;</button> <span id="label"></span></div>
+<div id="sum">rendering…</div>
+<div class="row">
+  <figure><figcaption>REFERENCE (per-sphere draws)</figcaption><canvas class="view" id="vref"></canvas></figure>
+  <figure><figcaption>INSTANCED (2 draws)</figcaption><canvas class="view" id="vinst"></canvas></figure>
+  <figure><figcaption>DIFF (red = differing pixel)</figcaption><canvas class="view" id="vdiff"></canvas></figure>
+</div>
+<canvas id="gl" width="384" height="384" style="display:none"></canvas>
+<script type="module">
+import { createShoggothPipeline } from "../web/shoggoth-core.js";
+
+const TILE = 384, PX = 4; // = renderer.js SHOG_TILE / SHOG_PX
+const gl = document.getElementById("gl").getContext("webgl", { antialias: false, preserveDrawingBuffer: true });
+const pipe = createShoggothPipeline(gl, { rt: TILE });
+
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, TILE, TILE, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+const fbo = gl.createFramebuffer();
+gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+const target = { fbo, x: 0, y: 0, w: TILE, h: TILE };
+
+// The whole mask-off arc x a spread of clocks; heading / look-up cycle so the
+// mask is seen from every side; plus the inspector's orbit camera, the wander
+// drift, and the fine sphere tessellation.
+const REVEALS = [0, 0.03, 0.1, 0.2, 0.35, 0.5, 0.7, 0.9, 1];
+const TIMES = [0, 0.7, 2.3, 5.1];
+const cases = [];
+let k = 0;
+for (const reveal of REVEALS) for (const time of TIMES) {
+  cases.push({ reveal, time, heading: [0, 1.3, 2.9, 4.4][k % 4], lookUp: [0, 0.5, 1][k % 3], px: PX, transparent: true, tess: "low" });
+  k++;
+}
+for (const reveal of [0, 0.3, 1]) {
+  cases.push({ reveal, time: 1.7, heading: 0.8, px: PX, transparent: true, tess: "low", orbit: { yaw: 0.6, pitch: 0.5 } });
+  cases.push({ reveal, time: 3.1, wander: true, px: PX, transparent: true, tess: "low" });
+  cases.push({ reveal, time: 1.1, heading: 2.0, lookUp: 0.3, px: PX, transparent: true, tess: "high" });
+}
+
+// Count what each path SUBMITS: the point of the instanced path is N draws -> 2.
+const draws = { ref: 0, inst: 0, refMax: 0, instMax: 0 };
+let counting = null, frameDraws = 0;
+const realDraw = gl.drawArrays.bind(gl);
+gl.drawArrays = (...a) => { if (counting) frameDraws++; return realDraw(...a); };
+if (pipe.instExt) {
+  const realInst = pipe.instExt.drawArraysInstancedANGLE.bind(pipe.instExt);
+  pipe.instExt.drawArraysInstancedANGLE = (...a) => { if (counting) frameDraws++; return realInst(...a); };
+}
+
+function shot(opts, instanced) {
+  pipe.instanced = instanced;
+  counting = instanced ? "inst" : "ref"; frameDraws = 0;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.disable(gl.SCISSOR_TEST);
+  gl.viewport(0, 0, TILE, TILE);
+  gl.clearColor(1, 0, 1, 1); // stale pixels must never pass for content
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  pipe.render(opts, target);
+  // (minus the post pass's own full-tile draw)
+  const n = frameDraws - 1; counting = null;
+  draws[instanced ? "inst" : "ref"] += n;
+  draws[instanced ? "instMax" : "refMax"] = Math.max(draws[instanced ? "instMax" : "refMax"], n);
+  const px = new Uint8Array(TILE * TILE * 4);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.readPixels(0, 0, TILE, TILE, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  return px;
+}
+
+const results = { done: false, instanced: !!pipe.instExt, cases: cases.length, tiles: [],
+                  totalDiff: 0, maxTileDiff: 0, emptyTiles: 0, glErrors: 0 };
+const shots = [];
+for (const opts of cases) {
+  const ref = shot(opts, false), inst = shot(opts, true);
+  let d = 0, solid = 0;
+  const diff = new Uint8Array(TILE * TILE);
+  for (let p = 0; p < TILE * TILE; p++) {
+    const o = p * 4;
+    if (ref[o + 3] > 0) solid++;
+    if (ref[o] !== inst[o] || ref[o + 1] !== inst[o + 1] || ref[o + 2] !== inst[o + 2] || ref[o + 3] !== inst[o + 3]) { d++; diff[p] = 1; }
+  }
+  results.tiles.push({ reveal: opts.reveal, time: opts.time, diff: d, solid });
+  results.totalDiff += d;
+  if (d > results.maxTileDiff) results.maxTileDiff = d;
+  if (solid < 2000) results.emptyTiles++; // the boss fills a good part of its tile
+  shots.push({ ref, inst, diff });
+}
+// an instanced draw must leave NO divisor / enabled attribute behind
+results.leakedAttribs = 0;
+if (pipe.instExt) for (let a = 0; a < gl.getParameter(gl.MAX_VERTEX_ATTRIBS); a++) {
+  if (gl.getVertexAttrib(a, pipe.instExt.VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE) !== 0) results.leakedAttribs++;
+}
+for (let e = gl.getError(); e !== gl.NO_ERROR; e = gl.getError()) results.glErrors++;
+results.draws = draws;
+
+// ---- the human-eye view
+const put = (id, px, asDiff) => {
+  const c = document.getElementById(id); c.width = TILE; c.height = TILE;
+  const ctx = c.getContext("2d"), img = ctx.createImageData(TILE, TILE);
+  for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) {
+    const s = ((TILE - 1 - y) * TILE + x), o = (y * TILE + x) * 4; // GL rows are bottom-up
+    if (asDiff) { img.data[o] = px[s] ? 255 : 0; img.data[o + 1] = 0; img.data[o + 2] = 0; img.data[o + 3] = 255; }
+    else { img.data[o] = px[s * 4]; img.data[o + 1] = px[s * 4 + 1]; img.data[o + 2] = px[s * 4 + 2]; img.data[o + 3] = 255; }
+  }
+  ctx.putImageData(img, 0, 0);
+};
+let cur = 0;
+const show = () => {
+  const c = cases[cur], t = results.tiles[cur];
+  document.getElementById("ci").textContent = `${cur + 1} / ${cases.length}`;
+  document.getElementById("label").textContent =
+    ` reveal ${c.reveal} · time ${c.time}${c.orbit ? " · orbit" : ""}${c.wander ? " · wander" : ""}${c.tess === "high" ? " · high tess" : ""} · ${t.diff} differing px`;
+  put("vref", shots[cur].ref); put("vinst", shots[cur].inst); put("vdiff", shots[cur].diff, true);
+};
+document.getElementById("prev").onclick = () => { cur = (cur + cases.length - 1) % cases.length; show(); };
+document.getElementById("next").onclick = () => { cur = (cur + 1) % cases.length; show(); };
+cur = results.tiles.reduce((best, t, i) => (t.diff > results.tiles[best].diff ? i : best), 0); // open on the worst
+show();
+document.getElementById("sum").textContent =
+  `${results.cases} cases · instanced: ${results.instanced} · differing px ${results.totalDiff} · worst case ${results.maxTileDiff} · GL errors ${results.glErrors} · leaked divisors ${results.leakedAttribs}
+scene draws per frame — reference: up to ${draws.refMax} (avg ${(draws.ref / cases.length).toFixed(1)}) · instanced: up to ${draws.instMax}`;
+results.done = true;
+window.shoggothParity = results;
+</script>
+</body>
+</html>

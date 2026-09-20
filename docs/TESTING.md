@@ -34,11 +34,10 @@ the DRAW code too.
 - **`tests/perf_audit.rs`** — tick-cost benches (informational timings).
 - **Cross-language pins** (unit tests that parse a JS file): the opcode table
   vs `web/ops.js` and the renderer's dispatch (`src/graphics/stream.rs`),
-  `MASK_OFF_SECS` vs `web/shoggoth-core.js` (`src/systems/boss.rs`). And one
-  FIXTURE pin: `tests/fixtures/pose_plan.txt`, generated from the JS
-  `posePlan()` (`make gen-pose`, Bun), holds the Rust `pose_plan` bit-exact
-  to it (`src/render/pose.rs`); `make check-pose` catches JS-side drift. A
-  constant mirrored across the wasm boundary gets one of these.
+  `MASK_OFF_SECS` vs `web/shoggoth-core.js` (`src/systems/boss.rs`), the pose
+  scalar order + flag bits vs `web/robot-core.js` (`src/render/pose.rs`). And
+  one GOLDEN RECORD: `tests/fixtures/pose_plan.txt`, generated from the JS
+  `posePlan()` before it was deleted, which `pose_plan` must keep matching.
 
 The simulation tick is SHARED, not duplicated: the browser loop and
 `Simulation` both call `sim::GameSystems::step`, so what these tests play is
@@ -54,11 +53,12 @@ Headless Chromium on software GL (SwiftShader, ~5–15 fps): correct pixels,
 slow frames. Always run through the Makefile — it builds the wasm, installs
 the browser, sets the library path and the timeouts.
 
-- **`make check-render`** — five standalone scripts, in parallel, each
+- **`make check-render`** — six standalone scripts, in parallel, each
   comparing PIXELS: the pixel-group composite (`composite-coherence`), prop
   pixel-art stability (`props-stability`), the robots' GPU rig vs the CPU
   reference (`rig-parity`), the folded TV static (`grain-fold`), the
-  floor-occluded backdrop (`backdrop-clip`). These are the safety net for
+  floor-occluded backdrop (`backdrop-clip`), the boss's instanced path vs
+  its per-sphere reference (`shoggoth-parity`). These are the safety net for
   any change to `web/`.
 - **`make check-e2e`** — Playwright: floor 1 loads and draws its HUD, the
   player purges the floor and rides the lift to floor 2 (the real boot path,

@@ -47,3 +47,6 @@ pub mod editor_ui;
 // The browser app: game state, screens, the frame loop and the wasm entry
 #[cfg(target_arch = "wasm32")]
 mod app;
+// What the engine exports to the JS tool pages (poses)
+#[cfg(target_arch = "wasm32")]
+mod wasm_api;

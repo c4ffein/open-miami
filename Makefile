@@ -1,4 +1,4 @@
-.PHONY: help verify verify-all check-test check-clippy check-fmt check-build check-wasm-build build-wasm bundle e2e-prep check-e2e check-render check-coverage gen-levels check-levels gen-props check-props gen-title gen-pose check-pose
+.PHONY: help verify verify-all check-test check-clippy check-fmt check-build check-wasm-build build-wasm bundle e2e-prep check-e2e check-render check-coverage gen-levels check-levels gen-props check-props gen-title
 
 # Colors for output
 RED=\033[0;31m
@@ -141,7 +141,7 @@ check-e2e: e2e-prep
 	cd tests/e2e && mkdir -p test-results && ulimit -c 0 && $(E2E_ENV) timeout $(E2E_TIMEOUT) bunx playwright test
 	@echo "$(GREEN)✓ E2E tests passed$(NC)"
 
-# Render Tests - the five standalone renderer acceptance scripts
+# Render Tests - the six standalone renderer acceptance scripts
 # (tests/e2e/render/composite-coherence.js: the smooth pixel-group composite, at DPR
 # 1 and 2, ~7 s; tests/e2e/render/props-stability.js: the ?viz PROPS pixel-art
 # stability, ~60 s — it is fixed-sleep bound: ~60 waitForTimeout calls + 9
@@ -150,7 +150,8 @@ check-e2e: e2e-prep
 # folded into the batch shader vs the old full-screen quad, pixel diff on
 # three live game frames, ~15 s; tests/e2e/render/backdrop-clip.js: the void
 # backdrop clipped to where the floor does not cover it vs the full quad,
-# pixel-IDENTICAL on live frames, ~30 s). Each launches its own Chromium, so they run IN
+# pixel-IDENTICAL on live frames, ~30 s; tests/e2e/render/shoggoth-parity.js:
+# the boss's instanced sphere path vs the per-sphere reference, ~20 s). Each launches its own Chromium, so they run IN
 # PARALLEL against one serve.py started on RENDER_PORT for the duration of
 # the target (killed on exit whatever the outcome), each under its own
 # `timeout`; their output goes to tests/e2e/test-results/render-*.log and is
@@ -163,7 +164,7 @@ ifeq ($(origin RENDER_PORT), undefined)
 RENDER_PORT := $(shell python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1])')
 endif
 RENDER_TIMEOUT ?= 180
-check-render: e2e-prep check-pose
+check-render: e2e-prep
 	@echo "$(YELLOW)Running renderer acceptance tests (serve.py on :$(RENDER_PORT), $(RENDER_TIMEOUT) s timeout each)...$(NC)"
 	@ulimit -c 0; \
 	python3 serve.py $(RENDER_PORT) >/dev/null 2>&1 & SRV=$$!; \
@@ -176,13 +177,15 @@ check-render: e2e-prep check-pose
 	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/rig-parity.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-rig-parity.log 2>&1 & P3=$$!; \
 	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/grain-fold.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-grain-fold.log 2>&1 & P4=$$!; \
 	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/backdrop-clip.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-backdrop-clip.log 2>&1 & P5=$$!; \
-	wait $$P1; R1=$$?; wait $$P2; R2=$$?; wait $$P3; R3=$$?; wait $$P4; R4=$$?; wait $$P5; R5=$$?; \
+	$(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/shoggoth-parity.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-shoggoth-parity.log 2>&1 & P6=$$!; \
+	wait $$P1; R1=$$?; wait $$P2; R2=$$?; wait $$P3; R3=$$?; wait $$P4; R4=$$?; wait $$P5; R5=$$?; wait $$P6; R6=$$?; \
 	echo "--- render/composite-coherence.js (exit $$R1)"; cat test-results/render-composite-coherence.log; \
 	echo "--- render/props-stability.js (exit $$R2)"; cat test-results/render-props-stability.log; \
 	echo "--- render/rig-parity.js (exit $$R3)"; cat test-results/render-rig-parity.log; \
 	echo "--- render/grain-fold.js (exit $$R4)"; cat test-results/render-grain-fold.log; \
 	echo "--- render/backdrop-clip.js (exit $$R5)"; cat test-results/render-backdrop-clip.log; \
-	[ $$R1 -eq 0 ] && [ $$R2 -eq 0 ] && [ $$R3 -eq 0 ] && [ $$R4 -eq 0 ] && [ $$R5 -eq 0 ]
+	echo "--- render/shoggoth-parity.js (exit $$R6)"; cat test-results/render-shoggoth-parity.log; \
+	[ $$R1 -eq 0 ] && [ $$R2 -eq 0 ] && [ $$R3 -eq 0 ] && [ $$R4 -eq 0 ] && [ $$R5 -eq 0 ] && [ $$R6 -eq 0 ]
 	@echo "$(GREEN)✓ Render tests passed$(NC)"
 
 # Levels - compile the floor/scenario JSON (levels/*.json, written by the
@@ -212,21 +215,6 @@ check-props:
 	python3 tools/gen_props.py --check
 	@echo "$(GREEN)✓ Props valid and up to date$(NC)"
 
-
-# Pose fixture - tests/fixtures/pose_plan.txt is GENERATED from the JS
-# posePlan() (web/robot-core.js) and is what the Rust port
-# (src/render/pose.rs) is tested against by `cargo test`
-# (matches_the_js_pose_plan). TypeScript on Bun (the tooling policy), so it is
-# NOT in `make verify` (cargo + python only): `check-pose` = "the JS still
-# says what the fixture says" runs with `check-render`, which needs Bun anyway.
-# Changing a pose = edit BOTH implementations, `make gen-pose`, `cargo test`.
-gen-pose:
-	bun tools/gen_pose_fixture.ts
-
-check-pose:
-	@echo "$(YELLOW)Checking the pose fixture against web/robot-core.js...$(NC)"
-	bun tools/gen_pose_fixture.ts --check
-	@echo "$(GREEN)✓ Pose fixture current$(NC)"
 
 # Loading-screen title - the neon OPEN/MIAMI SVG inlined into index.html,
 # generated from src/render/title.rs's title glyphs. Python 3 stdlib only.

@@ -34,7 +34,7 @@ pub const OP_ARGS: [usize; OP_COUNT] = [
     5,  // 14 POSTFX
     4,  // 15 PIX_BEGIN
     2,  // 16 PIX_END
-    6,  // 17 PORTRAIT
+    18, // 17 PORTRAIT
     5,  // 18 GUN_PICKUP
     6,  // 19 PIX_BLIT
     16, // 20 DRIVE

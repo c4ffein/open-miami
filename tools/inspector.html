@@ -116,7 +116,9 @@
 </div>
 
 <script type="module">
-import { createRenderer, bakeSprite, PALETTES, POSES, WEAPONS } from "../web/robot-core.js";
+import { createRenderer, bakeSprite, PALETTES, WEAPONS } from "../web/robot-core.js";
+// Poses come from the ENGINE (the wasm): one implementation, src/render/pose.rs.
+import { POSES, poseFor } from "./engine-pose.js";
 import { createShoggothRenderer, bakeShoggoth, MASK_OFF_SECS, SPHERE_TESS, DEFAULT_TESS } from "../web/shoggoth-core.js";
 
 /* ---------- URL params: which character, and its initial setup ---------- */
@@ -287,14 +289,15 @@ function frame(){
     sprite = bakeShoggoth({ ...common, heading:state.facingDeg*Math.PI/180, size:gameCanvas.width });
   } else {
     // LEFT: live 3D orbit view (two-axis rotation of the camera)
+    const plan = poseFor(state.pose, t, state.weapon);
     orbit.render({
-      pose:state.pose, color:state.color, weapon:state.weapon, px:state.px, time:t,
+      plan, color:state.color, weapon:state.weapon, px:state.px,
       orbit:{yaw:state.yaw, pitch:state.pitch},
     });
     // RIGHT: the in-game baked sprite (top-down, one-axis facing) via bakeSprite()
     sprite = bakeSprite({
-      pose:state.pose, color:state.color, weapon:state.weapon, facingDeg:state.facingDeg,
-      px:state.px, time:t, size:gameCanvas.width,
+      plan, color:state.color, weapon:state.weapon, facingDeg:state.facingDeg,
+      px:state.px, size:gameCanvas.width,
     });
   }
   gameCtx.clearRect(0,0,gameCanvas.width,gameCanvas.height);
@@ -308,7 +311,8 @@ frame();
 // expose a couple hooks for the screenshot harness / manual poking
 window.__editor = {
   set:(patch)=>{ Object.assign(state,patch); refreshPose(); refreshColor(); refreshWeapon(); refreshPhase(); refreshTrigger(); refreshTess(); },
-  bake:(o)=>bakeSprite(o),
+  // `o.pose` / `o.time` are resolved to a plan by the engine
+  bake:(o)=>bakeSprite({ ...o, plan: o.plan || poseFor(o.pose || "idle", o.time || 0, o.weapon || "fist") }),
   bakeShoggoth:(o)=>bakeShoggoth(o),
   state,
 };

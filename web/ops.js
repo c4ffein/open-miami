@@ -34,7 +34,7 @@ const TABLE = [
   ["POSTFX", 5],       // 14  kind t r g b
   ["PIX_BEGIN", 4],    // 15  px w h smooth
   ["PIX_END", 2],      // 16  x y
-  ["PORTRAIT", 6],     // 17  colorIdx x y sizePx time mode
+  ["PORTRAIT", 18],    // 17  colorIdx x y sizePx time mode + 11 pose scalars + flags
   ["GUN_PICKUP", 5],   // 18  weaponIdx x y angle sizePx
   ["PIX_BLIT", 6],     // 19  sx sy sw sh x y
   ["DRIVE", 16],       // 20  w h t glitch split px dim o0..o8

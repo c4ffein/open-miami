@@ -47,7 +47,7 @@ pub mod op {
     pub const POSTFX: f32 = 14.0; // kind t r g b  (full-screen post pass over the whole frame)
     pub const PIX_BEGIN: f32 = 15.0; // px w h smooth  (open a pixel-art group: rasterize at art resolution)
     pub const PIX_END: f32 = 16.0; // x y  (close it: nearest-upscale the group at (x, y))
-    pub const PORTRAIT: f32 = 17.0; // colorIdx x y sizePx time mode  (slow-orbit 3D robot portrait, pixel-art; mode 0 = bust, 1 = headshot)
+    pub const PORTRAIT: f32 = 17.0; // colorIdx x y sizePx time mode + 11 pose scalars + flags  (3D robot portrait baked once in that pose, pixel-art; mode 0 = bust, 1 = headshot)
     pub const GUN_PICKUP: f32 = 18.0; // weaponIdx x y angle sizePx  (3D weapon lying flat, pixel-art)
     pub const PIX_BLIT: f32 = 19.0; // sx sy sw sh x y  (re-draw a rect of the LAST-closed pixel group at (x, y))
     pub const DRIVE: f32 = 20.0; // w h t glitch split px dim o0..o8  (the synthwave drive backdrop, one full-shader pass)
@@ -412,12 +412,11 @@ impl Graphics {
         size_px: f32,
         pose: &crate::render::pose::Pose,
     ) {
-        let flags = pose.shoot as u32 | (pose.headless as u32) << 1;
         self.push(&[
             op::ROBOT,
             color_idx as f32,
             weapon_idx as f32,
-            flags as f32,
+            pose.flags() as f32,
             center.x,
             center.y,
             angle,
@@ -458,6 +457,12 @@ impl Graphics {
             time,
             mode as f32,
         ]);
+        // The pose the renderer BAKES the portrait in (once per colour x mode,
+        // on first sight): numbers from the engine, like every robot pose —
+        // the JS holds no animation logic. 11 scalars + flags.
+        let pose = crate::render::pose::portrait_pose();
+        self.push(&pose.scalars());
+        self.push(&[pose.flags() as f32]);
     }
 
     /// Draw a weapon LYING ON THE GROUND as its actual 3D model (the same

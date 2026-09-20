@@ -1,24 +1,25 @@
 //! `pose_plan`: what a robot's body does at time `t` — the joint scalars the
 //! rig turns into a skeleton. Pure numbers: no `Graphics`, no browser.
 //!
-//! ROADMAP (docs/ARCHITECTURE.md "Roadmap"): the Rust port of `posePlan()` in
-//! web/robot-core.js. The GAME animates through THIS (R2: `render::robots`
-//! calls it and the `ROBOT` op carries the scalars); the JS copy only serves
-//! the tools and the portrait bake until R3. The two are held together by `tests/fixtures/pose_plan.txt` — generated from the
-//! JS (`make gen-pose`), compared against this implementation by
-//! `matches_the_js_pose_plan` below — bit-exact, so switching the game over
-//! changed nothing on screen by construction.
+//! THE ONE pose implementation (roadmap: docs/ARCHITECTURE.md). It began as a
+//! port of `posePlan()` in web/robot-core.js, proven BIT-EXACT against it
+//! (`tests/fixtures/pose_plan.txt`, generated from that JS: 9,504 scalars,
+//! max difference 0) before anything switched over; then the game's `ROBOT`
+//! op carried these scalars (R2); then the JS function was DELETED (R3): the
+//! portrait bake receives its pose in the `PORTRAIT` op and the tool pages
+//! ask the wasm (`src/wasm_api.rs` <- tools/engine-pose.js). The fixture
+//! stays as a frozen golden record (`matches_the_golden_record`).
 //!
-//! What moving it here buys: the finisher choreography lives in ONE language.
-//! The JS hard-codes "the kick lands at 0.28 s" / "stomps at 0.14 and 0.34 s"
+//! What living here buys: the finisher choreography is in ONE language. The
+//! JS hard-coded "the kick lands at 0.28 s" / "stomps at 0.14 and 0.34 s"
 //! next to a comment pointing at `FinisherKind::impacts`; here those times
 //! ARE `FinisherKind::impacts()`, and tests can say "the foot is fully
 //! extended at the impact".
 
 use crate::components::FinisherKind;
 
-/// The poses, in the order of `POSES` in web/robot-core.js and of
-/// `render::robots::ROBOT_POSE_*` (the engine's own pose indices — they no
+/// The poses, in the order of `render::robots::ROBOT_POSE_*` (and of
+/// `pose_names()`, what the tool pages list) (the engine's own pose indices — they no
 /// longer cross the boundary: the `ROBOT` op carries the pose as numbers).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoseKind {
@@ -58,7 +59,7 @@ impl PoseKind {
             .unwrap_or(PoseKind::Idle)
     }
 
-    /// The pose's name in web/robot-core.js (`POSES`).
+    /// The pose's name (the tools' buttons and `?pose=` URL values).
     pub fn name(self) -> &'static str {
         match self {
             PoseKind::Idle => "idle",
@@ -129,8 +130,15 @@ impl Pose {
         "elbow",
     ];
 
+    /// How the two booleans cross the boundary: bit 0 = the gun hand aims
+    /// (`shoot`), bit 1 = skip the head cubes (`headless`) — unpacked by
+    /// `planFromScalars` in web/robot-core.js (`flag_bits_match_the_js`).
+    pub fn flags(&self) -> u32 {
+        self.shoot as u32 | (self.headless as u32) << 1
+    }
+
     /// The eleven scalars, in the order they cross the wasm boundary (the tail
-    /// of the `ROBOT` op).
+    /// of the `ROBOT` / `PORTRAIT` ops).
     pub fn scalars(&self) -> [f32; 11] {
         [
             self.bob,
@@ -146,6 +154,15 @@ impl Pose {
             self.elbow,
         ]
     }
+}
+
+/// The frozen clock of the dialogue PORTRAIT bake: a neutral idle frame.
+pub const PORTRAIT_BAKE_TIME: f32 = 0.35;
+
+/// The pose every dialogue portrait is baked in (once per colour x framing):
+/// unarmed, at ease, frozen at [`PORTRAIT_BAKE_TIME`].
+pub fn portrait_pose() -> Pose {
+    pose_plan(PoseKind::Idle, PORTRAIT_BAKE_TIME, true)
 }
 
 /// Smoothstep of `v` clamped to 0..1.
@@ -403,12 +420,13 @@ mod tests {
         assert_eq!(names, Pose::SCALAR_NAMES);
     }
 
-    /// The parity proof: every row of the fixture — generated FROM
-    /// web/robot-core.js's `posePlan` by `make gen-pose` — against this port.
-    /// f32 rounding of f64 math on both sides; `sin` / `exp` may differ in
-    /// the last bit between V8 and Rust's libm, hence the tolerance.
+    /// The golden record: every row of the fixture — generated from the JS
+    /// `posePlan` this module replaced, before it was deleted — must keep
+    /// coming out of `pose_plan`. Measured bit-exact when it was recorded; the
+    /// tolerance only absorbs a last-bit `sin` / `exp` difference between
+    /// platforms' libm. A deliberate pose change updates the rows it affects.
     #[test]
-    fn matches_the_js_pose_plan() {
+    fn matches_the_golden_record() {
         let fixture = include_str!("../../tests/fixtures/pose_plan.txt");
         let mut rows = 0;
         for line in fixture
@@ -429,7 +447,7 @@ mod tests {
                 let have = got.scalars()[i];
                 assert!(
                     (have - want).abs() <= 1e-5,
-                    "{} relaxed={relaxed} t={time}: scalar {i} = {have}, the JS says {want}",
+                    "{} relaxed={relaxed} t={time}: scalar {i} = {have}, the golden record says {want}",
                     f[0]
                 );
             }
@@ -438,6 +456,59 @@ mod tests {
             rows += 1;
         }
         assert!(rows > 500, "the fixture looks truncated: {rows} rows");
+    }
+
+    /// The two booleans travel as flag bits; `planFromScalars` must read the
+    /// bits `Pose::flags` writes.
+    #[test]
+    fn flag_bits_match_the_js() {
+        let shoot = Pose {
+            shoot: true,
+            ..Pose::NEUTRAL
+        };
+        let headless = Pose {
+            headless: true,
+            ..Pose::NEUTRAL
+        };
+        assert_eq!(
+            (Pose::NEUTRAL.flags(), shoot.flags(), headless.flags()),
+            (0, 1, 2)
+        );
+        let js = include_str!("../../web/robot-core.js");
+        assert!(
+            js.contains("plan.shoot = (flags & 1) !== 0;"),
+            "shoot is not bit 0"
+        );
+        assert!(
+            js.contains("plan.headless = (flags & 2) !== 0;"),
+            "headless is not bit 1"
+        );
+    }
+
+    /// There is ONE pose implementation: no JS file may grow another.
+    #[test]
+    fn no_js_pose_logic_is_left() {
+        for (name, src) in [
+            ("web/robot-core.js", include_str!("../../web/robot-core.js")),
+            ("web/renderer.js", include_str!("../../web/renderer.js")),
+            (
+                "tools/engine-pose.js",
+                include_str!("../../tools/engine-pose.js"),
+            ),
+        ] {
+            assert!(
+                !src.contains("function posePlan"),
+                "{name} defines a posePlan again"
+            );
+            assert!(
+                !src.contains("walkPhase"),
+                "{name} animates a walk cycle in JS"
+            );
+        }
+        assert_eq!(
+            portrait_pose(),
+            pose_plan(PoseKind::Idle, PORTRAIT_BAKE_TIME, true)
+        );
     }
 
     /// What the port is FOR: the choreography and the gameplay timing are one

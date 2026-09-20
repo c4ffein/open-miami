@@ -106,6 +106,64 @@ void main(){
 `;
 
 /* ---------- unit sphere geometry (positions + normals) ---------- */
+/* THE INSTANCED PATH (what the game runs). The boss is nothing but spheres —
+   every one goes through `_sphere(model, colour, accent, id, emission)` — so a
+   sphere is 20 floats of per-INSTANCE data (the model's three rows + two
+   colour vec4s) and the whole boss is TWO instanced draws instead of one draw
+   + six uniform uploads per sphere (a few dozen of them): the body with the
+   depth test on, then the mask assembly with it off, in submission order —
+   exactly what the per-sphere path does. Same fragment shader, same maths:
+     - gl_Position = uVP * (model * pos): the reference multiplies VP * model in
+       JS doubles and uploads the product; here the GPU does it in float32, so
+       the two agree to a few edge texels (tests/e2e/render/shoggoth-parity.js);
+     - the "normal matrix" is the model's upper 3x3 AS IS (M4.normalFromModel —
+       not an inverse-transpose; the look was tuned with it), so it is derived
+       from the same three rows.
+   7 vertex attributes in all (WebGL 1 guarantees 8). Needs
+   ANGLE_instanced_arrays; without it the per-sphere REFERENCE path serves, and
+   `pipe.instanced = false` forces it (the parity page's A/B switch). */
+const SHOG_INST_FLOATS = 20;
+const instVS = `
+attribute vec3 aPos;
+attribute vec3 aNormal;
+attribute vec4 aM0;     // model row 0
+attribute vec4 aM1;     // model row 1
+attribute vec4 aM2;     // model row 2
+attribute vec4 aColId;  // rgb colour, a = part id
+attribute vec4 aAccEm;  // rgb accent, a = emission
+uniform mat4 uVP;
+varying vec3 vN;
+varying vec4 vColId;
+varying vec4 vAccEm;
+void main(){
+  vec4 p = vec4(aPos, 1.0);
+  vec4 w = vec4(dot(aM0, p), dot(aM1, p), dot(aM2, p), 1.0);
+  gl_Position = uVP * w;
+  vN = normalize(vec3(dot(aM0.xyz, aNormal), dot(aM1.xyz, aNormal), dot(aM2.xyz, aNormal)));
+  vColId = aColId;
+  vAccEm = aAccEm;
+}
+`;
+const instFS = `
+precision mediump float;
+varying vec3 vN;
+varying vec4 vColId;
+varying vec4 vAccEm;
+void main(){
+  vec3 uColor = vColId.rgb;
+  vec3 uAccent = vAccEm.rgb;
+  float uEmis = vAccEm.a;
+  vec3 L = normalize(vec3(0.35, 0.9, 0.45));
+  float ndl = max(dot(normalize(vN), L), 0.0);
+  float amb = 0.35;
+  float shade = amb + ndl*0.75;
+  vec3 base = mix(uColor, uAccent, clamp(vN.y*0.5+0.2,0.0,1.0)*0.5);
+  vec3 col = base * shade;
+  col = mix(col, uColor, uEmis);
+  gl_FragColor = vec4(col, vColId.a);
+}
+`;
+
 function makeSphere(stacks, slices){
   const p=[], n=[];
   function vert(i,j){
@@ -198,6 +256,24 @@ class ShoggothPipeline extends SpritePipeline {
     this.setTess(tess || DEFAULT_TESS);
     this.simState = null; this.simT = -1;
     this.VP = null;
+
+    // the instanced path (see instVS): on by default when the extension is there
+    this.instExt = gl.getExtension("ANGLE_instanced_arrays");
+    this.instanced = !!this.instExt;
+    if(this.instExt){
+      this.instProg = this._program(instVS, instFS);
+      this.iLoc = {
+        aPos: gl.getAttribLocation(this.instProg,"aPos"),
+        aNormal: gl.getAttribLocation(this.instProg,"aNormal"),
+        inst: ["aM0","aM1","aM2","aColId","aAccEm"].map(n => gl.getAttribLocation(this.instProg, n)),
+        uVP: gl.getUniformLocation(this.instProg,"uVP"),
+      };
+      this.instBuf = gl.createBuffer();
+      this.instData = new Float32Array(128 * SHOG_INST_FLOATS); // grows on demand
+    }
+    this._collect = false; // true while a frame's spheres are being queued
+    this._instN = 0;       // spheres queued so far
+    this._maskAt = -1;     // index of the first mask sphere (drawn depth-OFF)
   }
 
   /* switch the sphere tessellation preset ("low" | "high"); rebuilds the
@@ -227,6 +303,7 @@ class ShoggothPipeline extends SpritePipeline {
 
   /* ---------- draw one sphere instance ---------- */
   _sphere(model, colBody, accent, id, emis){
+    if(this._collect){ this._queue(model, colBody, accent, id, emis); return; }
     const gl=this.gl, sLoc=this.sLoc;
     gl.uniformMatrix4fv(sLoc.uMVP, false, M4.mul(this.VP, model));
     gl.uniformMatrix3fv(sLoc.uNormalMat, false, M4.normalFromModel(model));
@@ -235,6 +312,55 @@ class ShoggothPipeline extends SpritePipeline {
     gl.uniform1f(sLoc.uId, id);
     gl.uniform1f(sLoc.uEmis, emis||0.0);
     gl.drawArrays(gl.TRIANGLES, 0, this.sphere.count);
+  }
+  /* one sphere -> SHOG_INST_FLOATS instance floats (M4 is column-major: row r
+     of the model is m[r], m[4+r], m[8+r], m[12+r]) */
+  _queue(model, colBody, accent, id, emis){
+    if((this._instN + 1) * SHOG_INST_FLOATS > this.instData.length){
+      const grown = new Float32Array(this.instData.length * 2);
+      grown.set(this.instData);
+      this.instData = grown;
+    }
+    const I = this.instData, o = (this._instN++) * SHOG_INST_FLOATS, m = model;
+    I[o]    = m[0]; I[o+1]  = m[4]; I[o+2]  = m[8];  I[o+3]  = m[12];
+    I[o+4]  = m[1]; I[o+5]  = m[5]; I[o+6]  = m[9];  I[o+7]  = m[13];
+    I[o+8]  = m[2]; I[o+9]  = m[6]; I[o+10] = m[10]; I[o+11] = m[14];
+    I[o+12] = colBody[0]; I[o+13] = colBody[1]; I[o+14] = colBody[2]; I[o+15] = id;
+    I[o+16] = accent[0];  I[o+17] = accent[1];  I[o+18] = accent[2];  I[o+19] = emis || 0.0;
+  }
+  /* draw everything queued: the body (depth test ON), then the mask assembly
+     (OFF, submission order) — what the per-sphere path does one draw at a time.
+     Leaves every instanced attribute disabled with its divisor back at 0: a
+     divisor is per attribute INDEX, global to the context — leaking one would
+     poison whichever program the renderer binds next. */
+  _flushInstances(){
+    const gl=this.gl, ext=this.instExt, L=this.iLoc, n=this._instN;
+    const split = this._maskAt < 0 ? n : this._maskAt;
+    if(n > 0){
+      const stride = SHOG_INST_FLOATS * 4;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, this.instData.subarray(0, n * SHOG_INST_FLOATS), gl.DYNAMIC_DRAW);
+      const range = (first, count) => {
+        if(count <= 0) return;
+        for(let k=0;k<5;k++){
+          gl.enableVertexAttribArray(L.inst[k]);
+          gl.vertexAttribPointer(L.inst[k], 4, gl.FLOAT, false, stride, first*stride + k*16);
+          ext.vertexAttribDivisorANGLE(L.inst[k], 1);
+        }
+        ext.drawArraysInstancedANGLE(gl.TRIANGLES, 0, this.sphere.count, count);
+      };
+      range(0, split);
+      if(n > split){
+        gl.disable(gl.DEPTH_TEST);
+        range(split, n - split);
+        gl.enable(gl.DEPTH_TEST);
+      }
+      for(let k=0;k<5;k++){
+        ext.vertexAttribDivisorANGLE(L.inst[k], 0);
+        gl.disableVertexAttribArray(L.inst[k]);
+      }
+    }
+    this._instN = 0; this._maskAt = -1;
   }
   _blob(root, x,y,z, rx,ry,rz, col,acc, id, emis){
     const m = M4.mul(root, M4.mul(M4.translate(x,y,z), M4.scale(rx,ry,rz)));
@@ -419,9 +545,11 @@ class ShoggothPipeline extends SpritePipeline {
       // Draw the mask with depth-test OFF so (a) in masked/look-up it is ALWAYS in
       // front of the mass/lobes at every heading, and (b) during the transition the
       // shards stay visible as they spiral inward and are consumed.
-      gl.disable(gl.DEPTH_TEST);
+      // (instanced path: the mask spheres are queued after this mark and
+      // `_flushInstances` draws them depth-OFF, in the same order)
+      if(this._collect) this._maskAt = this._instN; else gl.disable(gl.DEPTH_TEST);
       this._drawMaskAssembly(mroot, time, reveal);
-      gl.enable(gl.DEPTH_TEST);
+      if(!this._collect) gl.enable(gl.DEPTH_TEST);
     }
   }
 
@@ -448,11 +576,23 @@ class ShoggothPipeline extends SpritePipeline {
     this.VP = opts.orbit
       ? orbitVP(opts.orbit.yaw||0, opts.orbit.pitch||0, opts.orbit.halfV||CAM_HALF_V, CAM_CENTER)
       : bossVP(opts.halfV);
-    gl.useProgram(this.sceneProg);
-    gl.bindBuffer(gl.ARRAY_BUFFER,this.posBuf); gl.enableVertexAttribArray(this.sLoc.aPos); gl.vertexAttribPointer(this.sLoc.aPos,3,gl.FLOAT,false,0,0);
-    gl.bindBuffer(gl.ARRAY_BUFFER,this.nrmBuf); gl.enableVertexAttribArray(this.sLoc.aNormal); gl.vertexAttribPointer(this.sLoc.aNormal,3,gl.FLOAT,false,0,0);
-    this._renderShoggoth(time, reveal, heading, lookUp, drift);
-    gl.disableVertexAttribArray(this.sLoc.aNormal);
+    const inst = this.instanced && !!this.instExt;
+    const loc = inst ? this.iLoc : this.sLoc;
+    gl.useProgram(inst ? this.instProg : this.sceneProg);
+    gl.bindBuffer(gl.ARRAY_BUFFER,this.posBuf); gl.enableVertexAttribArray(loc.aPos); gl.vertexAttribPointer(loc.aPos,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,this.nrmBuf); gl.enableVertexAttribArray(loc.aNormal); gl.vertexAttribPointer(loc.aNormal,3,gl.FLOAT,false,0,0);
+    if(inst){
+      // queue every sphere, then TWO instanced draws (body, then mask)
+      gl.uniformMatrix4fv(this.iLoc.uVP, false, this.VP);
+      this._collect = true; this._instN = 0; this._maskAt = -1;
+      this._renderShoggoth(time, reveal, heading, lookUp, drift);
+      this._collect = false;
+      this._flushInstances();
+    } else {
+      // the REFERENCE: one draw + six uniform uploads per sphere
+      this._renderShoggoth(time, reveal, heading, lookUp, drift);
+    }
+    gl.disableVertexAttribArray(loc.aNormal);
 
     // pass 2: post -> target rect (or the whole canvas)
     this._postPass(target, opts.px, !!opts.transparent);

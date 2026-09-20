@@ -176,17 +176,14 @@ Where each character stands:
 
 Planned order (each step lands with its test FIRST):
 
-1. **Robots: port `posePlan` to Rust** — IN PROGRESS, in three sub-steps:
+1. **Robots: port `posePlan` to Rust** — DONE, in three sub-steps:
    - **R1 (DONE): the port + the proof, no runtime change.**
-     `src/render/pose.rs` (`pose_plan`, `PoseKind`, `Pose`) reproduces the
-     JS BIT-EXACTLY: `tests/fixtures/pose_plan.txt` is generated FROM
-     `posePlan()` (`make gen-pose`, `tools/gen_pose_fixture.ts` on Bun: every
-     pose x relaxed x 54 times) and `matches_the_js_pose_plan` compares all
-     9,504 scalars (measured: max difference 0). `make check-pose` (run by
-     `check-render`) fails if the JS drifts from the fixture. The kick /
-     stomp timing now DERIVES from `FinisherKind::impacts()` and is tested
-     ("the foot is fully extended on the impact", "each stomp lands on its
-     impact"). Until R3 the pose logic exists TWICE: edit both, regenerate.
+     `src/render/pose.rs` (`pose_plan`, `PoseKind`, `Pose`) reproduced the JS
+     BIT-EXACTLY: `tests/fixtures/pose_plan.txt` was generated FROM
+     `posePlan()` (every pose x relaxed x 54 times) and all 9,504 scalars
+     compared (measured: max difference 0). The kick / stomp timing DERIVES
+     from `FinisherKind::impacts()` and is tested ("the foot is fully
+     extended on the impact", "each stomp lands on its impact").
    - **R2 (DONE): the game uses it.** The `ROBOT` op is `colorIdx weaponIdx
      flags x y angle sizePx` + the 11 pose scalars (18 args; flags bit 0 =
      the gun hand aims, bit 1 = headless): `render/robots.rs` calls
@@ -195,26 +192,53 @@ Planned order (each step lands with its test FIRST):
      animation any more, and renderer.js lost its `ROBOT_POSES` table. The
      scalar ORDER is one JS list, `POSE_SCALARS` (web/robot-core.js), which
      drives both the renderer's unpack and the fixture's columns; Rust is
-     held to it by `scalar_order_matches_the_js`, and `make check-pose`
-     proves `planFromScalars` inverts it. Since R1 proved the two pose
+     held to it by `scalar_order_matches_the_js` (+ `flag_bits_match_the_js`). Since R1 proved the two pose
      functions bit-identical, the game's robots are unchanged by
      construction. JS `posePlan()` now only serves the tools + the bakes.
-   - **R3: delete the JS copy** — needs roadmap step 4 (the portrait bake,
-     `tools/inspector.html` and `tools/rig-parity.html` call `posePlan`
-     with no wasm loaded); the fixture then stays as the golden record.
+   - **R3 (DONE): the JS copy is DELETED — one pose implementation.**
+     `posePlan()` and the `POSES` name list are gone from web/robot-core.js,
+     whose `render()` / `batchDraw()` / `bakeSprite()` now REQUIRE
+     `opts.plan`. The three places that had no engine got one: the portrait
+     bake receives its pose IN the `PORTRAIT` op (`portrait_pose()`, 11
+     scalars + flags — renderer.js stays wasm-free, as the render-tests
+     harness needs), and `tools/inspector.html` + `tools/rig-parity.html`
+     load the wasm through `tools/engine-pose.js` and call the exports of
+     `src/wasm_api.rs` (`pose_names`, `pose_plan_scalars` — the ENGINE also
+     decides "unarmed = at ease", so that rule is not duplicated either).
+     Loading the wasm does not start the game (`start` is explicit). The
+     fixture is now a FROZEN golden record (`matches_the_golden_record`); its
+     generator and `make gen-pose` / `check-pose` are gone with the JS they
+     read. Pins: `scalar_order_matches_the_js`, `flag_bits_match_the_js`,
+     `no_js_pose_logic_is_left`. Cost accepted: pose look-dev in the
+     inspector needs `make build-wasm` (so do the tools at all).
 
    Payoff: choreography in one language, host-testable.
-2. **Boss: instanced spheres, still in JS** — one per-instance float block
-   per sphere, one instanced draw (as the robots' GPU rig did). Worth it on
-   its own (a few dozen draws -> one) and it CREATES the seam. Needs a
-   pixel-parity page first, like `tools/rig-parity.html`: the boss has no
-   pixel test today, and its animation was tuned by eye.
+2. **Boss: instanced spheres, still in JS** — DONE. Every sphere the boss
+   draws went through one choke point (`_sphere(model, colour, accent, id,
+   emission)`), so a sphere became 20 per-INSTANCE floats (the model's three
+   rows + two colour vec4s) and a frame became TWO instanced draws: the body
+   with the depth test on, then the mask assembly with it OFF, in submission
+   order — the mask is drawn depth-off on purpose, so ONE draw was not an
+   option. MEASURED on the parity page: the per-sphere path submitted up to
+   227 draws a frame (124 on average, six uniform uploads each); the
+   instanced path submits 2. The original path stays as the REFERENCE
+   (`pipe.instanced = false`; also the fallback without
+   ANGLE_instanced_arrays), exactly like the robots' CPU rig. The "normal
+   matrix" is the model's upper 3x3 as is (not an inverse-transpose — the
+   look was tuned with it), derived in the shader from the same rows.
+   `tools/shoggoth-parity.html` + `tests/e2e/render/shoggoth-parity.js` (in
+   `make check-render`) render the whole mask-off arc x clocks / headings +
+   the orbit camera, the wander drift and the fine tessellation through
+   both, at the game's tile settings: 45 frames, 0 differing pixels; they
+   also assert <= 2 scene draws, no GL error and NO instancing divisor left
+   on the context. Mutation-tested (a shifted sphere; the mask drawn WITH
+   depth) — both fail it. This is the boss's FIRST pixel test, and the seam
+   step 3 needs: the instance list is what Rust will fill.
 3. **Boss: move the sphere placement to Rust**, filling that instance list
    (`render/shoggoth.rs`). Removes the mirrored `MASK_OFF_SECS` /
    `BOSS_MASK_OFF_SECS`.
-4. **Tools load the wasm for poses.** `tools/inspector.html` and
-   `tools/rig-parity.html` import the JS pipelines with no engine today;
-   they would call an exported `pose_plan(...)` instead.
+4. **Tools load the wasm for poses** — DONE for the robots (see R3); the
+   boss's inspector view follows when step 3 moves its placement to Rust.
 
 Costs accepted knowingly: look-dev on a pose goes from edit + refresh to a
 wasm rebuild (15 s release today; a dev-profile build should cut that — not
