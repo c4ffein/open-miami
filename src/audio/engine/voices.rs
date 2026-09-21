@@ -12,7 +12,7 @@ impl AudioEngine {
     /// A realistic ricochet: mostly NOISE through a moving high-Q bandpass
     /// whining down 3 kHz → 600 Hz over 250–400 ms, plus a faint pitched
     /// sweep under it. Quiet.
-    pub(super) fn real_ricochet(&self, out: &web_sys::AudioNode, t: f64, j: f64, peak: f64) {
+    pub(super) fn real_ricochet(&self, out: &webaudio::AudioNode, t: f64, j: f64, peak: f64) {
         let dur = 0.25 + self.rand() * 0.15;
         let f0 = 3000.0 * j * self.jit(0.08);
         let f1 = 600.0 * j * self.jit(0.1);
@@ -49,7 +49,7 @@ impl AudioEngine {
     /// bright gun-bus reverb via the voice's wet send.
     pub(super) fn real_shot(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         t: f64,
         j: f64,
         level: f64,
@@ -187,7 +187,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn noise_plateau(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         start: f64,
         peak: f64,
         plateau: f64,
@@ -232,7 +232,7 @@ impl AudioEngine {
         let _ = src.connect_with_audio_node(&filt);
         let _ = filt.connect_with_audio_node(&gain);
         let _ = gain.connect_with_audio_node(out);
-        let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
+        let sched: &webaudio::AudioScheduledSourceNode = src.as_ref();
         let offset = self.rand() * (NOISE_SECONDS - 0.05);
         let _ = src.start_with_when_and_grain_offset(start, offset);
         let _ = sched.stop_with_when(t4 + 0.02);
@@ -241,7 +241,7 @@ impl AudioEngine {
     /// A real pump reload starting at `t`: ~1 s of multiple bright 2–8 kHz
     /// clacks and slide scrapes — pump back (two clacks), forward (two),
     /// the shell / lifter — with essentially no low content.
-    pub(super) fn real_pump(&self, out: &web_sys::AudioNode, t: f64, j: f64) {
+    pub(super) fn real_pump(&self, out: &webaudio::AudioNode, t: f64, j: f64) {
         // (offset, scrape level, clack base Hz, clack level) — kept ~4 dB
         // under the shot's tail so the rack sits inside it, like a real one.
         let events: [(f64, f64, f64, f64); 6] = [
@@ -288,7 +288,7 @@ impl AudioEngine {
     /// A gain node feeding `out` directly plus, through 2–3 short DelayNodes
     /// (6–25 ms, lowpassed at ~3 kHz, decaying), the early reflections of
     /// whatever is played into it. Falls back to `out` if nodes fail.
-    pub(super) fn crack_bus(&self, out: &web_sys::AudioNode) -> web_sys::AudioNode {
+    pub(super) fn crack_bus(&self, out: &webaudio::AudioNode) -> webaudio::AudioNode {
         let ctx = match self.bctx() {
             Some(c) => c,
             None => return out.clone(),
@@ -321,7 +321,7 @@ impl AudioEngine {
                 let _ = gain.connect_with_audio_node(out);
             }
         }
-        AsRef::<web_sys::AudioNode>::as_ref(&bus).clone()
+        AsRef::<webaudio::AudioNode>::as_ref(&bus).clone()
     }
 
     /// `t` jittered by ±`a` seconds (layer de-synchronisation).
@@ -337,7 +337,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn noise_lfo(
         &self,
-        param: &web_sys::AudioParam,
+        param: &webaudio::AudioParam,
         fc: f64,
         q: f64,
         amount: f64,
@@ -374,7 +374,7 @@ impl AudioEngine {
         // Optional hard clamp of the modulation to ±`clamp` (in the param's
         // units, |clamp| ≤ 1) through a WaveShaper, so an AM peak can never
         // push a gain past 1 + clamp.
-        let mut tail: web_sys::AudioNode = AsRef::<web_sys::AudioNode>::as_ref(&gain).clone();
+        let mut tail: webaudio::AudioNode = AsRef::<webaudio::AudioNode>::as_ref(&gain).clone();
         if let Some(c) = clamp {
             if let Ok(shaper) = ctx.create_wave_shaper() {
                 let c = c.clamp(0.01, 1.0) as f32;
@@ -384,12 +384,12 @@ impl AudioEngine {
                     .collect();
                 shaper.set_curve_opt_f32_slice(Some(curve.as_mut_slice()));
                 if tail.connect_with_audio_node(&shaper).is_ok() {
-                    tail = AsRef::<web_sys::AudioNode>::as_ref(&shaper).clone();
+                    tail = AsRef::<webaudio::AudioNode>::as_ref(&shaper).clone();
                 }
             }
         }
         let _ = tail.connect_with_audio_param(param);
-        let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
+        let sched: &webaudio::AudioScheduledSourceNode = src.as_ref();
         let offset = self.rand() * (NOISE_SECONDS - 0.05);
         let _ = src.start_with_when_and_grain_offset(start, offset);
         let _ = sched.stop_with_when(start + dur + 0.02);
@@ -403,11 +403,11 @@ impl AudioEngine {
     /// the stage's gain never exceeds 1.5. `depth` ≤ 0 returns `out` itself.
     pub(super) fn roughen(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         start: f64,
         dur: f64,
         depth: f64,
-    ) -> web_sys::AudioNode {
+    ) -> webaudio::AudioNode {
         if depth <= 0.0 {
             return out.clone();
         }
@@ -425,7 +425,7 @@ impl AudioEngine {
         }
         let fc = 40.0 + self.rand() * 50.0;
         self.noise_lfo(&stage.gain(), fc, 0.7, 0.45 * depth, start, dur, Some(0.5));
-        AsRef::<web_sys::AudioNode>::as_ref(&stage).clone()
+        AsRef::<webaudio::AudioNode>::as_ref(&stage).clone()
     }
 
     /// FM growl: a low sine (`f`, 55–70 Hz) whose frequency is modulated by
@@ -435,7 +435,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn growl(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         t: f64,
         f: f64,
         rate: f64,
@@ -473,7 +473,7 @@ impl AudioEngine {
         let _ = car.connect_with_audio_node(&gain);
         let _ = gain.connect_with_audio_node(out);
         for o in [&car, &modo] {
-            let sched: &web_sys::AudioScheduledSourceNode = o.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = o.as_ref();
             let _ = sched.start_with_when(t);
             let _ = sched.stop_with_when(end + 0.02);
         }
@@ -482,7 +482,7 @@ impl AudioEngine {
     /// A short, heavy body impact without a clean glide: three close low
     /// components (≈ 61 / 88 / 126 Hz) roughened, plus an FM growl and a
     /// low-passed thump — the "wham" of a big object being hit.
-    pub(super) fn wham(&self, out: &web_sys::AudioNode, t: f64, peak: f64) {
+    pub(super) fn wham(&self, out: &webaudio::AudioNode, t: f64, peak: f64) {
         const C: [(f64, f64); 3] = [(88.0, 1.0), (126.0, 0.5), (61.0, 0.7)];
         for (f, lvl) in C {
             let f = f * self.jit(0.05);
@@ -526,7 +526,7 @@ impl AudioEngine {
 
     /// A sub-millisecond broadband click — the pressure step that fronts every
     /// shot and impact. Without it nothing sounds "hit".
-    pub(super) fn click(&self, out: &web_sys::AudioNode, t: f64, peak: f64) {
+    pub(super) fn click(&self, out: &webaudio::AudioNode, t: f64, peak: f64) {
         self.noise_env(
             out,
             t,
@@ -542,7 +542,7 @@ impl AudioEngine {
 
     /// A short mechanical tick — a slide, bolt, pump or a loose part: a
     /// tiny click plus three fast-decaying inharmonic partials.
-    pub(super) fn tick(&self, out: &web_sys::AudioNode, t: f64, base: f64, peak: f64) {
+    pub(super) fn tick(&self, out: &webaudio::AudioNode, t: f64, base: f64, peak: f64) {
         const R: [f64; 3] = [1.0, 1.83, 2.94];
         self.noise_env(
             out,
@@ -565,7 +565,7 @@ impl AudioEngine {
 
     /// A brass casing hitting the floor: two bright, tiny pings that bounce
     /// twice with decreasing height.
-    pub(super) fn tinkle(&self, out: &web_sys::AudioNode, t: f64, peak: f64) {
+    pub(super) fn tinkle(&self, out: &webaudio::AudioNode, t: f64, peak: f64) {
         const R: [f64; 3] = [1.0, 1.42, 2.31];
         let base = 3900.0 * self.jit(0.08);
         let mut at = t;
@@ -592,7 +592,7 @@ impl AudioEngine {
     /// A short vocal grunt: a rough sawtooth (with a detuned partner for
     /// hoarseness) whose pitch sags, through a swept, resonant bandpass so it
     /// reads as an "uh!" rather than a buzz.
-    pub(super) fn grunt(&self, out: &web_sys::AudioNode, t: f64, f: f64, dur: f64, peak: f64) {
+    pub(super) fn grunt(&self, out: &webaudio::AudioNode, t: f64, f: f64, dur: f64, peak: f64) {
         let ctx = match self.bctx() {
             Some(c) => c,
             None => return,
@@ -607,7 +607,7 @@ impl AudioEngine {
         let _ = ff.exponential_ramp_to_value_at_time(420.0, t + dur);
         let _ = filt.q().set_value_at_time(2.5, t);
         let _ = filt.connect_with_audio_node(out);
-        let fo: &web_sys::AudioNode = filt.as_ref();
+        let fo: &webaudio::AudioNode = filt.as_ref();
         self.tone_out(
             fo,
             f,
@@ -636,13 +636,13 @@ impl AudioEngine {
     /// of one sound connect to the returned node so they clip and reverberate
     /// *together* like a single recorded event. Falls back to the plain SFX
     /// output when the bus is unavailable; `None` only if there is no context.
-    pub(super) fn voice(&self, wet: f64, drive: f64) -> Option<web_sys::AudioNode> {
+    pub(super) fn voice(&self, wet: f64, drive: f64) -> Option<webaudio::AudioNode> {
         self.voice_route(wet, drive, false)
     }
 
     /// A voice on the gun / hit bus path: no compressor / limiter (crest
     /// preserved) and the longer, brighter reverb.
-    pub(super) fn voice_real(&self, wet: f64, drive: f64) -> Option<web_sys::AudioNode> {
+    pub(super) fn voice_real(&self, wet: f64, drive: f64) -> Option<webaudio::AudioNode> {
         self.voice_route(wet, drive, true)
     }
 
@@ -660,18 +660,19 @@ impl AudioEngine {
         wet: f64,
         drive: f64,
         real: bool,
-    ) -> Option<web_sys::AudioNode> {
+    ) -> Option<webaudio::AudioNode> {
         if let Some(r) = self.render.borrow().as_ref() {
             let input = r.ctx.create_gain().ok()?;
             let _ = input.gain().set_value_at_time(1.0, 0.0);
-            let mut post: web_sys::AudioNode = AsRef::<web_sys::AudioNode>::as_ref(&input).clone();
+            let mut post: webaudio::AudioNode =
+                AsRef::<webaudio::AudioNode>::as_ref(&input).clone();
             if drive > 1.0 {
                 if let Some(clip) = Self::soft_clipper(&r.ctx, &post, (1.0 / drive) as f32) {
                     post = clip;
                 }
             }
             let _ = post.connect_with_audio_node(&r.sink);
-            return Some(AsRef::<web_sys::AudioNode>::as_ref(&input).clone());
+            return Some(AsRef::<webaudio::AudioNode>::as_ref(&input).clone());
         }
         let (ctx, bus) = match (&self.ctx, &self.sfx) {
             (Some(c), Some(b)) => (c, b),
@@ -684,7 +685,7 @@ impl AudioEngine {
         };
         let input = ctx.create_gain().ok()?;
         let _ = input.gain().set_value_at_time(1.0, 0.0);
-        let mut post: web_sys::AudioNode = AsRef::<web_sys::AudioNode>::as_ref(&input).clone();
+        let mut post: webaudio::AudioNode = AsRef::<webaudio::AudioNode>::as_ref(&input).clone();
         if drive > 1.0 {
             if let Some(clip) = Self::soft_clipper(ctx, &post, (1.0 / drive) as f32) {
                 post = clip;
@@ -698,7 +699,7 @@ impl AudioEngine {
                 let _ = send.connect_with_audio_node(reverb_in);
             }
         }
-        Some(AsRef::<web_sys::AudioNode>::as_ref(&input).clone())
+        Some(AsRef::<webaudio::AudioNode>::as_ref(&input).clone())
     }
 
     /// Insert a soft clipper after `from`: a 0.5 pre-gain into a WaveShaper
@@ -710,9 +711,9 @@ impl AudioEngine {
     /// tail of the chain, or `None` (chain untouched) if a node fails.
     pub(super) fn soft_clipper(
         ctx: &BaseAudioContext,
-        from: &web_sys::AudioNode,
+        from: &webaudio::AudioNode,
         knee: f32,
-    ) -> Option<web_sys::AudioNode> {
+    ) -> Option<webaudio::AudioNode> {
         let pre = ctx.create_gain().ok()?;
         let _ = pre.gain().set_value_at_time(0.5, 0.0);
         let shaper = ctx.create_wave_shaper().ok()?;
@@ -721,7 +722,7 @@ impl AudioEngine {
         shaper.set_oversample(OverSampleType::N2x);
         from.connect_with_audio_node(&pre).ok()?;
         pre.connect_with_audio_node(&shaper).ok()?;
-        Some(AsRef::<web_sys::AudioNode>::as_ref(&shaper).clone())
+        Some(AsRef::<webaudio::AudioNode>::as_ref(&shaper).clone())
     }
 
     /// The soft-clip transfer curve for [`Self::soft_clipper`], sampled over an
@@ -780,7 +781,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn tone_out(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         f0: f64,
         f1: f64,
         start: f64,
@@ -809,7 +810,7 @@ impl AudioEngine {
         let _ = g.exponential_ramp_to_value_at_time(0.0001, start + dur);
         let _ = osc.connect_with_audio_node(&gain);
         let _ = gain.connect_with_audio_node(out);
-        let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+        let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
         let _ = sched.start_with_when(start);
         let _ = sched.stop_with_when(start + dur + 0.02);
     }
@@ -850,7 +851,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn noise_out(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         start: f64,
         dur: f64,
         peak: f64,
@@ -866,7 +867,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn noise_env(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         start: f64,
         attack: f64,
         dur: f64,
@@ -888,7 +889,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn noise_full(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         start: f64,
         attack: f64,
         dur: f64,
@@ -933,7 +934,7 @@ impl AudioEngine {
         let _ = src.connect_with_audio_node(&filt);
         let _ = filt.connect_with_audio_node(&gain);
         let _ = gain.connect_with_audio_node(out);
-        let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
+        let sched: &webaudio::AudioScheduledSourceNode = src.as_ref();
         // Random read offset into the (looped) noise buffer.
         let offset = self.rand() * (NOISE_SECONDS - 0.05);
         let _ = src.start_with_when_and_grain_offset(start, offset);
@@ -949,7 +950,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn swell_tone(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         f0: f64,
         f1: f64,
         start: f64,
@@ -986,7 +987,7 @@ impl AudioEngine {
         let _ = g.exponential_ramp_to_value_at_time(0.0001, end);
         let _ = osc.connect_with_audio_node(&gain);
         let _ = gain.connect_with_audio_node(out);
-        let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+        let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
         let _ = sched.start_with_when(start);
         let _ = sched.stop_with_when(end + 0.02);
     }

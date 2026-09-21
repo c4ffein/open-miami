@@ -54,7 +54,7 @@ impl AudioEngine {
         // Bus limiter after the compressor: fills the wall (waveform
         // kurtosis ~2–2.5, crest ~8–12 dB on a single shot, ~12–15 dB on a
         // hit) without brick-walling.
-        let mut last: web_sys::AudioNode = AsRef::<web_sys::AudioNode>::as_ref(&comp).clone();
+        let mut last: webaudio::AudioNode = AsRef::<webaudio::AudioNode>::as_ref(&comp).clone();
         if let Ok(lim) = ctx.create_dynamics_compressor() {
             let _ = lim.threshold().set_value_at_time(-6.0, 0.0);
             let _ = lim.knee().set_value_at_time(0.0, 0.0);
@@ -62,7 +62,7 @@ impl AudioEngine {
             let _ = lim.attack().set_value_at_time(0.001, 0.0);
             let _ = lim.release().set_value_at_time(0.10, 0.0);
             if last.connect_with_audio_node(&lim).is_ok() {
-                last = AsRef::<web_sys::AudioNode>::as_ref(&lim).clone();
+                last = AsRef::<webaudio::AudioNode>::as_ref(&lim).clone();
             }
         }
         // Both paths sum here, into the bus soft-clipper.
@@ -74,7 +74,7 @@ impl AudioEngine {
         // −1 dB / 4:1 safety so a crack keeps its 18–22 dB crest.
         let dry_real = ctx.create_gain().ok()?;
         let _ = dry_real.gain().set_value_at_time(1.0, 0.0);
-        let real_sum: web_sys::AudioNode = match ctx.create_dynamics_compressor() {
+        let real_sum: webaudio::AudioNode = match ctx.create_dynamics_compressor() {
             Ok(safe) => {
                 let _ = safe.threshold().set_value_at_time(-1.0, 0.0);
                 let _ = safe.knee().set_value_at_time(1.0, 0.0);
@@ -82,9 +82,9 @@ impl AudioEngine {
                 let _ = safe.attack().set_value_at_time(0.0005, 0.0);
                 let _ = safe.release().set_value_at_time(0.08, 0.0);
                 let _ = safe.connect_with_audio_node(&sum);
-                AsRef::<web_sys::AudioNode>::as_ref(&safe).clone()
+                AsRef::<webaudio::AudioNode>::as_ref(&safe).clone()
             }
-            Err(_) => AsRef::<web_sys::AudioNode>::as_ref(&sum).clone(),
+            Err(_) => AsRef::<webaudio::AudioNode>::as_ref(&sum).clone(),
         };
         let _ = dry_real.connect_with_audio_node(&real_sum);
 
@@ -92,7 +92,7 @@ impl AudioEngine {
         // of simultaneous shots instead of letting the DAC hard-clip.
         let trim = ctx.create_gain().ok()?;
         let _ = trim.gain().set_value_at_time(SFX_GAIN as f32, 0.0);
-        last = AsRef::<web_sys::AudioNode>::as_ref(&sum).clone();
+        last = AsRef::<webaudio::AudioNode>::as_ref(&sum).clone();
         if let Some(clip) = Self::soft_clipper(ctx, &last, 0.7) {
             last = clip;
         }

@@ -421,7 +421,7 @@ impl AudioEngine {
     /// low-passed thump, `len` seconds, at `level`.
     pub(super) fn hollow_knock(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         t: f64,
         hz: f64,
         len: f64,
@@ -456,7 +456,7 @@ impl AudioEngine {
     /// The METAL02 model through [`Self::sms_play`].
     pub(super) fn sms_metal02(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         t0: f64,
         gain: f32,
         pitch: f32,
@@ -502,7 +502,7 @@ impl AudioEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn sms_play<const N: usize>(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         t0: f64,
         hop: f32,
         partials: &[(f32, [f32; N])],
@@ -543,7 +543,7 @@ impl AudioEngine {
             let _ = g.gain().set_value_curve_at_time(&mut curve, t0, dur);
             let _ = osc.connect_with_audio_node(&g);
             let _ = g.connect_with_audio_node(out);
-            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
             let _ = sched.start_with_when(t0);
             let _ = sched.stop_with_when(t0 + dur + 0.02);
         }
@@ -576,7 +576,7 @@ impl AudioEngine {
             let _ = src.connect_with_audio_node(&filt);
             let _ = filt.connect_with_audio_node(&g);
             let _ = g.connect_with_audio_node(out);
-            let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = src.as_ref();
             let offset = self.rand() * (NOISE_SECONDS - 0.05);
             let _ = src.start_with_when_and_grain_offset(t0, offset);
             let _ = sched.stop_with_when(t0 + dur + 0.02);
@@ -602,7 +602,7 @@ impl AudioEngine {
 
     /// Loose-part rattle debris between `from` and `to`: a handful of small
     /// bright ticks and micro-clicks at random times, quiet.
-    pub(super) fn rattle(&self, out: &web_sys::AudioNode, from: f64, to: f64, level: f64) {
+    pub(super) fn rattle(&self, out: &webaudio::AudioNode, from: f64, to: f64, level: f64) {
         let span = (to - from).max(0.02);
         let n = 3 + (self.rand() * 4.0) as usize;
         for _ in 0..n {
@@ -844,7 +844,7 @@ impl AudioEngine {
         };
         let _ = master.gain().set_value_at_time(1.0, t);
         let _ = master.connect_with_audio_node(&out);
-        let mout: &web_sys::AudioNode = master.as_ref();
+        let mout: &webaudio::AudioNode = master.as_ref();
         // The shared dark lowpass for the buzzy layers.
         let lp = match ctx.create_biquad_filter() {
             Ok(f) => f,
@@ -854,10 +854,10 @@ impl AudioEngine {
         let _ = lp.frequency().set_value_at_time(230.0, t);
         let _ = lp.q().set_value_at_time(0.9, t);
         let _ = lp.connect_with_audio_node(mout);
-        let lout: &web_sys::AudioNode = lp.as_ref();
+        let lout: &webaudio::AudioNode = lp.as_ref();
         // One flat-gain oscillator layer; returns the oscillator so the
         // LFOs can be wired to the pitched ones.
-        let layer = |wave: OscillatorType, f: f64, level: f64, dest: &web_sys::AudioNode| {
+        let layer = |wave: OscillatorType, f: f64, level: f64, dest: &webaudio::AudioNode| {
             let (osc, g) = match (ctx.create_oscillator(), ctx.create_gain()) {
                 (Ok(o), Ok(g)) => (o, g),
                 _ => return None,
@@ -867,7 +867,7 @@ impl AudioEngine {
             let _ = g.gain().set_value_at_time(level as f32, t);
             let _ = osc.connect_with_audio_node(&g);
             let _ = g.connect_with_audio_node(dest);
-            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
             let _ = sched.start_with_when(t);
             let _ = sched.stop_with_when(t + len);
             Some(osc)
@@ -911,7 +911,7 @@ impl AudioEngine {
             for o in [&saw1, &saw2].into_iter().flatten() {
                 let _ = depth.connect_with_audio_param(&o.frequency());
             }
-            let sched: &web_sys::AudioScheduledSourceNode = lfo.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = lfo.as_ref();
             let _ = sched.start_with_when(t);
             let _ = sched.stop_with_when(t + len);
         }
@@ -926,7 +926,7 @@ impl AudioEngine {
                 .set_value_at_time((0.12 * self.jit(0.3)) as f32, t);
             let _ = lfo.connect_with_audio_node(&depth);
             let _ = depth.connect_with_audio_param(&master.gain());
-            let sched: &web_sys::AudioScheduledSourceNode = lfo.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = lfo.as_ref();
             let _ = sched.start_with_when(t);
             let _ = sched.stop_with_when(t + len);
         }
@@ -974,7 +974,7 @@ impl AudioEngine {
         let g = gain.gain();
         let _ = g.set_value_at_time(0.0001, now);
         let _ = g.linear_ramp_to_value_at_time(ENGINE_IDLE_GAIN as f32, now + 0.6);
-        let _ = src.connect_with_audio_node(AsRef::<web_sys::AudioNode>::as_ref(&gain));
+        let _ = src.connect_with_audio_node(AsRef::<webaudio::AudioNode>::as_ref(&gain));
         let _ = gain.connect_with_audio_node(&out);
         // Start inside the loop region, skipping the warm-up head.
         let _ = src.start_with_when_and_grain_offset(now, ENGINE_LOOP_WARMUP);
@@ -992,7 +992,7 @@ impl AudioEngine {
         let _ = g.cancel_scheduled_values(now);
         let _ = g.set_value_at_time(g.value(), now);
         let _ = g.linear_ramp_to_value_at_time(0.0001, now + 0.15);
-        let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
+        let sched: &webaudio::AudioScheduledSourceNode = src.as_ref();
         let _ = sched.stop_with_when(now + 0.2);
     }
 

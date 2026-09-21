@@ -387,7 +387,7 @@ impl AudioEngine {
         if !wired {
             return false;
         }
-        let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
+        let sched: &webaudio::AudioScheduledSourceNode = src.as_ref();
         let _ = sched.start_with_when(t);
         true
     }
@@ -461,7 +461,7 @@ impl AudioEngine {
     /// envelope gain. The classic wide, hissing darksynth stack.
     pub(super) fn supersaw_voice(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         f: f64,
         t: f64,
         dur: f64,
@@ -502,7 +502,7 @@ impl AudioEngine {
             let _ = mix.gain().set_value_at_time(level as f32, t);
             let _ = osc.connect_with_audio_node(&mix);
             let _ = mix.connect_with_audio_node(&env);
-            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
             let _ = sched.start_with_when(t);
             let _ = sched.stop_with_when(t + dur + 0.02);
         }
@@ -514,7 +514,7 @@ impl AudioEngine {
     /// the decay stays clean while the tone growls).
     pub(super) fn driven_voice(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         f: f64,
         t: f64,
         dur: f64,
@@ -532,7 +532,7 @@ impl AudioEngine {
         // Hot into the clipper: the shaper's curve covers ±2, so ~1.6 of
         // summed oscillator drive saturates hard without folding.
         let _ = drive.gain().set_value_at_time(1.6, t);
-        let drive_node: web_sys::AudioNode = AsRef::<web_sys::AudioNode>::as_ref(&drive).clone();
+        let drive_node: webaudio::AudioNode = AsRef::<webaudio::AudioNode>::as_ref(&drive).clone();
         let post = Self::soft_clipper(&ctx, &drive_node, 0.25).unwrap_or(drive_node);
         let g = env.gain();
         let _ = g.set_value_at_time(0.0001, t);
@@ -555,7 +555,7 @@ impl AudioEngine {
             let _ = mix.gain().set_value_at_time(level, t);
             let _ = osc.connect_with_audio_node(&mix);
             let _ = mix.connect_with_audio_node(&drive);
-            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
             let _ = sched.start_with_when(t);
             let _ = sched.stop_with_when(t + dur + 0.02);
         }
@@ -566,7 +566,7 @@ impl AudioEngine {
     /// a breathing chord bed that sits under the bus's own bar sweep.
     pub(super) fn darkpad_voice(
         &self,
-        out: &web_sys::AudioNode,
+        out: &webaudio::AudioNode,
         f: f64,
         t: f64,
         dur: f64,
@@ -601,7 +601,7 @@ impl AudioEngine {
             let detuned = f * 2f64.powf(cents / 1200.0);
             let _ = osc.frequency().set_value_at_time(detuned as f32, t);
             let _ = osc.connect_with_audio_node(&filt);
-            let sched: &web_sys::AudioScheduledSourceNode = osc.as_ref();
+            let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
             let _ = sched.start_with_when(t);
             let _ = sched.stop_with_when(t + dur + 0.02);
         }

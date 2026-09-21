@@ -135,6 +135,7 @@ pub(crate) const ENGINE_IDLE_GAIN: f64 = 0.055;
 
 /// Every pre-renderable one-shot SFX voice. The discriminant indexes
 /// `BakedSfx::bufs`.
+#[cfg_attr(test, derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SfxKind {
     AttackGun,

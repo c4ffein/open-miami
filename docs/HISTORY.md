@@ -204,6 +204,23 @@ turned up one real mismatch and two non-bugs worth remembering:
   the shader's void test is `p.x < -0.5 * uPx` (a cell whose centre lands
   exactly half a cell outside still samples). By design; the test allows it.
 
+## The audio seam, and how "the shipped code did not change" was proven (2026-09)
+
+The WebAudio engine got host tests without a rewrite: `audio/engine/webaudio.rs`
+re-exports the `web_sys` types on wasm and is a recording mock under `cargo
+test` (docs/ARCHITECTURE.md, "Known debt"). Since the wasm side is nothing but
+re-exports, the claim "the game's audio code is unchanged" was checked on the
+ARTIFACT: the release `.wasm` before / after is the same size (1,536,284
+bytes) and differs in SIX bytes — the line numbers of six panic locations in
+`audio/engine.rs`, each shifted by exactly the number of lines added above
+them (+7). A release build is reproducible here (same hash twice), which is
+what makes the comparison meaningful. Worth reusing for any refactor that
+claims to be type-level only. First run of the new tests: all 20 SFX and
+every note voice of every song were CLEAN — all three failures met
+while writing them were wrong expectations (`set_value_at_time(v, 0.0)` is
+the engine's static-value idiom; a make-up gain of 98 is legitimate; a
+pre-transient may lead `SFX_LEAD` by under a millisecond).
+
 ## Removed tooling (so nobody looks for it)
 
 - `build-wasm.sh` — replaced by `make build-wasm` (installs the wasm32 target

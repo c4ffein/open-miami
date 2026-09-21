@@ -57,7 +57,7 @@ impl AudioEngine {
         let _ = src.connect_with_audio_node(&out);
         // The buffer carries the live path's SFX_LEAD of silence at its
         // head, so "as soon as possible" keeps the same transient safety.
-        let sched: &web_sys::AudioScheduledSourceNode = src.as_ref();
+        let sched: &webaudio::AudioScheduledSourceNode = src.as_ref();
         let _ = sched.start();
         true
     }
@@ -173,7 +173,7 @@ impl AudioEngine {
             Ok(o) => o,
             Err(_) => return false,
         };
-        let sink = AsRef::<web_sys::AudioNode>::as_ref(&off.destination()).clone();
+        let sink = AsRef::<webaudio::AudioNode>::as_ref(&off.destination()).clone();
         *self.render.borrow_mut() = Some(OfflineRender {
             ctx: AsRef::<BaseAudioContext>::as_ref(&off).clone(),
             sink,
@@ -232,7 +232,7 @@ impl AudioEngine {
             Ok(o) => o,
             Err(_) => return false,
         };
-        let sink = AsRef::<web_sys::AudioNode>::as_ref(&off.destination()).clone();
+        let sink = AsRef::<webaudio::AudioNode>::as_ref(&off.destination()).clone();
         *self.render.borrow_mut() = Some(OfflineRender {
             ctx: AsRef::<BaseAudioContext>::as_ref(&off).clone(),
             sink,

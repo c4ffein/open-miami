@@ -193,7 +193,12 @@
   viz,viz/*,url,perf}.rs`, `editor_ui.rs`, `input.rs`. AUDIO: `audio/`
   (music is CODE: one song = one Rust file in `audio/songs/`, authoring API
   `audio/compose.rs`, docs/MUSIC_CODE.md; the WebAudio engine =
-  `audio/engine.rs` + `audio/engine/*`, wasm-only, not host-tested)
+  `audio/engine.rs` + `audio/engine/*`: it ships on wasm only but NEVER names
+  `web_sys` directly — every Web Audio type goes through
+  `audio/engine/webaudio.rs` (`web_sys` re-exports on wasm, a RECORDING MOCK
+  under `cargo test`), so the voice builders run natively and
+  `audio/engine/tests.rs` checks the graphs they build; a new `web_sys` call
+  = the same method on the mock, the native build fails until it exists)
 - `web/` = the hand-written JS runtime (plain ES modules, no build step in
   dev): `renderer.js` + `renderer/{shaders,text,backgrounds,postfx}.js`,
   `ops.js`, `robot-core.js`,

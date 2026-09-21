@@ -49,6 +49,15 @@ Conventions: fixed `dt` (deterministic), no wall-clock time, no randomness
 without a seed; a new draw path gets a `render_stream` test before a browser
 one.
 
+**The audio engine** (`src/audio/engine/tests.rs`): the real WebAudio voice
+builders run natively against the recording mock of
+`src/audio/engine/webaudio.rs`, and the node graph of every SFX bake / note
+voice / live one-shot is checked for the defects Web Audio reports by
+THROWING — which the engine swallows by design: exponential ramps to <= 0,
+unstopped oscillators, orphan nodes, events in the past, a sound longer than
+its bake length. Mutation-tested (5 recipe breaks, 5 caught). A new sound is
+covered the day it is added to `SFX_KINDS` / a song.
+
 **Refactoring the AI?** `tests/ai_fingerprint.rs` is an `#[ignore]`d tool, not
 a check: it hashes every enemy's state on every tick of every floor. Run it
 before and after (`cargo test --test ai_fingerprint -- --ignored --nocapture
@@ -125,6 +134,6 @@ the headless simulation proves those thousands of times faster.
 
 ## Not covered (known)
 
-The WebAudio engine (`src/audio/engine*`) builds live node graphs and has no
-host tests;
+How the audio SOUNDS, and the engine's async bake plumbing (the node graphs
+themselves are host-tested: `src/audio/engine/tests.rs`);
 `src/app/` (input, menus, `?viz`) is only exercised by the Playwright specs.

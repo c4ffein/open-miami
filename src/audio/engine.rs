@@ -46,12 +46,16 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::closure::Closure;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{
+use webaudio::{
     AudioBuffer, AudioContext, AudioDestinationNode, BaseAudioContext, BiquadFilterNode,
     BiquadFilterType, GainNode, OfflineAudioContext, OscillatorType, OverSampleType,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use webaudio::{Closure, JsValue};
 
 use super::sfx::*;
 use super::songs::Drum::{Hat, Kick, Silent, Snare};
@@ -129,7 +133,10 @@ mod sfx_play;
 #[allow(clippy::excessive_precision, clippy::approx_constant)]
 #[rustfmt::skip]
 mod sms_tables;
+#[cfg(test)]
+mod tests;
 mod voices;
+mod webaudio;
 
 /// A JS promise callback kept alive in [`BakedSfx::pending`].
 type RenderCallback = Closure<dyn FnMut(JsValue)>;
@@ -186,7 +193,7 @@ struct BakedMusic {
 /// (the offline destination) instead of the live bus.
 struct OfflineRender {
     ctx: BaseAudioContext,
-    sink: web_sys::AudioNode,
+    sink: webaudio::AudioNode,
 }
 
 /// The persistent SFX bus. Every one-shot flows in through a per-shot *voice*
@@ -280,7 +287,7 @@ pub struct AudioEngine {
     render: RefCell<Option<OfflineRender>>,
     /// The running title-screen engine-idle loop (source + its gain),
     /// `None` while stopped. See [`Self::start_engine_idle`].
-    engine_idle: RefCell<Option<(web_sys::AudioBufferSourceNode, GainNode)>>,
+    engine_idle: RefCell<Option<(webaudio::AudioBufferSourceNode, GainNode)>>,
 }
 
 impl AudioEngine {
@@ -428,15 +435,15 @@ impl AudioEngine {
     /// pre-render: the offline destination, so a note bakes its dry signal
     /// only — the bus (and its per-bar filter sweep) stays live and is
     /// reapplied at play time by [`Self::play_music_baked`].
-    fn music_out(&self) -> Option<web_sys::AudioNode> {
+    fn music_out(&self) -> Option<webaudio::AudioNode> {
         if let Some(r) = self.render.borrow().as_ref() {
             return Some(r.sink.clone());
         }
         if let Some(bus) = &self.music_bus {
-            Some(AsRef::<web_sys::AudioNode>::as_ref(bus).clone())
+            Some(AsRef::<webaudio::AudioNode>::as_ref(bus).clone())
         } else {
             self.destination()
-                .map(|d| AsRef::<web_sys::AudioNode>::as_ref(&d).clone())
+                .map(|d| AsRef::<webaudio::AudioNode>::as_ref(&d).clone())
         }
     }
 
@@ -446,12 +453,12 @@ impl AudioEngine {
     /// offline pre-render: the offline destination — the duck, like the
     /// bar filter sweep, is live-bus automation and is reapplied at play
     /// time, so baked buffers stay duck-free.
-    fn melodic_out(&self) -> Option<web_sys::AudioNode> {
+    fn melodic_out(&self) -> Option<webaudio::AudioNode> {
         if self.render.borrow().is_some() {
             return self.music_out();
         }
         if let Some(duck) = &self.music_duck {
-            return Some(AsRef::<web_sys::AudioNode>::as_ref(duck).clone());
+            return Some(AsRef::<webaudio::AudioNode>::as_ref(duck).clone());
         }
         self.music_out()
     }
@@ -488,15 +495,15 @@ impl AudioEngine {
     /// pre-render: the offline destination, so the room-voice kinds render
     /// their dry signal (their light room send is pre-wired into `room` and
     /// stays live).
-    fn sfx_out(&self) -> Option<web_sys::AudioNode> {
+    fn sfx_out(&self) -> Option<webaudio::AudioNode> {
         if let Some(r) = self.render.borrow().as_ref() {
             return Some(r.sink.clone());
         }
         if let Some(bus) = &self.sfx {
-            Some(AsRef::<web_sys::AudioNode>::as_ref(&bus.room).clone())
+            Some(AsRef::<webaudio::AudioNode>::as_ref(&bus.room).clone())
         } else {
             self.destination()
-                .map(|d| AsRef::<web_sys::AudioNode>::as_ref(&d).clone())
+                .map(|d| AsRef::<webaudio::AudioNode>::as_ref(&d).clone())
         }
     }
 }

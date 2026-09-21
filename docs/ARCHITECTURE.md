@@ -75,8 +75,8 @@ be checked by pixels.** Keep the app layer thin; do not gate a module
 `cfg(target_arch = "wasm32")` merely because it takes a `&Graphics`.
 
 What genuinely needs the browser, and nothing else should: `input.rs`
-(DOM events), `audio/engine.rs` (WebAudio), `editor_ui.rs` + `app/` (they
-read input), and the `Graphics` surface methods (`new`, `sync_size`,
+(DOM events), `audio/engine.rs` (WebAudio — it still COMPILES natively, against a
+recording mock, for its tests), `editor_ui.rs` + `app/` (they read input), and the `Graphics` surface methods (`new`, `sync_size`,
 `flush`).
 
 ## Inside the app layer
@@ -138,12 +138,21 @@ ships.
   renderer-only tests, before / after each of the three moves. What is left
   in the closure (pixel groups, the static cache, the sprite atlases, the
   primitives) shares the hot state and stays.
-- `audio/engine.rs` + `audio/engine/*` is split by concern but stays
-  browser-only: unlike `Graphics` it is not a recorder — it builds live
-  WebAudio node graphs — so none of the SFX / voice recipes are host-tested
-  (the sequencer, song data and bake specs in `audio/songs.rs` /
-  `compose.rs` / `sfx.rs` are). A recording `AudioGraph` seam would fix
-  that; it is a real design change, not a move.
+- `audio/engine.rs` + `audio/engine/*` builds live WebAudio node graphs, so
+  it SHIPS on wasm only — but it is host-tested through a seam,
+  `audio/engine/webaudio.rs` (what `Graphics::new_headless` is to drawing):
+  the engine names every Web Audio type through it; on wasm they are the
+  `web_sys` types (re-exports — the release `.wasm` is identical to the
+  pre-seam build but for six panic line numbers), under `cargo test` a
+  RECORDING MOCK with the same names and the subset of methods the engine
+  calls. `audio/engine/tests.rs` runs the REAL builders natively — every SFX
+  bake, every note voice of every song, the live buses, live one-shots — and
+  asserts what a recipe can silently break (the engine swallows every Web
+  Audio error by design): an exponential ramp to <= 0 (throws: the envelope
+  is just missing), an oscillator never stopped, a node reaching no
+  destination, an event in the past, a sound longer than its bake length.
+  What stays untested: how it SOUNDS, and the async bake plumbing (promises,
+  the pump) — the mock's offline render never resolves.
 - One mirror is still pinned only in the browser: the robot rig's rotation
   order (`leg()` / `arm()` <-> `rigVS`, held by `rig-parity.js`). Every other
   mirrored constant has a `cargo test` (the DRIVE scene geometry + hash got
@@ -189,9 +198,6 @@ how each move was proven bit-exact: [HISTORY.md](HISTORY.md)):
 Everything the refactor set out to do is done; nothing below is urgent, and
 each item is optional. A new session can start from this list.
 
-1. **Host tests for the WebAudio engine** — needs a recording `AudioGraph`
-   seam (what `Graphics::new_headless` is to drawing). A real design change;
-   worth it only if the SFX / voice recipes start changing often.
-2. **Splitting `update_game`'s orchestration** (input handling, the
+1. **Splitting `update_game`'s orchestration** (input handling, the
    event-to-sound bridge) — app code by nature, reachable only by Playwright,
    so the payoff is readability, not testability. Lowest priority.
