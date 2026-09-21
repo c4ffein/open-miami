@@ -78,6 +78,7 @@ impl AudioEngine {
             SfxKind::PlayerHurt => self.synth_player_hurt(),
             SfxKind::Pickup => self.synth_pickup(),
             SfxKind::Throw => self.synth_throw(),
+            SfxKind::DryFire => self.synth_dry_fire(),
             SfxKind::Death => self.synth_death(),
             SfxKind::LevelClear => self.synth_level_clear(),
             SfxKind::MaskCrack => self.synth_mask_crack(),

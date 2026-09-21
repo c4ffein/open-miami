@@ -129,15 +129,14 @@
   until all three agree
 - MIRRORED ACROSS THE BOUNDARY — edit both or neither (pinned where noted):
   the POSTFX kind table (`Graphics::postfx` doc <-> web/renderer/postfx.js +
-  renderer/shaders.js + the `?viz`
-  EFFECTS list in src/app/viz/effects.rs); the DRIVE scene geometry
-  (`src/drive.rs` tunables <-> `DRIVE_FS` + the palm placement in
-  web/renderer/backgrounds.js `drawDrive`) and its integer hash (`hash01` <-> `driveHash`),
-  PINNED (`the_js_mirror_matches`); the robot index tables
-  (src/render/robots.rs <-> renderer.js `ROBOT_COLORS` / `ROBOT_WEAPONS`);
-  the pose scalar ORDER + flag bits
-  (src/render/pose.rs <-> `POSE_SCALARS` / `planFromScalars`, PINNED); the
-  rig's ROTATION ORDER per joint chain inside web/robot-core.js (`leg()` /
+  renderer/shaders.js + the `?viz` EFFECTS list in src/app/viz/effects.rs);
+  the DRIVE scene geometry (`src/drive.rs` tunables <-> `DRIVE_FS` + the palm
+  placement in web/renderer/backgrounds.js `drawDrive`) and its integer hash
+  (`hash01` <-> `driveHash`), PINNED (`the_js_mirror_matches`); the robot
+  index tables (src/render/robots.rs <-> renderer.js `ROBOT_COLORS` /
+  `ROBOT_WEAPONS`); the pose scalar ORDER + flag bits (src/render/pose.rs
+  <-> `POSE_SCALARS` / `planFromScalars`, PINNED); the rig's ROTATION
+  ORDER per joint chain inside web/robot-core.js (`leg()` /
   `arm()`, the CPU rig = the reference <-> `rigVS`, the GPU rig;
   `tests/e2e/render/rig-parity.js`); `PIX_DEPTH` (stream.rs <->
   renderer.js); the 20-float SPHERE layout (src/render/shoggoth.rs <->
@@ -177,8 +176,9 @@
   way); `initRenderer`'s BATCH CORE stays ONE closure (decision + evidence:
   docs/ARCHITECTURE.md) — only subsystems that own their state are
   factories (`web/renderer/{text,backgrounds,postfx}.js`), and a change
-  there is proven by diffing the `FP` hashes (docs/TESTING.md). MEASURE with `?gpuprobe` BEFORE optimizing a layer;
-  `?perf` + **P** = the CPU trace (viewer: tools/perf.html)
+  there is proven by diffing the `FP` hashes (docs/TESTING.md). MEASURE with
+  `?gpuprobe` BEFORE optimizing a layer; `?perf` + **P** = the CPU trace
+  (viewer: tools/perf.html)
 
 ## Code map (short — the detailed tour is docs/CODEMAP.md; tools + editor: docs/TOOLS.md)
 - `src/lib.rs` is just the module list. SIM: `ecs/`, `components/`,
@@ -192,9 +192,9 @@
   machines. APP (wasm-only): `app.rs` + `app/{game_loop,game_input,
   game_events,world_render,menus,viz,viz/*,url,perf}.rs` (`update_game` =
   a spine of named phases: their ORDER is the behaviour), `editor_ui.rs`,
-  `input.rs`. AUDIO: `audio/` (music is CODE: one song = one Rust file in `audio/songs/`, authoring API
-  `audio/compose.rs`, docs/MUSIC_CODE.md; the WebAudio engine =
-  `audio/engine.rs` + `audio/engine/*`: it ships on wasm only but NEVER names
+  `input.rs`. AUDIO: `audio/` (music is CODE: one song = one Rust file in
+  `audio/songs/`, authoring API `audio/compose.rs`, docs/MUSIC_CODE.md; the
+  WebAudio engine = `audio/engine.rs` + `audio/engine/*`: it ships on wasm only but NEVER names
   `web_sys` directly — every Web Audio type goes through
   `audio/engine/webaudio.rs` (`web_sys` re-exports on wasm, a RECORDING MOCK
   under `cargo test`), so the voice builders run natively and
@@ -202,10 +202,9 @@
   = the same method on the mock, the native build fails until it exists)
 - `web/` = the hand-written JS runtime (plain ES modules, no build step in
   dev): `renderer.js` + `renderer/{shaders,text,backgrounds,postfx}.js`,
-  `ops.js`, `robot-core.js`,
-  `shoggoth-core.js`, `gpu-probe.js`. Root `open_miami.js` / `_bg.wasm` are
-  GENERATED (gitignored). `make bundle` (`bun build`) = DEPLOY ONLY
-  (.github/workflows/wasm-build.yml)
+  `ops.js`, `robot-core.js`, `shoggoth-core.js`, `gpu-probe.js`. Root
+  `open_miami.js` / `_bg.wasm` are GENERATED (gitignored). `make bundle`
+  (`bun build`) = DEPLOY ONLY (.github/workflows/wasm-build.yml)
 - GENERATED RUST — never hand-edit: `src/levels_data.rs` from `levels/*.json`
   (`make gen-levels`; format docs/SCENARIO_FORMAT.md; level INDEX = position
   in `levels/index.json`, `?floor=N` takes the floor ID) and

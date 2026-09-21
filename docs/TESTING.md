@@ -110,7 +110,9 @@ Makefile caps the run at `E2E_TIMEOUT` (180 s — measured: the 3 gameplay
 specs ~32 s + `all-floors.spec.js` ~42 s serially; it skips the audio
 pre-render gate with `?precompute=0`, the gameplay specs keep the real boot
 path) and each render script at `RENDER_TIMEOUT` (180 s — measured:
-`composite-coherence` ~7 s, `props-stability` ~60 s (fixed-sleep bound),
+`composite-coherence` ~7 s, `props-stability` ~37 s (it waits on rendered
+ENGINE FRAMES, never on sleeps — the pattern for any new live-game script:
+tap `window.frameRender`, count, `waitForFunction`),
 `rig-parity` ~5 s, `grain-fold` ~15 s, `backdrop-clip` ~30 s,
 `shoggoth-parity` ~20 s, the three renderer-only ones ~3-6 s; the whole
 target ~85 s). The render scripts run against a `serve.py` the

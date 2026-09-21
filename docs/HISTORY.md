@@ -274,3 +274,15 @@ fingerprint (`tests/ai_fingerprint.rs`).
   reproducible on the dev box even pinned to 2 cores — its cores are faster.
   A failed run now prints its `FAIL` lines as `::error` annotations (readable
   through the public API, unlike the job log) and uploads `test-results/`.
+  FOLLOW-UP: the two waves only kept the old load profile; the script itself
+  was fixed after — `props-stability.js` now waits on rendered ENGINE FRAMES
+  (a counter tapped on `window.frameRender`), never on sleeps. Measured A/B,
+  the script pinned to 2 cores shared with 4 busy loops: the sleeping version
+  reports 2 FALSE failures (a missed click, stale frames — CI's failure); the
+  frame-waiting one passes 16 / 16. Unloaded it is faster (~37 s, was ~60 s).
+  What it does NOT buy: speed under starvation — it took 324 s in that A/B
+  (and ran past a 560 s cap on ONE core with 4 busy loops, still with zero
+  false failures): past `RENDER_TIMEOUT` a starved run now ends as a TIMEOUT,
+  which says "too slow", instead of as pixel failures, which said "broken".
+  Also from that day: a new one-shot, the DRY-FIRE click (`SfxKind::DryFire`,
+  `GameEvent::DryFire` had been emitted silently since the ammo rework).

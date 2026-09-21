@@ -35,7 +35,7 @@ impl GameState {
         const MAX_SFX_PER_KIND: u32 = 3;
         let mut fired = [0u32; 4];
         let mut hits = [0u32; 4];
-        let mut counts = [0u32; 5];
+        let mut counts = [0u32; 6];
         let slot = |t: crate::components::WeaponType| match t {
             crate::components::WeaponType::Pistol => 0,
             crate::components::WeaponType::MachineGun => 1,
@@ -104,7 +104,10 @@ impl GameState {
                     }
                 }
                 GameEvent::DryFire => {
-                    // TODO: no dry-fire click in the audio engine yet.
+                    if counts[5] < MAX_SFX_PER_KIND {
+                        counts[5] += 1;
+                        self.audio.play_dry_fire();
+                    }
                 }
                 // Gate signals: their companion events above already
                 // carry the sounds.

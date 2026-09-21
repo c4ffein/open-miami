@@ -8,7 +8,10 @@ the exporter's own (emails, home paths, API keys, scratch paths):
   - the private deploy host and LAN addresses the sessions mention,
   - ISO timestamps — the `?perf` / `?gpuprobe` dumps pasted into a chat carry
     `"timestamp": "...Z"` in their meta, and the exporter deliberately reveals
-    no work-time pattern.
+    no work-time pattern,
+  - wall-clock times in prose ("your pull at HH:MM") — same reason. Durations
+    are written `1.4m` / `37 s` / `6m8s` in these sessions, never `MM:SS`, so
+    a bare 24 h `HH:MM` is a clock.
 
     python3 docs/transcripts/export.py PATH/TO/export_transcript.py SESSION.jsonl \\
         -o docs/transcripts/NAME.json --title "..."
@@ -30,6 +33,7 @@ exporter.REDACTIONS[:0] = [  # first: before the generic patterns can split them
     (re.compile(r"\b(?:[a-z0-9-]+\.)+c4ffein\.io\b"), "[deploy-host]"),
     (re.compile(r"\b(?:192\.168|10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b"), "[lan-ip]"),
     (re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?"), "[timestamp]"),
+    (re.compile(r"(?<![\d:.])(?:[01]\d|2[0-3]):[0-5]\d(?![\d:])"), "[clock]"),
 ]
 sys.argv = [sys.argv[1]] + sys.argv[2:]
 raise SystemExit(exporter.main())

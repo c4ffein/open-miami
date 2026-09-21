@@ -150,6 +150,8 @@ pub(crate) enum SfxKind {
     PlayerHurt,
     Pickup,
     Throw,
+    /// The hammer falling on an empty chamber (`GameEvent::DryFire`).
+    DryFire,
     Death,
     LevelClear,
     MaskCrack,
@@ -167,7 +169,7 @@ pub(crate) enum SfxKind {
 /// All kinds, in pre-render order (the combat sounds first — they are the
 /// expensive ones and the ones a firefight needs early; the car sounds
 /// last — menu / rare-scenario sounds, the lowest priority tier).
-pub(crate) const SFX_KINDS: [SfxKind; 20] = [
+pub(crate) const SFX_KINDS: [SfxKind; 21] = [
     SfxKind::AttackGun,
     SfxKind::AttackMachinegun,
     SfxKind::AttackShotgun,
@@ -180,6 +182,7 @@ pub(crate) const SFX_KINDS: [SfxKind; 20] = [
     SfxKind::PlayerHurt,
     SfxKind::Pickup,
     SfxKind::Throw,
+    SfxKind::DryFire,
     SfxKind::Death,
     SfxKind::LevelClear,
     SfxKind::MaskCrack,
@@ -238,6 +241,9 @@ impl SfxKind {
             SfxKind::PlayerHurt => (SfxRoute::Melee(0.30), 1.6, 0.05),
             SfxKind::Pickup => (SfxRoute::Room, 0.35, 0.0),
             SfxKind::Throw => (SfxRoute::Room, 0.4, 0.0),
+            // Clicks repeat at the weapon's fire cadence while the trigger is
+            // held: a little rate jitter keeps them from sounding stamped.
+            SfxKind::DryFire => (SfxRoute::Room, 0.2, 0.05),
             SfxKind::Death => (SfxRoute::Room, 0.85, 0.0),
             SfxKind::LevelClear => (SfxRoute::Room, 0.6, 0.0),
             SfxKind::MaskCrack => (SfxRoute::Room, 0.55, 0.0),
@@ -266,7 +272,7 @@ impl SfxKind {
 /// voices: the combat sounds (attacks, hits, enemy-down, hurt, pickup,
 /// throw) a first firefight needs — the rare tail (death, level-clear,
 /// mask-crack, elevator) bakes after the music voices instead.
-pub(crate) const SFX_COMBAT_KINDS: usize = 12;
+pub(crate) const SFX_COMBAT_KINDS: usize = 13;
 
 #[cfg(test)]
 mod tests {

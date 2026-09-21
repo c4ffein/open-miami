@@ -89,12 +89,33 @@ const soloBtn = (listY, i) => [PANEL_X + 12 + 32 + 13, listY + 30 + i * 24 + 10]
     // last one, which under a frozen (or rewound) clock is EVERY frame — the
     // canvas would go stale and the diffs would compare stale frames.
     try { localStorage.setItem('om.fps_cap', '0'); } catch (e) {}
+    // Count ENGINE frames (a tap on window.frameRender): every wait below is
+    // "until N more frames were rendered", never a sleep — a software-rendered
+    // frame takes 70 ms alone and several hundred under a loaded CI runner,
+    // where fixed 150 ms sleeps used to miss clicks (docs/HISTORY.md).
+    window.__frames = 0;
+    let real = null;
+    Object.defineProperty(window, 'frameRender', {
+      configurable: true,
+      set(f) { real = f; },
+      get() { return real && function (cmds, text) { window.__frames++; return real(cmds, text); }; },
+    });
   });
-  const held = async (x, y) => {
-    await page.mouse.move(x, y); await page.waitForTimeout(50);
-    await page.mouse.down(); await page.waitForTimeout(150); await page.mouse.up(); await page.waitForTimeout(100);
+  // Wait until `n` more engine frames have been rendered.
+  const frames = async (n) => {
+    const target = (await page.evaluate(() => window.__frames)) + n;
+    await page.waitForFunction((t) => window.__frames >= t, target, { timeout: 30000, polling: 10 });
   };
-  const setTime = async (t) => { await page.evaluate((t) => { window.__fakeT = t; }, t); await page.waitForTimeout(150); };
+  // A click the engine is sure to see: the press is consumed by the first
+  // frame that runs while the button is down (input.rs clears `pressed` at the
+  // end of each frame — two, because the frame in flight when the event lands
+  // may have sampled the input already), the release by the next one.
+  const held = async (x, y) => {
+    await page.mouse.move(x, y); await frames(1);
+    await page.mouse.down(); await frames(2); await page.mouse.up(); await frames(1);
+  };
+  // Two frames: the one in flight may still carry the old clock.
+  const setTime = async (t) => { await page.evaluate((t) => { window.__fakeT = t; }, t); await frames(2); };
   // Grab the preview panel as RGBA into window.__F[name] via a 2D canvas copy
   // of the WebGL canvas, right after a fresh engine frame (same task, so the
   // drawing buffer is intact). Diffs / counts are computed in-page.
@@ -131,7 +152,7 @@ const soloBtn = (listY, i) => [PANEL_X + 12 + 32 + 13, listY + 30 + i * 24 + 10]
   for (const c of CASES) {
     await page.goto(BASE + '/?viz');
     await page.waitForFunction(() => document.getElementById('loading').style.display === 'none', null, { timeout: 30000 });
-    await page.waitForTimeout(300);
+    await frames(3);
     await held(...PROPS_BTN);
     if (c.fam) await held(...FAMILY_BTN(c.fam));
     await held(...tileCenter(c.idx));
@@ -166,7 +187,7 @@ const soloBtn = (listY, i) => [PANEL_X + 12 + 32 + 13, listY + 30 + i * 24 + 10]
   for (const px of [4, 6]) {
     await page.goto(BASE + '/?viz');
     await page.waitForFunction(() => document.getElementById('loading').style.display === 'none', null, { timeout: 30000 });
-    await page.waitForTimeout(300);
+    await frames(3);
     await held(...PROPS_BTN);
     await held(...tileCenter(23));
     for (let i = 1; i < px; i++) await held(...PLUS);

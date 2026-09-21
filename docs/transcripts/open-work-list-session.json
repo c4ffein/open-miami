@@ -1,0 +1,3121 @@
+{
+  "meta": {
+    "title": "Closing the open-work list: CI, splits, pixel tests, factories, the audio seam",
+    "source": "claude-code",
+    "turns": 284,
+    "user_turns": 12,
+    "assistant_turns": 272,
+    "thinking_included": false,
+    "note": "PII-scrubbed export; review before publishing. Not polished on purpose."
+  },
+  "turns": [
+    {
+      "role": "user",
+      "text": "hey! check this project? tell me wdyt?"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I'll take a look around before giving an opinion."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "ls && echo --- && git log --oneline | wc -l && git log --format='%ad'…"
+        },
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/docs/ARCHITECTURE.md"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(time cargo test --quiet 2>&1 | grep -E \"^test result|FAILED|panicked…"
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1,80p README.md && echo ---- && grep -rn \"unsafe\\|\\.unwrap()\\|…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "[scratch]…"
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"unwrap()\" src/systems/ai.rs | head -8; echo ---; grep -n \"cf…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I read the docs and code layout and ran the native tests: 417 pass in about 2 s. Overall this is an unusually disciplined codebase for a solo game, with a few things I'd change.\n\n## What's good\n\n- **The layering gives a real test boundary.** `Graphics` is a recorder with a headless surface, so everything in the sim and render layers tests natively. `tests/render_stream.rs` runs the real `render_world` and `render_hud` on every floor in about 1 s, where the browser round trip costs about 50 s. The layering rules in `CLAUDE.md` all follow from that boundary.\n- **The Rust/JS mirrors are pinned by tests.** The opcode table, the pose scalar order and the sphere layout each have a `cargo test` that parses the other side from disk. The characters roadmap (bit-exact ports, frozen golden records, mutation-tested parity pages) is the most careful part of the project.\n- **No dependencies.** `[dependencies]` is empty. The ECS, A*, WebGL renderer, music sequencer and level editor are all your own code, and the wasm comes to 908 KB.\n- **Performance decisions come with measurements.** Rejected experiments such as `?aa=1`, the texel-snap shader and `?grain=fold` are written down with the reason each was dropped. The \"Known debt\" list in `docs/ARCHITECTURE.md` is candid.\n- **The art direction is a precise rule.** Crunch comes from asset resolution, motion stays continuous, and there is no antialiasing. A rule that specific is what lets code enforce it.\n\n## What I'd push on\n\n- **The README is badly out of date.** It lists a \"checkered floor pattern for visual reference\" and \"three rogue archetypes\". It says nothing about finishers, the boss, the scenario and dialogue system, music written as code, the level editor, or `?viz`.\n- **The simulation's biggest files are the least structured part.** `scenario.rs` is 3,231 lines and `systems/ai.rs` is 2,032; they hold definitions, runtime state, the comms feed and tests together. Both also carry the most `unwrap()` calls in non-test code, and with `panic = \"abort\"` a missed component kills the game.\n- **The ECS is simple, not fast.** Storage is a `HashMap<TypeId, HashMap<Entity, Box<dyn AnyComponent>>>`, which means a hash lookup and a downcast on every component access. That is fine at this entity count, and cloning the whole world for checkpoints is a neat use of it.\n- **`CLAUDE.md` is doing too much.** It says to keep it short, but it has grown into a dense document that carries history as well as rules. \"Roadmap: done\" and the measurement stories belong in `docs/`; the file itself should be rules only.\n- **The untested areas are the ones you already listed.** Post-processing effects, text, and the drive scene have no pixel tests, and the audio engine has no native tests. I agree with your ordering: pixel tests first, then the test pinning the drive scene geometry.\n- **The repo is heavy.** `inspirations/` is 45 MB and `shots/` is 26 MB. `shots/` is gitignored, but I didn't check whether `inspirations/` is tracked.\n\nThe architecture is ahead of the README. I can take item 1 of \"What's next\" (the pixel tests) or rewrite the README."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "Also: CI / Clippy fails... investigate?...   ;   update README?  ;  split these 2 in a smart way?  ;  clean CLAUDE.md, what is history must be in history docs?...   ;   do all the \"what's next\", iteratively?"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cd ~/.claude/projects/-home-dev-workspace-open-miami/memory/ …"
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(gh run list --limit 8 2>&1 | head -12); echo ---; grep -n \"clippy\" -…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat .github/workflows/ci.yml | head -70; echo ---; (make check-clippy…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "rustup toolchain install 1.98.1 --profile minimal --component clippy …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cargo +1.98.1 clippy --lib -- -D warnings 2>&1 | sed -n 1,30p"
+        },
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/src/graphics.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Edit",
+          "target": "~/workspace/open-miami/src/graphics.rs",
+          "edit": {
+            "file": "~/workspace/open-miami/src/graphics.rs",
+            "old": "        for sphere in boss.data.chunks_exact(SPHERE_FLOATS) {",
+            "new": "        for sphere in boss.data.as_chunks::<SPHERE_FLOATS>().0 {"
+          }
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n '`' Makefile | grep echo"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Clippy is fixed in `src/graphics.rs`. I'm fixing the Makefile echo next, then re-running clippy on both toolchains."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -i '54s/`app`/app/' Makefile && sed -n 54p Makefile && grep -rn \"…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "for tc in 1.98.1 stable; do echo \"== $tc\"; cargo +$tc clippy --all-ta…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Clippy is clean on both toolchains. CI also runs tests and the builds on `@stable`, so I'm checking those under 1.98.1 as well."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(cargo +1.98.1 test --quiet 2>&1 | grep -E \"^test result|FAILED|panic…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 80,200p README.md; echo ----INDEX; cat levels/index.json | hea…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"key_\\|Key::\\|\\\"Key\\|\\\"Space\\|\\\"Escape\\|mouse_button\\|\\\"Digit…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -rn '\"1\"\\|\"2\"\\|Digit\\|switch_weapon' src --include=*.rs | grep -…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 47,66p LORE.md; sed -n 119,135p src/components/mod.rs; grep -n…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/README.md"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I'm writing the new README sections now: features, controls and the feature list first, then the stale roadmap."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat > \"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "find assets -type f | head -20; grep -n \"assets/\\|\\.png\\|\\.ogg\\|\\.mp3…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Now the rest of the README: the static-server section and the stale roadmap."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='README.md' s=open(p).read() s=s.replace(\"\"\"is no…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The README is done. Next is `CLAUDE.md`. Before moving anything I'm checking what references it and the ARCHITECTURE roadmap, since tests in this repo parse files from disk."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -rn \"CLAUDE.md\\|ARCHITECTURE.md\\|HISTORY.md\" --include=*.rs --in…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"^## \\|^### \" docs/RENDERING.md docs/TESTING.md; grep -n \"aa=…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/ARCHITECTURE.md' s=open(p).read() a=s.index…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "My grain-fold summary came from memory, and `RENDERING.md` seems to say something different, so I'm checking it before leaving that in the history doc."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 84,100p docs/RENDERING.md; echo ...; sed -n 258,268p docs/REND…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 100,106p docs/RENDERING.md"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/HISTORY.md' s=open(p).read() a=s.index('- *…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -i 's#(roadmap: docs/ARCHITECTURE.md)#(roadmap: docs/HISTORY.md)#…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The history doc is in place. Next I'm rewriting `CLAUDE.md` so that every rule stays and the narrative goes to the docs."
+        },
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/CLAUDE.md"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 52,83p docs/TESTING.md; echo ----; grep -n \"E2E_TIMEOUT\\|RENDE…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Write",
+          "target": "~/workspace/open-miami/CLAUDE.md",
+          "edit": {
+            "file": "~/workspace/open-miami/CLAUDE.md",
+            "new": "## Where things are documented\n- This file = the RULES + a short map, loaded into every session: keep it\n  short, and keep it to what is TRUE NOW. No history here: a finished\n  roadmap, a rejected experiment, a removed tool goes in `docs/HISTORY.md`;\n  detail goes in the page below that owns it — read that page BEFORE working\n  in an area, and update it (not this file) when detail changes:\n  `ARCHITECTURE.md` (the four layers, where code goes, known debt, the\n  characters rule, and \"What's next\" = THE OPEN-WORK LIST a new session\n  starts from) · `RENDERING.md` (every opcode, the why, the GPU\n  measurements) · `PIPELINE.md` (one frame, as a diagram) · `CODEMAP.md`\n  (what lives where) · `TESTING.md` (the suites; where a new test belongs) ·\n  `TOOLS.md` (`?viz`, the level editor, debug mode) · `HISTORY.md` (the\n  evidence behind the rules: what was tried, measured, finished, removed) ·\n  `ECS.md` · `URL_PARAMS.md` · `SCENARIO_FORMAT.md` · `PROPS_FORMAT.md` ·\n  `MUSIC_CODE.md` + `music/`\n\n## Development Constraints\n- NEVER add any additional dependency (`wasm-bindgen` + `web-sys` are the\n  only crates, wasm-only)\n- TOOLING LANGUAGE: NEW tooling (generators, checkers, build / deploy\n  scripts, dev utilities) is written in TYPESCRIPT and run with BUN (already\n  the e2e toolchain; `bun build` is the bundler — no extra dependency). Do\n  NOT add new Python scripts. The existing Python 3 stdlib tools\n  (`tools/gen_levels.py`, `tools/gen_props.py`, `gen-title`, `serve.py`)\n  stay as they are for now — port one only when it needs real work anyway,\n  and keep `make verify` runnable while doing so. A check that can be a\n  Rust host test (`cargo test`, e.g. the opcode-table sync in\n  `src/graphics/stream.rs`) should be one: no toolchain beyond cargo\n- CI installs Rust `@stable`, which can be NEWER than the local toolchain: a\n  clippy lint added upstream breaks CI with no code change. Reproduce with\n  `rustup toolchain install <version>` + `cargo +<version> clippy …`\n\n## Design\n- THE VIBE — \"pixelated assets in a modern engine\", not real pixel art (the\n  Hotline-Miami approach): assets are BAKED at a low art resolution\n  (robots/portraits/guns at their tile px, props at their saved px, the\n  drive at its art grid) and then MOVED SMOOTHLY — rotated, translated,\n  swayed — at native resolution and full frame rate. The crunch comes from\n  the ASSET resolution, never from a screen-space pixel grid: rotation\n  angles and motion are continuous (a baked sprite tilts as a rigid chunky\n  image), animation stays 60 fps, upscaling is NEAREST at real screen pixels\n- THE WHOLE WORLD follows it (`?pixel=N`): the level rasterizes into a\n  world-anchored art-res pixel group and that finished image is what the\n  camera moves / sways / rotates — rigid-pixel-image rotation at the\n  COMPOSITE quad (\"Before\" mode, like the props / portraits), with a bleed\n  margin so tilting never exposes void; NOT rotation inside the group\n  (per-frame re-rasterization = edge crawl)\n- OFF-VIBE, never do: screen-space quantization of motion / rotation /\n  camera; BLURRY downscale (rasterize at art res + NEAREST upscale instead)\n- THE ALIASING IS PART OF THE ART DIRECTION (the HM2 look) — DECIDED, do not\n  re-litigate (the experiments: docs/HISTORY.md): tilted geometry and rotated\n  pixel images keep hard, stair-stepped, all-or-nothing edges. NO\n  ANTIALIASING of any kind: no MSAA (`antialias: false` stays), no\n  sampling-side smoothing, no FXAA. Smoothness lives ONLY in MOTION: the\n  `smooth` composite flag means sub-pixel PLACEMENT (no origin snap), never\n  soft sampling\n- ALL on-screen text is UPPERCASE, enforced STRUCTURALLY:\n  `Graphics::draw_text` ASCII-uppercases every string at the single\n  rendering boundary, so write strings (code literals, level-JSON dialogue /\n  objectives / captions, editor labels) in whatever case reads best at the\n  source; non-ASCII glyphs (`·`, `→`, …) pass through. Consequently the e2e\n  text-arena probes see uppercase: match `'HEALTH:'`, never `'Health:'`\n\n## Layering (docs/ARCHITECTURE.md — read it before adding a module)\n- FOUR LAYERS, one question each: SIM \"what is the state?\" (`ecs`,\n  `systems`, `scenario`, `game`, `sim` — no `Graphics`, no browser), RENDER\n  \"what does the state look like?\" (`render.rs` + `render/*`, `level`,\n  `camera`, the props / drive / ending `draw` code — state READ-ONLY +\n  `&Graphics`), APP \"what happens this frame?\" (`app.rs` + `app/*`,\n  `editor_ui`, `input`, `audio/engine` — wasm-only: input, clock, audio,\n  settings, `&mut GameState`), RENDERER \"commands -> pixels\" (the JS)\n- THE TEST for render code: a function from state to draw commands — reads\n  NO input, MUTATES nothing, calls NO browser API. If it passes, it goes in\n  the render layer, takes plain arguments / a view struct\n  (`render::world::WorldView`, `render::hud::HudView` — an in-game frame is\n  exactly those two) and gets a native stream test. So: render code never\n  samples input (the app passes `player_firing: bool`, `cursor: Vec2`) and\n  never advances a timer (the kill flash / spark expiry count down in\n  `GameState::render_world`, the app-side wrapper). Immediate-mode UI (a\n  button = draw + click test in one call: menus, `?viz`, `editor_ui`) is\n  legitimately APP code\n- WHY: it is the test boundary — render-layer code verifies in ~1 s under\n  `cargo test`, app-layer code needs a ~50 s browser round trip. Keep the\n  app layer thin\n- CHARACTERS: Rust computes poses (numbers), GLSL evaluates rigs, JS only\n  ferries — NEVER add character animation to JS\n  (`no_js_pose_logic_is_left`, `no_js_boss_animation_is_left`). Robots:\n  `pose_plan` in src/render/pose.rs is THE ONE pose implementation (kick /\n  stomp timing derived from `FinisherKind::impacts()`); the `ROBOT` and\n  `PORTRAIT` ops carry its 11 scalars + flags, web/robot-core.js REQUIRES\n  `opts.plan`. Boss: `boss_spheres` in src/render/shoggoth.rs places every\n  sphere and runs the wander behaviour; it crosses as a run of `SPHERE` ops\n  closed by `SHOGGOTH x y sizePx maskAt`, and web/shoggoth-core.js only\n  draws that list. KEEP the boss's f32-rounded matrix maths and truncated\n  literals (`6.283`, not `TAU`): bit-exact parity with its golden record\n  depends on them. tests/fixtures/{pose_plan,shoggoth_spheres}.txt are\n  FROZEN golden records: a deliberate pose change updates the rows in the\n  same commit. The tool pages get poses from the wasm\n  (`tools/engine-pose.js` -> `src/wasm_api.rs`; loading the wasm does not\n  start the game). Detail: docs/ARCHITECTURE.md \"Characters\"\n- EVERY FRAME DRAWS A SCREEN: a screen switch (`self.screen = …`, a modal\n  flag) takes effect AFTER the current screen is drawn — record the intent,\n  draw, then switch. Never `switch; return;` before drawing (a one-frame\n  flash of neither screen), and never re-dispatch to the new screen in the\n  same frame (it would see the same key press). Pinned by\n  `tests/e2e/specs/menu-transitions.spec.js`\n\n## Rendering (RULES — the full reference is docs/RENDERING.md: read the relevant part BEFORE changing the renderer, a shader or an opcode)\n- The Rust/wasm engine owns the simulation only; **all rendering is WebGL in\n  JS** (`web/`). Each frame `Graphics` (src/graphics.rs) records a flat f32\n  command stream + a text arena and hands both to `window.frameRender` ONCE\n  — a single zero-copy wasm->JS crossing. Coordinates are CSS px; the canvas\n  buffer is CSS x devicePixelRatio (`Graphics::sync_size`, `data-dpr`), so\n  primitives rasterize at real screen pixels\n- `Graphics` is a RECORDER with two surfaces: the browser canvas (wasm-only:\n  `new`, `sync_size`, `flush`) and HEADLESS (`Graphics::new_headless(w, h)` +\n  `take_frame()`, native). Every draw method is plain Rust, so everything\n  that only records builds and is TESTED natively — do NOT gate a module\n  `cfg(target_arch = \"wasm32\")` just because it takes a `&Graphics`.\n  `src/graphics/stream.rs` reads a frame back (`walk`, `check`, `Affine`);\n  `tests/render_stream.rs` runs the REAL `render_world` + `render_hud` on\n  every floor and every prop at every px. A new draw path gets a stream\n  test there FIRST (~1 s vs ~50 s in a browser)\n- THE OPCODE TABLE (27 ops) exists twice, PINNED by `cargo test`\n  (`src/graphics/stream.rs`): Rust (`mod op` in graphics.rs + `OP_ARGS` in\n  stream.rs; ops 21-23 in `src/static_geo.rs`) and JS (`web/ops.js`:\n  `[\"NAME\", args]` rows, row index = opcode). A new opcode = a Rust const +\n  arity, an `ops.js` row, a `case N: // NAME` in renderer.js: the tests fail\n  until all three agree\n- MIRRORED ACROSS THE BOUNDARY — edit both or neither (pinned where noted):\n  the POSTFX kind table (`Graphics::postfx` doc <-> renderer.js + the `?viz`\n  EFFECTS list in src/app/viz/effects.rs); the DRIVE scene geometry\n  (`src/drive.rs` tunables <-> `DRIVE_FS`) and its integer hash (`hash01` <->\n  `driveHash`); the robot index tables (src/render/robots.rs <-> renderer.js\n  `ROBOT_COLORS` / `ROBOT_WEAPONS`); the pose scalar ORDER + flag bits\n  (src/render/pose.rs <-> `POSE_SCALARS` / `planFromScalars`, PINNED); the\n  rig's ROTATION ORDER per joint chain inside web/robot-core.js (`leg()` /\n  `arm()`, the CPU rig = the reference <-> `rigVS`, the GPU rig;\n  `tests/e2e/render/rig-parity.js`); `PIX_DEPTH` (stream.rs <->\n  renderer.js); the 20-float SPHERE layout (src/render/shoggoth.rs <->\n  `instVS` in web/shoggoth-core.js, PINNED)\n- PIXEL-ART GROUPS (`pixel_begin` / `pixel_end`, ops 15/16): never average or\n  point-sample a hi-res image — RASTERIZE AT THE ART RESOLUTION, upscale\n  NEAREST. Groups nest <= 4 deep, <= 1024 texels a side (beyond =\n  pass-through). A camera-sized group must be a WHOLE number of texels (the\n  composite's v flip is anchored at the integer row count — a fractional\n  height makes content swim; `composite-coherence.js`). Actors draw AFTER\n  the `?pixel=N` world group closes: never re-quantize a moving sprite onto\n  the world grid\n- THE STATIC GEOMETRY CACHE (`Graphics::static_layer`, ops 21-23; floor tiles\n  + walls only): content must be SOLID primitives (no text / sprites),\n  recorded UNCULLED (`Level::full_bounds`) and FRAME-INVARIANT — anything\n  that varies per frame (kill-flash tint, debug overlays) must BYPASS it and\n  draw plainly. One key live; `load_floor` bumps it\n- THE BACKDROP's occlusion rect (`src/backdrop_clip.rs`, op 24) must stay\n  CONSERVATIVE (only what the floor is guaranteed to cover); `backdrop-clip.js`\n  requires clipped == full, pixel for pixel\n- CHARACTER DRAWS: robots render LIVE every frame through web/robot-core.js\n  as ONE instanced batch (the GPU rig; the CPU rig is the reference); the\n  boss through web/shoggoth-core.js as TWO instanced draws (body depth-ON,\n  then the mask depth-OFF, in order — never merge them; the per-sphere path\n  `pipe.instanced = false` is the reference, `shoggoth-parity.js`);\n  portraits, guns and heads are baked ONCE into a persistent NEAREST atlas\n  and drawn as rigid pixel sprites rotated in 2D\n- PERF RULES, each one measured on the 2018 MacBook Air (numbers + method in\n  docs/RENDERING.md): `antialias: false` ALWAYS; never add a texture fetch to\n  the batch fragment shader (it taxes every fragment of every layer); a\n  full-screen layer is the unit of GPU cost (~1-2 ms there) — prefer\n  computing at ART resolution into a tiny target + ONE upscaled quad (DRIVE\n  / BACKDROP economics); batch flushes ORPHAN the buffer (`bufferData`,\n  never `bufferSubData` into a live store); the context is `alpha: true` on\n  Apple; NEVER leave a DOM element over the game canvas during play (it\n  ~doubled GPU cost in measurements — and voids any measurement taken that\n  way); `initRenderer` stays ONE closure (decision + evidence:\n  docs/ARCHITECTURE.md). MEASURE with `?gpuprobe` BEFORE optimizing a layer;\n  `?perf` + **P** = the CPU trace (viewer: tools/perf.html)\n\n## Code map (short — the detailed tour is docs/CODEMAP.md; tools + editor: docs/TOOLS.md)\n- `src/lib.rs` is just the module list. SIM: `ecs/`, `components/`,\n  `systems/` (incl. `passive.rs` bystanders, `head.rs`, `finisher.rs`),\n  `scenario.rs`, `game.rs`, `sim.rs` (the SHARED tick `GameSystems::step` +\n  the headless `Simulation`), `pathfinding.rs`, `collision.rs`. RENDER:\n  `render.rs` + `render/{world,hud,robots,pose,shoggoth,comms,dialogue,floor_props,title}.rs`,\n  `level.rs`, `camera.rs`, `props.rs` + `props/` (by FAMILY:\n  `layers/{datacenter,outdoor,lobby}.rs` + `draw/…`), `drive.rs`,\n  `ending.rs`, `sparks.rs`; `hud_ammo.rs` / `hud_msg.rs` are HUD STATE\n  machines. APP (wasm-only): `app.rs` + `app/{game_loop,world_render,menus,\n  viz,viz/*,url,perf}.rs`, `editor_ui.rs`, `input.rs`. AUDIO: `audio/`\n  (music is CODE: one song = one Rust file in `audio/songs/`, authoring API\n  `audio/compose.rs`, docs/MUSIC_CODE.md; the WebAudio engine =\n  `audio/engine.rs` + `audio/engine/*`, wasm-only, not host-tested)\n- `web/` = the hand-written JS runtime (plain ES modules, no build step in\n  dev): `renderer.js` + `renderer/shaders.js`, `ops.js`, `robot-core.js`,\n  `shoggoth-core.js`, `gpu-probe.js`. Root `open_miami.js` / `_bg.wasm` are\n  GENERATED (gitignored). `make bundle` (`bun build`) = DEPLOY ONLY\n  (.github/workflows/wasm-build.yml)\n- GENERATED RUST — never hand-edit: `src/levels_data.rs` from `levels/*.json`\n  (`make gen-levels`; format docs/SCENARIO_FORMAT.md; level INDEX = position\n  in `levels/index.json`, `?floor=N` takes the floor ID) and\n  `src/props_data.rs` from `props/props.json` (`make gen-props`;\n  docs/PROPS_FORMAT.md). `make check-levels` / `check-props` are in `verify`.\n  Editor SAVE -> then run `make gen-levels` / `make gen-props`\n- FILES THAT TOOLS PARSE (moving / renaming breaks a generator or a test):\n  `PROP_NAMES` in `src/props.rs` (tools/gen_props.py), `title_glyph` in\n  `src/render/title.rs` (tools/gen_title.py -> index.html's loading SVG),\n  and, read by cargo tests: `POSE_SCALARS` / `planFromScalars` in\n  `web/robot-core.js`, the `TABLE` rows of `web/ops.js`, `SPHERE_FLOATS` /\n  the `instVS` attributes of `web/shoggoth-core.js`, the `case N: // NAME`\n  labels of `web/renderer.js`\n- NEW PROPS are APPENDED (ids are persisted in props/props.json): a name in\n  `PROP_NAMES`, a table entry + a draw fn in its family's two files, a\n  dispatcher arm in `props/draw.rs`\n- TOOLS (docs/TOOLS.md): `/?viz` (SPRITES / MUSICS / LEVELS / EFFECTS),\n  `/?floor=N[&pixel=N][&debug][&noise=0][&precompute=0]` (ALL flags:\n  docs/URL_PARAMS.md), `serve.py` (dev server :8080, no-store, the editor\n  write API guarded by `X-Editor-Token`), `/docs`, `/render-tests/<name>`\n  (renderer-only harness), `tools/` (the `?viz` panels, generators, perf\n  viewer). DEBUG MODE: only with `?debug` in the URL; **I** toggles the\n  overlays (vision cones, inflated walls, pathfinding), and with them on\n  **K** purges the floor, **B** cracks the boss's mask, **G** skips the\n  active tutorial gate\n\n## Verification Requirements\n- ALWAYS run `make verify` before declaring any task complete or saying\n  \"we're done\". ALL checks must pass; if one fails, fix it and re-run\n- `make verify` = `CORE_CHECKS` in the Makefile; CI\n  (`.github/workflows/ci.yml`) runs exactly these targets, one job each:\n  `check-fmt` (rustfmt), `check-clippy` (native + wasm32, `-D warnings`),\n  `check-test` (all tests incl. doc tests), `check-build` (release),\n  `check-wasm-build` (wasm32 compile check), `check-levels`, `check-props`\n  (generated data current)\n- `[profile.release]` in Cargo.toml is `lto` + `codegen-units = 1` +\n  `panic = \"abort\"` + `strip` — release only; `cargo test` keeps unwinding\n- THE BROWSER SUITES (what each covers: docs/TESTING.md) are excluded from\n  `make verify`; `make verify-all` = `verify` + both, and\n  `.github/workflows/e2e-tests.yml` runs them (one matrix job each). Run\n  them after any change to `web/`, to `src/app/`, or to what a stream\n  carries:\n  - `make check-e2e` — the Playwright specs (`tests/e2e/specs`)\n  - `make check-render` — the standalone pixel-acceptance scripts\n    (`tests/e2e/render/`), in parallel against a `serve.py` the target\n    starts on `RENDER_PORT` and kills; logs in\n    `tests/e2e/test-results/render-*.log`\n- ALWAYS run them through the Makefile: it wires up `make e2e-prep`\n  (`make build-wasm` — wasm32 target + `wasm-bindgen-cli` pinned to\n  Cargo.lock's `wasm-bindgen` version —, `bun install`, the Chromium\n  install), `ulimit -c 0` (no GB-sized Chromium core dumps) and the\n  timeouts that keep a run from hanging: 60 s per Playwright TEST,\n  `E2E_TIMEOUT` (180 s) for the run, `RENDER_TIMEOUT` (180 s) per render\n  script. The toolchain is **Bun** (`bun install` / `bunx playwright …`),\n  not npm/node\n\n## Artifact Server\n- An artifact server is available at `$ARTIFACTER_API_URL`\n- Use PUT requests to upload files to any route - the files will become available via GET requests\n- Authentication requires `$ARTIFACTER_API_KEY` header\n- This enables fast iteration by uploading wasm and HTML files for immediate testing\n"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "`CLAUDE.md` went from 315 to about 235 lines, with every rule kept. Now I'm adding to the docs the two pieces it no longer carries."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat >> docs/TOOLS.md <<'EOF' ## Debug mode (`?debug`) OFF by default;…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The documentation step is done, so I'm running `make verify` on the whole tree."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(make verify 2>&1 | grep -E \"✓|✗|error|FAILED|test result|warning: un…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(make check-e2e 2>&1 | tail -15); echo \"=== RENDER\"; (make check-rend…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Everything passes. Before stopping I'm outlining the two big files, so the split plan is based on their structure, not just their size."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "for f in src/scenario.rs src/systems/ai.rs; do echo \"== $f\"; awk '/^(…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "CI is fixed, the README is rewritten, and `CLAUDE.md` is cleaned up. `make verify` passes, as do `make check-e2e` (20 tests) and `make check-render` (shoggoth parity: 0 differing pixels over 45 cases). Everything is unstaged. This is a step boundary, so I've stopped here for you to commit before I start the two file splits.\n\n## Why CI failed\nCI installs Rust `@stable`, which is now 1.98.1, while this box is on 1.96. Version 1.98 added a clippy lint, `chunks_exact_to_as_chunks`, and it fires on one line of the boss port: the sphere loop at `src/graphics.rs:545`. I reproduced it by installing 1.98.1 alongside your default toolchain, which I left untouched.\n\n- **The fix:** that line now uses `as_chunks::<SPHERE_FLOATS>().0`, which works on both toolchains. Clippy, the tests, the release build and the wasm build all pass on 1.98.1 as well.\n- **A side find:** the clippy echo in the `Makefile` had `` `app` `` in backticks, so the shell tried to run `app` and printed `app: not found` on every run. I removed the backticks.\n- **It will happen again.** As long as CI floats on `@stable`, a new upstream lint can break it with no code change. A `rust-toolchain.toml` would pin it. I left that as your decision, and `CLAUDE.md` now has the steps to reproduce a CI-only lint.\n\n## README\nI rewrote the features, controls, roadmap and technology sections from what the code actually does. It had \"1-4 switch weapon\", which doesn't exist, a \"checkered floor\", and a roadmap listing things that are already built. It left out throwing, finishers, the boss, checkpoints, the scripted floors, music written as code, and the tools.\n\n## CLAUDE.md and history\n- **New `docs/HISTORY.md`:**\n  - The completed characters roadmap, moved verbatim out of `docs/ARCHITECTURE.md`.\n  - The antialiasing experiments.\n  - The removed tooling.\n  - The forked-session incident.\n  - This CI break.\n- **The grain-fold record:** I first wrote it from memory as \"measured a loss\". `RENDERING.md` says it is a trade with a break-even point, and the first \"clear loss\" verdict was voided. `HISTORY.md` follows `RENDERING.md`.\n- **`docs/ARCHITECTURE.md`:** keeps a short \"Characters\" section holding the rule that stands today. Four code comments that pointed at the old roadmap now point to `HISTORY.md`.\n- **`CLAUDE.md`:** 315 lines down to 257. Every rule stays, and its first section now says history doesn't belong there. It is still long because it is mostly rules.\n- **Moved reference text:** the debug-overlay reference went to `docs/TOOLS.md`, and the measured test timings to `docs/TESTING.md`.\n\n## Next: the two splits\nBoth files are mostly tests. `scenario.rs` has 1,860 test lines out of 3,231, and `ai.rs` has 1,100 out of 2,032.\n\n1. **`scenario.rs`** becomes a `scenario/` folder: definitions, the comms feed, the state machine, world helpers and tests. Re-exports keep every `crate::scenario::…` path working, including the ones in the generated `src/levels_data.rs`. It is a pure move, checked by comparing the lines before and after.\n2. **`ai.rs`** gets the same pure move: navigation throttle, random helpers, the drifter tuning and tests.\n3. **`AISystem::run`** is one function of about 475 lines, which is the real structural problem in that file. I'd break it up per AI state as its own step, since that one could change behaviour and needs the headless simulation as its check.\n\nAfter those I'll work through the \"What's next\" list in order: pixel tests, the drive scene test, the renderer subsystems, the audio tests, and `update_game`. Tell me when this step is committed and I'll start on `scenario.rs`."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "trustin you, you can do 1/2/3 before i commit lol"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Starting with `scenario.rs`. I'm reading the section boundaries and the imports first."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1,22p src/scenario.rs; echo ....; sed -n 496,520p src/scenario…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "awk 'NR>=1367 && /^ (fn|const|static|struct|impl|use|mod|\\/\\/ [-=A-Z]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "These are all missing imports, which I expected. I'm adding them per file and then iterating with the compiler."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re def ins(path, after_doc_imports): s=open(…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='src/scenario/comms.rs'; s=open(p).read…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='src/scenario/world.rs'; s=open(p).read…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "That compiles with no warnings. I'm merging the split import block in `tests_gates.rs`, then checking that the token stream is identical and the test list is unchanged."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The pure move checks out. The only differences are the two section banners, which became file doc comments, the closing brace of `mod tests`, and a multi-line `use`. Next I'm checking the test list."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cargo test --lib --quiet 2>&1 | grep -E \"^test result|FAILED|panicked…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "All 364 lib tests pass, and the scenario module has the same 31 tests as before. I'm looking for anything that refers to `src/scenario.rs` by path, then moving on to `ai.rs`."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -rn \"scenario\\.rs\" --include=*.py --include=*.js --include=*.ts …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -i 's#mirrors scenario.rs `GateInput::parse`#mirrors `GateInput::…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "awk 'NR>=300 && NR<=905' src/systems/ai.rs | awk '{ match($0,/^ */); …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/src/systems/ai.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -rn \"systems::ai::\\|ai::{\" src tests --include=*.rs | grep -v \"^…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 138,150p src/sim.rs; sed -n 305,335p src/sim.rs; sed -n 618,63…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The baseline is recorded: 30 fingerprints, stable across processes. Now the pure move of `ai.rs`."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re def ins(path, imports): s=open(path).read…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='src/systems/ai/wander.rs'; s=open(p).r…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/systems/ai.rs'; s=open(p).read() s=s.replace…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/src/systems/ai.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat > src/systems/ai/think.rs <<'EOF' //! The state machine: Unaware …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Now the perception struct, and `run` rewritten on top of them."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/systems/ai/steer.rs'; s=open(p).read() s=s.r…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -i 's#^use crate::components::{DebugPath, NavPath, Player};#use c…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "My loop split the sed expressions on spaces, so no mutation was applied and no file was touched. I'm redoing it with a proper driver."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "mv tests/ai_fingerprint_tmp.rs tests/ai_fingerprint.rs && python3 - <…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n 'ai\\.rs\\|scenario\\.rs' docs/CODEMAP.md docs/ECS.md docs/ARCHI…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 186,200p docs/ECS.md"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/ECS.md'; s=open(p).read() old=\"#### AISyste…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "`make verify` passes. I'm also running clippy under 1.98.1, since that's what CI uses, and then the browser suites on a fresh wasm build."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cargo +1.98.1 clippy --all-targets --all-features -- -D warnings 2>&1…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "All three steps are done and the tree passes everything. That covers `make verify`, clippy on 1.98.1, `make check-e2e` (20 tests passed) and `make check-render` (all six scripts exit 0). Everything is unstaged. The untracked files (`docs/HISTORY.md`, `src/scenario/`, `src/systems/ai/`, `tests/ai_fingerprint.rs`) need to go into your sync.\n\n## 1. `scenario.rs` split (pure move)\nThe file went from 3,231 lines to a 22-line module root that only re-exports. Every `crate::scenario::…` path is unchanged, including the ones in the generated `src/levels_data.rs`.\n\n| File | Lines | Holds |\n|---|---|---|\n| `scenario/defs.rs` | 488 | the static floor definitions the generator emits |\n| `scenario/comms.rs` | 124 | the comms feed |\n| `scenario/state.rs` | 653 | `ScenarioState`: triggers, gates, conversations, holds |\n| `scenario/world.rs` | 109 | spawning, counting rogues, the gate tether |\n| `scenario/tests.rs` + `scenario/tests_gates.rs` | 1,052 + 822 | split at the existing \"tutorial gates\" banner |\n\nI checked it by comparing the tokens before and after, ignoring whitespace and commas. The only differences are two banner comments, one brace and the imports. The module still has the same 31 tests. Seven items became `pub(super)` so the sibling modules and the second test file can reach them. Two tool comments that mention `GateInput::parse` now point at `src/scenario/defs.rs`.\n\n## 2. `ai.rs` split (pure move)\nThe helpers and the 1,124 lines of tests moved into `nav.rs`, `rng.rs`, `senses.rs`, `wander.rs` and `tests.rs`, checked the same way.\n\n## 3. `AISystem::run` refactor\n`run` was one 475-line function. It is now an orchestrator of about 80 lines that does three things per enemy:\n- **Perceive:** builds a `Percept` struct holding the bot's position, the player's position and whether the bot sees the player.\n- **Think:** `think.rs` holds the state machine with one function per state, and never moves the bot.\n- **Steer:** `steer.rs` turns the state into a velocity and a heading, and is the only part that pathfinds.\n\nThe 25-line path-following block that appeared twice is now one `walk_to`. The magic `25.0` is a named `WALL_PADDING`. The `.unwrap()` that would have aborted the game on an enemy without an `AI` component is now a skip.\n\n**Proof of identical behaviour.** Before touching the file I wrote a fingerprint that hashes every enemy's position, heading, velocity, health and AI state, plus the RNG state, on every tick. It covers all 15 floors, each once with the autoplayer and once with an idle player. All 30 runs are bit-identical after the move and again after the refactor.\n\nI also checked that the fingerprint is sensitive: four one-token mutations each change between 4 and 27 of the 30 runs. My first attempt at that check applied nothing because the shell split the sed expressions, so I redid it with a Python driver.\n\nI kept the fingerprint as `tests/ai_fingerprint.rs`, marked `#[ignore]` and documented in `docs/TESTING.md`. A frozen hash would block deliberate tuning, so it is a tool to run before and after an AI refactor, not a regular check.\n\n**Docs:** `docs/ECS.md` and `docs/CODEMAP.md` describe the new layouts.\n\nNext is \"What's next\" item 1, pixel tests for the post-processing effects, text and the drive scene. Tell me when this is committed and I'll start on it."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "recommended commit message so i do this ?"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Here is a single-line message in the style of your log:\n\n```\nfix CI (clippy 1.98 chunks_exact_to_as_chunks on the SPHERE loop; Makefile echo ran `app` as a command) + scenario.rs -> scenario/{defs,comms,state,world,tests,tests_gates}.rs and systems/ai.rs -> ai/{nav,rng,senses,wander,tests}.rs (pure moves, token-multiset proven, paths unchanged via re-exports) + AISystem::run 475 lines -> perceive / think / steer (one fn per state, duplicated path-follow block -> walk_to, the AI unwrap -> skip), bit-identical on a 30-run behavioural fingerprint (kept as the #[ignore]d tests/ai_fingerprint.rs, mutation-tested) + docs: README rewritten from the code, CLAUDE.md back to rules only, history -> docs/HISTORY.md (characters roadmap moved verbatim, AA experiments, removed tooling), debug mode -> TOOLS.md, suite timings -> TESTING.md\n```\n\nIf you'd rather have two commits, the diff splits cleanly by file with nothing shared between the two:\n\n1. **CI fix and docs.** Files: `src/graphics.rs`, `Makefile`, `README.md`, `CLAUDE.md`, `docs.html`, `docs/{HISTORY,ARCHITECTURE,TESTING,TOOLS}.md`, and the four roadmap-comment pointers (`src/render/pose.rs`, `src/render/shoggoth.rs`, `tests/e2e/render/shoggoth-parity.js`, plus the comment line in `graphics.rs`).\n   ```\n   fix CI: clippy 1.98 (chunks_exact -> as_chunks on the SPHERE loop) + Makefile echo ran `app` as a command; docs: README rewritten from the code, CLAUDE.md back to rules only, history -> docs/HISTORY.md (characters roadmap moved verbatim, AA experiments, removed tooling), debug mode -> TOOLS.md, suite timings -> TESTING.md\n   ```\n2. **The splits.** Files: `src/scenario.rs`, `src/scenario/`, `src/systems/ai.rs`, `src/systems/ai/`, `tests/ai_fingerprint.rs`, `tools/gen_levels.py`, `tools/levels-editor-format.js`, `docs/{CODEMAP,ECS}.md`.\n   ```\n   scenario.rs -> scenario/{defs,comms,state,world,tests,tests_gates}.rs + systems/ai.rs -> ai/{nav,rng,senses,wander,tests}.rs (pure moves, token-multiset proven, paths unchanged via re-exports); AISystem::run 475 lines -> perceive / think / steer (one fn per state, duplicated path-follow block -> walk_to, the AI unwrap -> skip), bit-identical on a 30-run behavioural fingerprint (kept as the #[ignore]d tests/ai_fingerprint.rs, mutation-tested)\n   ```\n\nIn the two-commit version, `docs/TESTING.md` lands in commit 1 but also carries the fingerprint paragraph that belongs with commit 2. That's harmless, and a single commit avoids it.\n\nRemember to add the untracked files: `docs/HISTORY.md`, `src/scenario/`, `src/systems/ai/` and `tests/ai_fingerprint.rs`."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "committed and pushed!"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Good. Next is \"What's next\" item 1, pixel tests for the post-processing effects, text and the drive scene. I'm reading how the existing render scripts and the harness work so the new tests follow the same pattern."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git status --short | head -5; git log --oneline | head -2; wc -l test…"
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"check-render:\" -A40 Makefile | head -70"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 60,184p render-tests.html"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 557,640p src/graphics.rs"
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"Math.random\\|performance.now\\|Date.now\\|__grain\\|window\\.__\"…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 700,800p web/renderer.js"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"POST_FS\\|uKind\\|kind <\\|kind ==\\|k == \\|k < \" web/renderer/s…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/web/renderer/shaders.js"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1,59p render-tests.html | grep -v \"^\\s*/\\?\\*\\|^\\s*$\" | head -6…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 2086,2125p web/renderer.js; echo ......; sed -n 2280,2331p web…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 2246,2280p web/renderer.js; grep -n \"^const GLYPH\\|GLYPH_FS =\\…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 994,1075p web/renderer.js; grep -n \"pub fn draw_drive\\|fn driv…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 9,20p index.html; sed -n 330,340p index.html; grep -n \"render-…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I'm adding the font and the test hook to the harness page. The font loads through the `FontFace` API so the asset path resolves both under `/render-tests/<name>` and on static hosting."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='render-tests.html'; s=open(p).read() old=\"\"\" con…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n 'getContext(' web/renderer.js | head -5; grep -n \"canvas.widt…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Write",
+          "target": "~/workspace/open-miami/tests/e2e/render/lib.js",
+          "edit": {
+            "file": "~/workspace/open-miami/tests/e2e/render/lib.js",
+            "new": "// Shared by the RENDERER-ONLY pixel tests (postfx-kinds.js, text-glyphs.js,\n// drive-backdrop.js): they drive web/renderer.js directly through the\n// /render-tests harness page (`window.__rt`, no game, no wasm) with hand-built\n// command streams, and assert PROPERTIES of the pixels — no golden images\n// (SwiftShader's exact bytes are not a contract; what each subsystem promises\n// is).\n//\n// Everything that makes a frame non-reproducible is pinned before the\n// renderer loads: `performance.now` (the post shaders' clock) is a settable\n// fake, and `Math.random` (the pre-rolled static sheet) is a seeded PRNG. So\n// \"the same stream twice = the same pixels\" is itself a testable property —\n// and the per-case hashes each script prints (`FP <case> <hash>`) can be\n// diffed across a refactor of the renderer: identical = pixel-identical.\nconst { chromium } = require('playwright');\nconst { OP } = require('../ops'); // the ONE opcode table (web/ops.js)\n\nconst ARGS = ['--no-sandbox', '--disable-setuid-sandbox', '--enable-unsafe-swiftshader',\n  '--use-gl=angle', '--use-angle=swiftshader', '--disable-dev-shm-usage'];\n\n// Stream builders (names + arities = web/ops.js).\nconst ops = {\n  CLEAR: (r, g, b) => [OP.CLEAR, r, g, b, 1],\n  RECT: (x, y, w, h, r, g, b, a = 1) => [OP.RECT, x, y, w, h, r, g, b, a],\n  LINE: (x1, y1, x2, y2, t, r, g, b, a = 1) => [OP.LINE, x1, y1, x2, y2, t, r, g, b, a],\n  CIRCLE: (x, y, rad, r, g, b, a = 1) => [OP.CIRCLE, x, y, rad, r, g, b, a],\n  TEXT: (idx, x, y, size, r, g, b, a = 1) => [OP.TEXT, idx, x, y, size, r, g, b, a],\n  SAVE: () => [OP.SAVE],\n  RESTORE: () => [OP.RESTORE],\n  TRANSLATE: (x, y) => [OP.TRANSLATE, x, y],\n  ROTATE: (a) => [OP.ROTATE, a],\n  POSTFX: (kind, t, r = 0, g = 0, b = 0) => [OP.POSTFX, kind, t, r, g, b],\n  DRIVE: (w, h, t, glitch, split, px, dim, offs = [0, 0, 0, 0, 0, 0, 0, 0, 0]) =>\n    [OP.DRIVE, w, h, t, glitch, split, px, dim, ...offs],\n  BACKDROP: (w, h, t, px, ex = 0, ey = 0, ew = 0, eh = 0) => [OP.BACKDROP, w, h, t, px, ex, ey, ew, eh],\n};\n\n// Runs IN THE PAGE (serialized by addInitScript): the fakes + the pixel tools.\nfunction pageSide(seed) {\n  window.__fakeT = 1000;\n  performance.now = () => window.__fakeT;\n  let s = seed >>> 0;\n  Math.random = () => { // mulberry32\n    s = (s + 0x6D2B79F5) >>> 0;\n    let t = s;\n    t = Math.imul(t ^ (t >>> 15), t | 1);\n    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);\n    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;\n  };\n  window.__grainOffset = [0, 0]; // renderer.js: a fixed TV-static roll\n  window.__shots = new Map();\n  const c2 = document.createElement('canvas');\n  const g2 = c2.getContext('2d', { willReadFrequently: true });\n  // Render one stream at fake time `ms`, keep its pixels under `name`.\n  window.__shot = (name, cmds, text, ms, w, h) => {\n    const { frameRender, canvas } = window.__rt;\n    if (canvas.width !== w || canvas.height !== h) {\n      canvas.width = w; canvas.height = h; canvas.dataset.dpr = '1';\n    }\n    window.__fakeT = ms;\n    frameRender(new Float32Array(cmds), text || '');\n    c2.width = w; c2.height = h;\n    g2.clearRect(0, 0, w, h);\n    g2.drawImage(canvas, 0, 0); // same task as the draw: the buffer is intact\n    const px = g2.getImageData(0, 0, w, h).data;\n    window.__shots.set(name, { w, h, px });\n    let hash = 0x811c9dc5;\n    for (let i = 0; i < px.length; i++) hash = Math.imul(hash ^ px[i], 0x01000193) >>> 0;\n    const gl = canvas.getContext('webgl');\n    return { hash: hash.toString(16).padStart(8, '0'), glError: gl.getError() };\n  };\n  // Compare two shots (optionally inside a rect): how many pixels differ by\n  // more than `tol` on any channel, the worst channel delta, the mean |delta|.\n  window.__diff = (a, b, tol = 0, rect = null) => {\n    const A = window.__shots.get(a), B = window.__shots.get(b);\n    const [x0, y0, x1, y1] = rect || [0, 0, A.w, A.h];\n    let n = 0, max = 0, sum = 0, count = 0;\n    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {\n      const i = (y * A.w + x) * 4;\n      let d = 0;\n      for (let k = 0; k < 3; k++) { const e = Math.abs(A.px[i + k] - B.px[i + k]); if (e > d) d = e; sum += e; }\n      if (d > tol) n++;\n      if (d > max) max = d;\n      count++;\n    }\n    return { differing: n, share: n / count, max, mean: sum / (count * 3) };\n  };\n  // Stats of one shot inside a rect: mean rgb, distinct colours, the bounding\n  // box of the pixels whose brightest channel exceeds `lit`.\n  window.__stats = (name, rect = null, lit = 40) => {\n    const S = window.__shots.get(name);\n    const [x0, y0, x1, y1] = rect || [0, 0, S.w, S.h];\n    const mean = [0, 0, 0], colours = new Set();\n    let bx0 = 1e9, by0 = 1e9, bx1 = -1, by1 = -1, litN = 0, count = 0;\n    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {\n      const i = (y * S.w + x) * 4, r = S.px[i], g = S.px[i + 1], b = S.px[i + 2];\n      mean[0] += r; mean[1] += g; mean[2] += b;\n      colours.add((r << 16) | (g << 8) | b);\n      if (Math.max(r, g, b) > lit) {\n        litN++;\n        if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y;\n      }\n      count++;\n    }\n    return { mean: mean.map((v) => v / count), colours: colours.size, lit: litN,\n      bbox: litN ? [bx0, by0, bx1, by1] : null };\n  };\n  window.__pixel = (name, x, y) => {\n    const S = window.__shots.get(name), i = (y * S.w + x) * 4;\n    return [S.px[i], S.px[i + 1], S.px[i + 2]];\n  };\n  // Is the shot constant over every aligned `cell` x `cell` block (an\n  // art-resolution image upscaled NEAREST)? Returns the share of blocks that\n  // are NOT uniform.\n  window.__blockiness = (name, cell) => {\n    const S = window.__shots.get(name);\n    let bad = 0, total = 0;\n    for (let by = 0; by + cell <= S.h; by += cell) for (let bx = 0; bx + cell <= S.w; bx += cell) {\n      const i0 = (by * S.w + bx) * 4;\n      let uniform = true;\n      for (let y = 0; y < cell && uniform; y++) for (let x = 0; x < cell; x++) {\n        const i = ((by + y) * S.w + bx + x) * 4;\n        if (S.px[i] !== S.px[i0] || S.px[i + 1] !== S.px[i0 + 1] || S.px[i + 2] !== S.px[i0 + 2]) { uniform = false; break; }\n      }\n      if (!uniform) bad++;\n      total++;\n    }\n    return bad / total;\n  };\n}\n\nasync function openHarness(base, { seed = 1 } = {}) {\n  const browser = await chromium.launch({ args: ARGS });\n  const page = await browser.newPage({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1 });\n  await page.addInitScript(pageSide, seed);\n  const errors = [];\n  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });\n  page.on('pageerror', (e) => errors.push(String(e)));\n  await page.goto(base + '/render-tests'); // no test selected: no rAF loop\n  await page.waitForFunction(() => window.__rt, null, { timeout: 30000 });\n\n  let failures = 0;\n  const glErrors = [];\n  const t = {\n    page, errors,\n    report(ok, msg) { console.log((ok ? 'PASS ' : 'FAIL ') + msg); if (!ok) failures++; },\n    // Render `cmds` (flat array) at fake time `ms`; prints the case's hash.\n    async shot(name, cmds, { text = '', ms = 1000, w = 640, h = 360 } = {}) {\n      const r = await page.evaluate(([n, c, tx, m, W, H]) => window.__shot(n, c, tx, m, W, H),\n        [name, cmds, text, ms, w, h]);\n      if (r.glError) glErrors.push(`${name}: 0x${r.glError.toString(16)}`);\n      console.log(`FP ${name} ${r.hash}`);\n      return r.hash;\n    },\n    diff: (a, b, tol = 0, rect = null) => page.evaluate(([x, y, z, r]) => window.__diff(x, y, z, r), [a, b, tol, rect]),\n    stats: (name, rect = null, lit = 40) => page.evaluate(([n, r, l]) => window.__stats(n, r, l), [name, rect, lit]),\n    pixel: (name, x, y) => page.evaluate(([n, a, b]) => window.__pixel(n, a, b), [name, x, y]),\n    blockiness: (name, cell) => page.evaluate(([n, c]) => window.__blockiness(n, c), [name, cell]),\n    async finish() {\n      t.report(errors.length === 0, `no console / page errors${errors.length ? ': ' + errors.slice(0, 3).join(' | ') : ''}`);\n      t.report(glErrors.length === 0, `no GL errors${glErrors.length ? ': ' + glErrors.slice(0, 5).join(', ') : ''}`);\n      await browser.close();\n      console.log(failures ? `${failures} FAILED` : 'ALL PASS');\n      process.exit(failures ? 1 : 0);\n    },\n  };\n  return t;\n}\n\nmodule.exports = { openHarness, ops };\n"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat tests/e2e/ops.js | head -40; cat web/ops.js | sed -n 1,56p | grep…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The helper is done. Next is the first script, which covers the post-processing kinds."
+        },
+        {
+          "t": "tool",
+          "name": "Write",
+          "target": "~/workspace/open-miami/tests/e2e/render/postfx-kinds.js",
+          "edit": {
+            "file": "~/workspace/open-miami/tests/e2e/render/postfx-kinds.js",
+            "new": "// Headless acceptance test for the POSTFX KINDS (opcode 14) — a standalone\n// script like composite-coherence.js, not a Playwright spec:\n//\n//   cd tests/e2e && bun render/postfx-kinds.js [baseURL=http://localhost:8098]\n//\n// Renderer-only (the /render-tests harness, see lib.js): one hand-built scene\n// is rendered through every kind of the table in `Graphics::postfx`'s doc\n// (src/graphics.rs), with the post shaders' clock frozen. No golden images —\n// what is asserted is what the table PROMISES:\n//   1) t = 0 is the identity for every single-pass kind (0-9, 11) and for\n//      TV STATIC (13): the frame through the scene target + the post shader\n//      comes out as the frame drawn directly;\n//   2) at t = 1 every kind really does something, and no two kinds produce\n//      the same image (a kind routed to the wrong shader branch would);\n//   3) the same stream at the same clock = the same pixels, bit for bit\n//      (what makes the printed `FP` hashes diffable across a refactor);\n//   4) the clock and the colour are wired where the table says they are;\n//   5) MODAL STATIC (12): the panel passes through untouched, framed by a\n//      6-px white then a 6-px black ring, and `t` IS the static's coverage;\n//   6) TV STATIC (13): opacity scales with t;\n//   7) WARP TRAILS (10): the feedback accumulates frame over frame, and a\n//      frame without kind 10 CLEARS it;\n//   8) an unknown kind is a no-op (\"Any other kind is a no-op\").\nconst { openHarness, ops } = require('./lib');\n\nconst BASE = process.argv[2] || 'http://localhost:8098';\nconst W = 640, H = 360;\nconst NAMES = ['BLUR-OUT', 'SYNTHWAVE CRT', 'VHS TAPE', 'DRUNK SWAY', 'CRT TUBE', 'ACID TRIP',\n  'DATAMOSH', 'NEON BLOOM', 'PIXEL MOSAIC', 'TUNNEL RUSH', 'WARP TRAILS', 'UI GREY',\n  'MODAL STATIC', 'TV STATIC'];\nconst SINGLE_PASS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11];\n\n// A scene with what the effects feed on: a checker (detail everywhere, so a\n// blur / shift / pixelation is visible), saturated and bright blocks (bloom,\n// hue, channel split), thin lines, a white disc.\nfunction scene() {\n  const s = [...ops.CLEAR(0.05, 0.05, 0.08)];\n  for (let ty = 0; ty < H / 40; ty++) for (let tx = 0; tx < W / 40; tx++) {\n    const d = (tx + ty) % 2 === 0;\n    s.push(...ops.RECT(tx * 40, ty * 40, 40, 40, d ? 0.16 : 0.30, d ? 0.14 : 0.24, d ? 0.22 : 0.36));\n  }\n  s.push(...ops.RECT(60, 60, 120, 90, 1, 0.2, 0.6));\n  s.push(...ops.RECT(250, 40, 140, 70, 0.1, 0.9, 1.0));\n  s.push(...ops.RECT(440, 200, 130, 110, 1, 1, 1));\n  s.push(...ops.RECT(90, 230, 160, 60, 0.95, 0.85, 0.1));\n  s.push(...ops.LINE(20, 180, 620, 190, 2, 1, 1, 1));\n  s.push(...ops.LINE(320, 10, 300, 350, 1, 0.3, 1, 0.4));\n  s.push(...ops.CIRCLE(330, 180, 26, 1, 1, 1));\n  return s;\n}\n\n(async () => {\n  const t = await openHarness(BASE);\n  const base = scene();\n  const fx = (kind, tt, r = 0, g = 0, b = 0) => [...base, ...ops.POSTFX(kind, tt, r, g, b)];\n\n  await t.shot('base', base, { w: W, h: H });\n\n  // 1) t = 0 is the identity.\n  for (const k of [...SINGLE_PASS, 13]) {\n    await t.shot(`k${k}-t0`, fx(k, 0, 0.9, 0.2, 0.6), { w: W, h: H });\n    const d = await t.diff(`k${k}-t0`, 'base', 2);\n    t.report(d.differing === 0, `kind ${k} ${NAMES[k]}: t=0 is the identity (max delta ${d.max}, ${d.differing} px over 2)`);\n  }\n\n  // 2) t = 1 does something, and every kind is its own image.\n  for (const k of SINGLE_PASS) {\n    await t.shot(`k${k}-t1`, fx(k, 1, 0.9, 0.2, 0.6), { w: W, h: H });\n    const d = await t.diff(`k${k}-t1`, 'base', 8);\n    t.report(d.share > 0.2, `kind ${k} ${NAMES[k]}: t=1 changes the frame (${(d.share * 100).toFixed(0)}% of px, mean delta ${d.mean.toFixed(1)})`);\n  }\n  let closest = { share: 1, a: -1, b: -1 };\n  for (const a of SINGLE_PASS) for (const b of SINGLE_PASS) {\n    if (a >= b) continue;\n    const d = await t.diff(`k${a}-t1`, `k${b}-t1`, 8);\n    if (d.share < closest.share) closest = { share: d.share, a, b };\n  }\n  t.report(closest.share > 0.1, `no two kinds render the same image (closest pair: ${closest.a} / ${closest.b}, ${(closest.share * 100).toFixed(0)}% of px differ)`);\n\n  // 3) deterministic.\n  let unstable = [];\n  for (const k of SINGLE_PASS) {\n    await t.shot(`k${k}-t1-again`, fx(k, 1, 0.9, 0.2, 0.6), { w: W, h: H });\n    const d = await t.diff(`k${k}-t1`, `k${k}-t1-again`, 0);\n    if (d.differing) unstable.push(k);\n  }\n  t.report(unstable.length === 0, `same stream + same clock = same pixels, every kind${unstable.length ? ' — NOT: ' + unstable : ''}`);\n\n  // 4) the clock (every kind but the static PIXEL MOSAIC animates) and the\n  //    colour (the kinds whose doc names it) are wired.\n  for (const k of SINGLE_PASS) {\n    await t.shot(`k${k}-later`, fx(k, 1, 0.9, 0.2, 0.6), { w: W, h: H, ms: 4370 });\n    const d = await t.diff(`k${k}-t1`, `k${k}-later`, 0);\n    if (k === 8) t.report(d.differing === 0, `kind 8 ${NAMES[8]}: does not depend on the clock`);\n    else t.report(d.share > 0.01, `kind ${k} ${NAMES[k]}: animates with the clock (${(d.share * 100).toFixed(0)}% of px)`);\n  }\n  for (const k of [0, 1, 7, 11]) {\n    await t.shot(`k${k}-cyan`, fx(k, 1, 0.1, 0.9, 1.0), { w: W, h: H });\n    const d = await t.diff(`k${k}-t1`, `k${k}-cyan`, 4);\n    t.report(d.share > 0.05, `kind ${k} ${NAMES[k]}: the colour tints it (${(d.share * 100).toFixed(0)}% of px)`);\n  }\n\n  // 5) MODAL STATIC over a flat mid-grey: non-static px stay grey (the blur\n  //    and the desaturation of a flat grey are that grey), static cells are\n  //    0.42 * grey + 0.58 * {0,1} — so coverage can be COUNTED.\n  const grey = [...ops.CLEAR(0.5, 0.5, 0.5)];\n  const hx = 0.25, hy = 0.25; // panel = the centred half of the screen (160..480, 90..270)\n  const panel = [W * (0.5 - hx), H * (0.5 - hy), W * (0.5 + hx), H * (0.5 + hy)];\n  await t.shot('grey', grey, { w: W, h: H });\n  for (const tt of [0, 0.5, 1]) {\n    await t.shot(`k12-t${tt}`, [...grey, ...ops.POSTFX(12, tt, hx, hy, 0)], { w: W, h: H });\n  }\n  const inside = await t.diff('k12-t1', 'grey', 1, panel);\n  t.report(inside.differing === 0, `kind 12 ${NAMES[12]}: the panel passes through untouched (${inside.differing} px differ)`);\n  const white = await t.pixel('k12-t1', panel[0] - 3, H / 2), black = await t.pixel('k12-t1', panel[0] - 9, H / 2);\n  t.report(white.every((v) => v === 255) && black.every((v) => v === 0),\n    `kind 12: framed by a white then a black 6-px ring (${white} / ${black})`);\n  for (const [tt, lo, hi] of [[0, 0, 0], [0.5, 0.45, 0.55], [1, 1, 1]]) {\n    const out = await t.diff(`k12-t${tt}`, 'grey', 30, [0, 0, W, 60]); // a strip well outside the rings\n    t.report(out.share >= lo && out.share <= hi, `kind 12: t=${tt} -> ${(out.share * 100).toFixed(1)}% static coverage (want ${lo * 100}-${hi * 100}%)`);\n  }\n\n  // 6) TV STATIC: opacity scales with t.\n  const means = [];\n  for (const tt of [0.25, 0.5, 1]) {\n    await t.shot(`k13-t${tt}`, fx(13, tt), { w: W, h: H });\n    means.push((await t.diff(`k13-t${tt}`, 'base', 0)).mean);\n  }\n  t.report(means[0] > 1 && means[1] > means[0] * 1.6 && means[2] > means[1] * 1.6,\n    `kind 13 ${NAMES[13]}: opacity scales with t (mean delta ${means.map((m) => m.toFixed(1)).join(' < ')})`);\n\n  // 7) WARP TRAILS: a feedback accumulator.\n  const warp = fx(10, 0.8, 1, 0.4, 0.8);\n  await t.shot('warp-1', warp, { w: W, h: H });\n  for (let i = 2; i <= 12; i++) await t.shot(`warp-${i}`, warp, { w: W, h: H, ms: 1000 + i * 16 });\n  const grown = await t.diff('warp-12', 'warp-1', 6);\n  t.report(grown.share > 0.02, `kind 10 ${NAMES[10]}: the trails accumulate over frames (${(grown.share * 100).toFixed(1)}% of px changed by frame 12)`);\n  await t.shot('warp-break', base, { w: W, h: H }); // a frame WITHOUT kind 10...\n  await t.shot('warp-restart', warp, { w: W, h: H }); // ...clears the accumulator\n  const restart = await t.diff('warp-restart', 'warp-1', 0);\n  t.report(restart.differing === 0, `kind 10: a frame without it clears the accumulator (restart vs first frame: ${restart.differing} px differ)`);\n\n  // 8) unknown kinds.\n  for (const k of [14, 99, -1]) {\n    await t.shot(`k${k}`, fx(k, 1, 0.3, 0.3, 0), { w: W, h: H });\n    const d = await t.diff(`k${k}`, 'base', 2);\n    t.report(d.differing === 0, `unknown kind ${k} is a no-op (${d.differing} px differ)`);\n  }\n\n  await t.finish();\n})();\n"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"^E2E_ENV\\|^RENDER_PORT\" -A3 Makefile | head -12"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat > \"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"PLAYWRIGHT\\|playwright install\\|BROWSERS\" Makefile tests/e2e…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "ls ~/.cache/ms-playwright/ 2>/dev/null; echo \"HOME=$HOME\"; ls ~"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cd ~/workspace/open-miami/tests/e2e && grep '\"version\"' node_…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The test couldn't launch Chromium because the Playwright it resolved expects a different browser build. I'm checking why `node_modules` looks empty here."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "ls -la | head -30; ls node_modules 2>&1 | head; ls node_modules/.bin …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "`tests/e2e` was recreated at [clock]. Its `node_modules`, the rootless browser libs and the test results are all gone. I didn't do that, so I'm checking the rest of the tree to see what happened."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cd ~/workspace/open-miami && ls -la --time-style=+%H:%M | hea…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(make e2e-prep 2>&1 | tail -8); ls tests/e2e/node_modules | head -5; …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The toolchain is back. The `su` failure in that output is the expected rootless fallback path. I'm running the post-processing test now."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "time [scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='web/renderer.js'; s=open(p).read() old=\"\"\" postf…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The post-processing test passes. The text test is next, and I'm reading `drawText` first to get the glyph geometry right."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1806,1900p web/renderer.js"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Write",
+          "target": "~/workspace/open-miami/tests/e2e/render/text-glyphs.js",
+          "edit": {
+            "file": "~/workspace/open-miami/tests/e2e/render/text-glyphs.js",
+            "new": "// Headless acceptance test for TEXT (opcode 6) and the GLYPH ATLAS — a\n// standalone script like composite-coherence.js, not a Playwright spec:\n//\n//   cd tests/e2e && bun render/text-glyphs.js [baseURL=http://localhost:8098]\n//\n// Renderer-only (the /render-tests harness, see lib.js; the page loads the\n// real VT323). Text is lazily rasterized, one glyph at a time, into a 1024 px\n// atlas at 48 px and drawn as scaled quads. No golden image of a font —\n// what is asserted is the CONTRACT of `TEXT idx x y size r g b a`:\n//   1) (x, y) is the LEFT end of the BASELINE: capitals sit on y, start at x,\n//      and nothing is drawn outside the line's box;\n//   2) `size` scales the text linearly (2x the size = 2x the box);\n//   3) VT323 is monospace and the pen advances by whole glyphs: a marker\n//      after N characters lands N advances to the right, whatever the glyphs;\n//   4) colour and alpha are applied to the glyph's coverage (red text has no\n//      green or blue; alpha 0.5 over black is half as bright);\n//   5) text follows the transform stack (rotated a quarter turn, the box\n//      becomes tall);\n//   6) the text ARENA is indexed: the same stream with another arena draws\n//      the other strings, and an out-of-range index draws nothing;\n//   7) THE ATLAS SURVIVES ITS OWN RESET: after ~700 distinct glyphs the atlas\n//      fills and is rebuilt from scratch — text drawn after the reset is\n//      pixel-identical to the same text drawn before, including when the\n//      reset happens IN THE MIDDLE of a frame that already drew text.\nconst { openHarness, ops } = require('./lib');\n\nconst BASE = process.argv[2] || 'http://localhost:8098';\nconst W = 640, H = 360;\nconst SEP = '\\u001f'; // the text arena separator (Graphics::TEXT_SEP)\nconst BLACK = ops.CLEAR(0, 0, 0);\n\n(async () => {\n  const t = await openHarness(BASE);\n  const draw = (name, strings, cmds) => t.shot(name, [...BLACK, ...cmds], { text: strings.join(SEP), w: W, h: H });\n  const fontOk = await t.page.evaluate(() => document.fonts.check(\"48px 'GameFont'\"));\n  t.report(fontOk, 'the harness loaded VT323 (GameFont)');\n\n  // 1) anchor: left end of the baseline.\n  const X = 100, Y = 200, SIZE = 48;\n  await draw('caps', ['HEALTH'], ops.TEXT(0, X, Y, SIZE, 1, 1, 1));\n  const caps = await t.stats('caps');\n  const [bx0, by0, bx1, by1] = caps.bbox;\n  t.report(bx0 >= X - 1 && bx0 <= X + 4, `text starts at x (leftmost lit column ${bx0}, x = ${X})`);\n  t.report(by1 <= Y && by1 >= Y - 3, `capitals sit on the baseline (lowest lit row ${by1}, y = ${Y})`);\n  t.report(by0 >= Y - SIZE && by0 <= Y - SIZE * 0.4, `capitals are ${Y - by0} px tall at size ${SIZE}`);\n  const advance = (bx1 - bx0) / 5.6; // six glyphs: 5 advances + most of one\n  const outside = await t.stats('caps', [0, 0, W, Y - SIZE - 2]);\n  t.report(outside.lit === 0, `nothing drawn above the line box (${outside.lit} lit px)`);\n\n  // 2) size scales linearly.\n  await draw('caps-2x', ['HEALTH'], ops.TEXT(0, X, Y, SIZE * 2, 1, 1, 1));\n  const big = (await t.stats('caps-2x')).bbox;\n  const sw = (big[2] - big[0]) / (bx1 - bx0), sh = (big[3] - big[1]) / (by1 - by0);\n  t.report(Math.abs(sw - 2) < 0.08 && Math.abs(sh - 2) < 0.08, `2x the size = 2x the box (${sw.toFixed(3)} x ${sh.toFixed(3)})`);\n\n  // 3) monospace pen: a '|' after 8 glyphs lands at the same column whether\n  //    they are wide or narrow.\n  const bars = [];\n  for (const [i, s] of ['MMMMMMMM|', 'iiiiiiii|', '        |', 'W.W.W.W.|'].entries()) {\n    await draw(`mono-${i}`, [s], ops.TEXT(0, 40, Y, SIZE, 1, 1, 1));\n    const st = await t.stats(`mono-${i}`);\n    bars.push(st.bbox[2]); // the bar is the rightmost ink\n  }\n  t.report(new Set(bars).size === 1, `the pen advances by whole monospace glyphs (bar at x = ${[...new Set(bars)].join(' / ')})`);\n  const measured = (bars[0] - 40) / 8.5;\n  t.report(Math.abs(measured - advance) < 2.5, `advance ~${measured.toFixed(1)} px at size ${SIZE} (from the word's box: ${advance.toFixed(1)})`);\n\n  // 4) colour + alpha.\n  await draw('red', ['HEALTH'], ops.TEXT(0, X, Y, SIZE, 1, 0, 0));\n  const red = await t.stats('red');\n  t.report(red.mean[0] > 1 && red.mean[1] === 0 && red.mean[2] === 0, `red text is red only (mean rgb ${red.mean.map((v) => v.toFixed(2))})`);\n  const sameInk = await t.diff('red', 'caps', 255); // tol 255: never \"differs\" -> use means instead\n  await draw('half', ['HEALTH'], ops.TEXT(0, X, Y, SIZE, 1, 1, 1, 0.5));\n  const half = await t.stats('half'), full = await t.stats('caps');\n  const ratio = half.mean[0] / full.mean[0];\n  t.report(Math.abs(ratio - 0.5) < 0.03 && sameInk.max >= 0, `alpha 0.5 over black is half as bright (${ratio.toFixed(3)})`);\n\n  // 5) the transform stack.\n  await draw('turned', ['HEALTH'], [...ops.SAVE(), ...ops.TRANSLATE(320, 60), ...ops.ROTATE(Math.PI / 2),\n    ...ops.TEXT(0, 0, 0, SIZE, 1, 1, 1), ...ops.RESTORE()]);\n  const tb = (await t.stats('turned')).bbox;\n  t.report(tb[3] - tb[1] > (tb[2] - tb[0]) * 2.5 && Math.abs((tb[3] - tb[1]) - (bx1 - bx0)) <= 2,\n    `rotated a quarter turn, the box is tall (${tb[2] - tb[0]} x ${tb[3] - tb[1]}; upright ${bx1 - bx0} x ${by1 - by0})`);\n\n  // 6) the arena.\n  const two = [...ops.TEXT(0, 40, 120, 32, 1, 1, 1), ...ops.TEXT(1, 40, 240, 32, 1, 1, 1)];\n  await draw('arena-ab', ['AMMO 12', 'FLOOR 3'], two);\n  await draw('arena-ba', ['FLOOR 3', 'AMMO 12'], two);\n  await draw('arena-aa', ['AMMO 12', 'AMMO 12'], two);\n  const top = [0, 80, W, 130], bottom = [0, 200, W, 250];\n  const swapped = await t.diff('arena-ab', 'arena-ba', 0, top), kept = await t.diff('arena-ab', 'arena-aa', 0, top);\n  const kept2 = await t.diff('arena-ba', 'arena-aa', 0, bottom);\n  t.report(swapped.differing > 50 && kept.differing === 0 && kept2.differing === 0, `TEXT draws arena[idx] (swap changes ${swapped.differing} px of line 1, same string = 0)`);\n  await draw('arena-oob', ['ONLY ONE'], ops.TEXT(5, 40, 120, 32, 1, 1, 1));\n  t.report((await t.stats('arena-oob')).lit === 0, 'an out-of-range text index draws nothing');\n\n  // 7) the atlas reset. `before` = a HUD-like frame on a fresh-ish atlas.\n  const hud = ['HEALTH: 100', 'AMMO 12/12', 'PURGE THE FLOOR — 3 LEFT', 'floor 7 · hallucination wing'];\n  const hudCmds = hud.flatMap((_, i) => ops.TEXT(i, 30, 60 + i * 70, 40, 1, 0.8, 0.3));\n  await draw('hud-before', hud, hudCmds);\n  // Flood the atlas with distinct glyphs, 60 a frame, until it has been\n  // rebuilt at least once (capacity: 1024 / ~24 px cells x 16 rows ~ 670).\n  let cp = 0x0100;\n  for (let f = 0; f < 16; f++) {\n    let s = '';\n    for (let k = 0; k < 60; k++) s += String.fromCodePoint(cp++);\n    await draw(`flood-${f}`, [s], ops.TEXT(0, 0, 100, 8, 1, 1, 1));\n  }\n  await draw('hud-after', hud, hudCmds);\n  const after = await t.diff('hud-before', 'hud-after', 0);\n  t.report(after.differing === 0, `text after an atlas reset == the same text before (${after.differing} px differ)`);\n  // The hard case: the reset lands MID-FRAME, after some text of that very\n  // frame was already queued. Fill the atlas to the brim first, then draw\n  // the HUD + enough new glyphs to overflow + the HUD again, in ONE frame.\n  let brim = '';\n  for (let k = 0; k < 600; k++) brim += String.fromCodePoint(cp++);\n  await draw('brim', [brim], ops.TEXT(0, 0, 100, 8, 1, 1, 1));\n  let spill = '';\n  for (let k = 0; k < 200; k++) spill += String.fromCodePoint(cp++);\n  await draw('hud-midframe', [...hud, spill], [...hudCmds, ...ops.TEXT(4, 0, 350, 2, 0, 0, 0), ...hudCmds]);\n  const mid = await t.diff('hud-before', 'hud-midframe', 0, [0, 0, W, 300]);\n  t.report(mid.differing === 0, `a reset in the middle of a frame leaves that frame's text intact (${mid.differing} px differ)`);\n\n  await t.finish();\n})();\n"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "time [scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "[scratch]…"
+        },
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"function makeTexture\" -A22 web/renderer.js | head -40; grep …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"function setTexture\" -A12 web/renderer.js; grep -n \" functio…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Every flush re-binds the batch texture, so a direct bind inside `bakeGlyph` is safe. Now the fix, and the corrected test."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='web/renderer.js'; s=open(p).read() old=\"\"\" // At…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -i 's/let cp = 0x0100;/let cp = 0x4e00; \\/\\/ CJK: never in VT323 …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='tests/e2e/render/text-glyphs.js'; s=open(p).read…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I'm making that comment honest about its limits, then writing the third script, which covers the drive scene and the backdrop."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='~/workspace/open-miami/web/renderer.js';…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 600,640p web/renderer/shaders.js; grep -n \"uSize\\|horizon\\|0.4…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Write",
+          "target": "~/workspace/open-miami/tests/e2e/render/drive-backdrop.js",
+          "edit": {
+            "file": "~/workspace/open-miami/tests/e2e/render/drive-backdrop.js",
+            "new": "// Headless acceptance test for the two FULL-SHADER BACKGROUNDS — DRIVE\n// (opcode 20, the synthwave drive behind the menus) and BACKDROP (opcode 24,\n// the neon-wave void around a floor). A standalone script like\n// composite-coherence.js, not a Playwright spec:\n//\n//   cd tests/e2e && bun render/drive-backdrop.js [baseURL=http://localhost:8098]\n//\n// Renderer-only (the /render-tests harness, see lib.js). Both are computed\n// at ART RESOLUTION into a tiny target and drawn as ONE NEAREST-upscaled quad\n// (the perf rule in CLAUDE.md). No golden image of the scenery — what is\n// asserted is the CONTRACT of the two ops:\n//   DRIVE  w h t glitch split px dim o0..o8\n//   1) the art grid: the image is constant over every aligned px x px block\n//      (rasterized at art resolution, upscaled NEAREST — never blurred);\n//   2) it is a scene (a sky over a road, split at the horizon, the sun in\n//      the sky's centre), and `t` moves it;\n//   3) same arguments = same pixels;\n//   4) `dim` mixes toward the menu's near-black, inside the shader: dim = 1\n//      is that flat colour, dim = 0.5 is halfway;\n//   5) `o[band]` tears ONE of the nine horizontal bands sideways: that band\n//      is the untorn image shifted, the slice it vacated shows the void, and\n//      the eight other bands do not change;\n//   6) `split` ghosts the channels from 0.75 px up, and not below;\n//   7) the quad lands at the current transform's origin, and only there.\n//   BACKDROP  w h t px ex ey ew eh\n//   8) the art grid, again; 9) it stays DIM (a void, not a light show) and\n//   drifts slowly with `t`; 10) the occlusion rect is not drawn, the rest is\n//   pixel-identical to the full quad (backdrop-clip.js proves the same on\n//   live game frames).\nconst { openHarness, ops } = require('./lib');\n\nconst BASE = process.argv[2] || 'http://localhost:8098';\nconst W = 640, H = 360, PX = 4;\nconst CLEAR = ops.CLEAR(0.5, 0, 0.5); // a colour neither background produces\nconst CLEAR_RGB = [128, 0, 128];\n\n(async () => {\n  const t = await openHarness(BASE);\n  const drive = (name, { time = 12.3, glitch = 0, split = 0, px = PX, dim = 0, offs, pre = [] } = {}) =>\n    t.shot(name, [...CLEAR, ...pre, ...ops.DRIVE(W, H, time, glitch, split, px, dim, offs)], { w: W, h: H });\n  const horizon = Math.round(H * 0.44);\n\n  // ---- DRIVE ----\n  await drive('drive');\n  t.report((await t.blockiness('drive', PX)) === 0, `DRIVE: constant over every ${PX}x${PX} block (art resolution, NEAREST upscale)`);\n  await drive('drive-px8', { px: 8 });\n  t.report((await t.blockiness('drive-px8', 8)) === 0 && (await t.blockiness('drive', 8)) > 0.05,\n    'DRIVE: px sets the art grid (px=8 is 8x8-uniform, px=4 is not)');\n\n  const sky = await t.stats('drive', [0, 0, W, horizon]), road = await t.stats('drive', [0, horizon, W, H]);\n  const sun = await t.stats('drive', [W / 2 - 40, horizon - 70, W / 2 + 40, horizon - 10]);\n  const corner = await t.stats('drive', [0, 0, 80, 60]);\n  const lum = (m) => 0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2];\n  t.report(sky.colours > 8 && road.colours > 8, `DRIVE: a sky (${sky.colours} colours) over a road (${road.colours} colours)`);\n  t.report(lum(sun.mean) > lum(corner.mean) * 2, `DRIVE: the sun sits over the horizon's centre (luma ${lum(sun.mean).toFixed(0)} vs sky corner ${lum(corner.mean).toFixed(0)})`);\n  await drive('drive-later', { time: 12.8 });\n  const moved = await t.diff('drive', 'drive-later', 0, [0, horizon, W, H]);\n  t.report(moved.share > 0.05, `DRIVE: t moves the road (${(moved.share * 100).toFixed(0)}% of its px in 0.5 s)`);\n  await drive('drive-again');\n  t.report((await t.diff('drive', 'drive-again', 0)).differing === 0, 'DRIVE: same arguments = same pixels');\n\n  await drive('drive-dim1', { dim: 1 });\n  const d1 = await t.stats('drive-dim1');\n  t.report(d1.colours === 1 && d1.mean[0] <= 6 && d1.mean[2] <= 11, `DRIVE: dim = 1 is the flat menu black (${d1.mean.map((v) => v.toFixed(0))})`);\n  await drive('drive-dim05', { dim: 0.5 });\n  const full = await t.stats('drive'), half = await t.stats('drive-dim05');\n  const want = full.mean.map((v, i) => (v + d1.mean[i]) / 2);\n  t.report(half.mean.every((v, i) => Math.abs(v - want[i]) < 1.5), `DRIVE: dim = 0.5 is halfway (mean ${half.mean.map((v) => v.toFixed(1))}, want ${want.map((v) => v.toFixed(1))})`);\n\n  // The tear. Band 3 of 9 = rows [120, 160) at H = 360; shift = 40 CSS px.\n  const BAND = 3, SHIFT = 40, bandH = H / 9;\n  const offs = [0, 0, 0, 0, 0, 0, 0, 0, 0];\n  offs[BAND] = SHIFT;\n  await drive('drive-torn', { offs });\n  const y0 = BAND * bandH, y1 = (BAND + 1) * bandH;\n  const above = await t.diff('drive', 'drive-torn', 0, [0, 0, W, y0]), below = await t.diff('drive', 'drive-torn', 0, [0, y1, W, H]);\n  t.report(above.differing === 0 && below.differing === 0, `DRIVE: a torn band leaves the 8 others alone (${above.differing + below.differing} px differ outside it)`);\n  const shifted = await t.page.evaluate(([y0, y1, W, SHIFT]) => {\n    const A = window.__shots.get('drive'), B = window.__shots.get('drive-torn');\n    let bad = 0, voidBad = 0;\n    for (let y = y0; y < y1; y++) for (let x = 0; x < W; x++) {\n      const i = (y * W + x) * 4;\n      if (x < SHIFT) { // the vacated slice: the backing void (0.01, 0.0, 0.03)\n        if (B.px[i] > 4 || B.px[i + 1] > 1 || B.px[i + 2] > 9) voidBad++;\n      } else {\n        const j = (y * W + x - SHIFT) * 4;\n        if (A.px[j] !== B.px[i] || A.px[j + 1] !== B.px[i + 1] || A.px[j + 2] !== B.px[i + 2]) bad++;\n      }\n    }\n    return { bad, voidBad };\n  }, [y0, y1, W, SHIFT]);\n  t.report(shifted.bad === 0, `DRIVE: the torn band IS the image shifted ${SHIFT} px (${shifted.bad} px are not)`);\n  t.report(shifted.voidBad === 0, `DRIVE: the slice it vacated shows the void (${shifted.voidBad} px do not)`);\n\n  await drive('drive-split', { split: 6 });\n  await drive('drive-split-tiny', { split: 0.5 });\n  const sp = await t.diff('drive', 'drive-split', 4), tiny = await t.diff('drive', 'drive-split-tiny', 0);\n  t.report(sp.share > 0.03 && tiny.differing === 0, `DRIVE: the channel split ghosts from 0.75 px up (6 px: ${(sp.share * 100).toFixed(0)}% of px; 0.5 px: ${tiny.differing})`);\n  await drive('drive-glitch', { glitch: 1 });\n  t.report((await t.blockiness('drive-glitch', PX)) === 0, 'DRIVE: a glitched frame stays on the art grid');\n\n  // Placement: a 320x180 drive at translate(160, 88).\n  const TX = 160, TY = 88, SW = 320, SH = 180;\n  await t.shot('drive-placed', [...CLEAR, ...ops.SAVE(), ...ops.TRANSLATE(TX, TY), ...ops.DRIVE(SW, SH, 12.3, 0, 0, PX, 0), ...ops.RESTORE()], { w: W, h: H });\n  await t.shot('drive-small', [...CLEAR, ...ops.DRIVE(SW, SH, 12.3, 0, 0, PX, 0)], { w: W, h: H });\n  const placed = await t.page.evaluate(([TX, TY, SW, SH, W, H, C]) => {\n    const A = window.__shots.get('drive-small'), B = window.__shots.get('drive-placed');\n    let bad = 0, spill = 0;\n    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {\n      const i = (y * W + x) * 4;\n      const inside = x >= TX && x < TX + SW && y >= TY && y < TY + SH;\n      if (inside) {\n        const j = ((y - TY) * W + x - TX) * 4;\n        if (A.px[j] !== B.px[i] || A.px[j + 1] !== B.px[i + 1] || A.px[j + 2] !== B.px[i + 2]) bad++;\n      } else if (B.px[i] !== C[0] || B.px[i + 1] !== C[1] || B.px[i + 2] !== C[2]) spill++;\n    }\n    return { bad, spill };\n  }, [TX, TY, SW, SH, W, H, CLEAR_RGB]);\n  t.report(placed.bad === 0 && placed.spill === 0, `DRIVE: lands at the transform's origin, and only there (${placed.bad} px misplaced, ${placed.spill} px spilled)`);\n\n  // ---- BACKDROP ----\n  const backdrop = (name, time, e = [0, 0, 0, 0], px = PX) =>\n    t.shot(name, [...CLEAR, ...ops.BACKDROP(W, H, time, px, ...e)], { w: W, h: H });\n  await backdrop('void', 30);\n  t.report((await t.blockiness('void', PX)) === 0, `BACKDROP: constant over every ${PX}x${PX} block`);\n  const v = await t.stats('void', null, 110);\n  t.report(v.colours > 16 && lum(v.mean) < 45 && v.lit === 0, `BACKDROP: a DIM field (${v.colours} colours, mean luma ${lum(v.mean).toFixed(1)}, ${v.lit} px over 110)`);\n  await backdrop('void-later', 32);\n  const drift = await t.diff('void', 'void-later', 0);\n  t.report(drift.share > 0.2 && drift.mean < 8, `BACKDROP: drifts slowly (2 s: ${(drift.share * 100).toFixed(0)}% of px, mean delta ${drift.mean.toFixed(1)})`);\n  await backdrop('void-again', 30);\n  t.report((await t.diff('void', 'void-again', 0)).differing === 0, 'BACKDROP: same arguments = same pixels');\n  const E = [200, 100, 240, 160];\n  await backdrop('void-clipped', 30, E);\n  const hole = await t.stats('void-clipped', [E[0] + 4, E[1] + 4, E[0] + E[2] - 4, E[1] + E[3] - 4]);\n  t.report(hole.colours === 1 && hole.mean[0] === CLEAR_RGB[0], 'BACKDROP: the occlusion rect is not drawn');\n  const ring = await t.page.evaluate(([E, W, H]) => {\n    const A = window.__shots.get('void'), B = window.__shots.get('void-clipped');\n    let bad = 0;\n    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {\n      if (x >= E[0] && x < E[0] + E[2] && y >= E[1] && y < E[1] + E[3]) continue;\n      const i = (y * W + x) * 4;\n      if (A.px[i] !== B.px[i] || A.px[i + 1] !== B.px[i + 1] || A.px[i + 2] !== B.px[i + 2]) bad++;\n    }\n    return bad;\n  }, [E, W, H]);\n  t.report(ring === 0, `BACKDROP: outside the rect, clipped == full (${ring} px differ)`);\n\n  if (process.env.DUMP) for (const n of ['drive', 'drive-torn', 'drive-glitch', 'void']) await t.dump(n, `${process.env.DUMP}/${n}.png`);\n  await t.finish();\n})();\n"
+          }
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "All three scripts pass. I'm taking a quick look at what the drive test actually rendered, then mutation-testing the new tests."
+        },
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "That's the drive scene with band 3 torn, as expected. I'm running mutation tests next, one deliberate renderer break per script, to confirm each test can actually fail."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='Makefile'; s=open(p).read() a=s.index(\"\\tcd test…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I caught a bug in my own edit before running it. A bare `wait` would also wait on the background `serve.py` and hang forever. It needs to wait on the script PIDs only."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='Makefile'; s=open(p).read() old=\"\"\"echo $$? > te…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "All nine pass in parallel. I'm quickly confirming that a failing script still fails the target, since I rewrote that logic."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "make check-render RENDER_SCRIPTS=\"text-glyphs does-not-exist\" 2>&1 | …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Failures propagate. Now the docs: `TESTING.md`, the e2e README, the open-work list and `HISTORY.md`."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"six standalone\\|shoggoth-parity\\|Not covered\\|postfx kinds\" …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='docs/TESTING.md'; s=open(p).read() a=s…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/ARCHITECTURE.md'; s=open(p).read() s=s.repl…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "`make verify` passes. `renderer.js` gained the unknown-kind guard, so I'm running the Playwright specs too. The render suite already ran after that change."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(make check-e2e 2>&1 | grep -E \" passed| failed|flaky|✓ E2E|✗\" | tail…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Write",
+          "target": "~/.claude/projects/-home-dev-workspace-open-miami/memory/sync-wipes-e2e-toolchain…",
+          "edit": {
+            "file": "~/.claude/projects/-home-dev-workspace-open-miami/memory/sync-wipes-e2e-toolchain.md",
+            "new": "---\nname: sync-wipes-e2e-toolchain\ndescription: open-miami — after the user's sync/pull, tests/e2e loses node_modules + playwright-deps; a bare `bun render/x.js` then fails with a misleading Chromium error\nmetadata:\n  type: project\n---\n\nWhen the user commits from their other box and this tree gets synced (seen 2026-09-20:\n`tests/` recreated at pull time), the gitignored dirs inside `tests/e2e` are gone:\n`node_modules`, `playwright-deps`, `test-results`. My own untracked files survive.\n\n**Why it matters:** with no `node_modules`, Bun AUTO-INSTALLS the newest `playwright` from\nits global cache, which wants a Chromium build that is not installed — the error is\n\"Executable doesn't exist at …/chromium_headless_shell-NNNN\", which looks like a browser\nproblem but is a missing `bun install`.\n\n**How to apply:** after a \"committed and pushed\", run the browser suites through the\nMakefile (`make check-render` / `check-e2e` — they depend on `make e2e-prep`), or run\n`make e2e-prep` once before invoking a render script by hand. The `su: Authentication\nfailure` in its output is the expected rootless fallback, not an error.\nSee [[git-unstaged-only]], [[step-boundary-commits]].\n"
+          }
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cd ~/.claude/projects/-home-dev-workspace-open-miami/memory/ …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "\"What's next\" item 1 is done. `make verify`, `make check-e2e` (20 tests) and `make check-render` (9 scripts, about 85 s) all pass. Everything is unstaged, and this is a step boundary.\n\n## The three new pixel tests\nAll three drive `web/renderer.js` directly through the `/render-tests` harness page with hand-built command streams, so they need neither the game nor the wasm. The clock and `Math.random` are fixed, so every frame is reproducible. They check properties of the pixels instead of comparing against saved images. Each takes 3–6 s.\n\n- **`postfx-kinds.js`:**\n  - Every single-pass kind is the identity at `t = 0`.\n  - Every kind produces its own distinct image at `t = 1`.\n  - The clock and the colour are wired where the table says they are.\n  - The modal static's coverage equals `t`; at `t = 0.5` it measured 50.1%.\n  - The warp accumulator builds up over frames and clears after a frame without it.\n- **`text-glyphs.js`:**\n  - Baseline and left anchor, size scaling, the monospace pen advance, colour, alpha, the transform stack and the text arena.\n  - Text drawn after a glyph-atlas reset matches the same text drawn before, including when the reset happens mid-frame. Nothing had ever exercised that path.\n- **`drive-backdrop.js`:**\n  - The image stays on the art-pixel grid, `dim` works, and a torn band is exactly the image shifted.\n  - The channel-split threshold, placement at the transform origin, and the backdrop's occlusion rect.\n\nI mutation-tested them with seven deliberate renderer breaks, and all seven were caught. Each script also writes one `FP <case> <hash>` line per rendered case into its log, which item 3 of the old list (the factories refactor) can diff before and after.\n\n## What the tests found\n- **A real mismatch, now fixed.** The Rust doc says an unknown POSTFX kind is a no-op, but a kind above 13 or below 0 ran the modal-static effect. The game never emits one, so nothing was visible. It's now a three-line guard in `frameRender`, pinned by the test.\n- **A fix I added and then removed.** I expected stale texels to bleed into glyphs after an atlas reset, because the atlas is sampled with LINEAR filtering, so I zeroed the atlas on reset. An A/B run showed it changed no pixel. The cells are monospace, so a stale neighbour always shows its transparent padding. The real difference after a reset is ±1 on a channel from float rounding of the UVs, so the test uses a tolerance of 1. `docs/HISTORY.md` records this so nobody tries it again.\n- **Two wrong expectations of mine.** One was double-blending soft glyph edges. The other was the drive shader's half-art-pixel tolerance at a torn band's edge. I fixed both in the tests, not the renderer.\n\n## Other changes\n- **`make check-render`:** it now loops over a `RENDER_SCRIPTS` list instead of repeating one line per script nine times. I checked that a failing script still fails the target.\n- **`render-tests.html`:** it loads the real VT323 font and exposes `window.__rt`.\n- **Docs:** `docs/TESTING.md`, the e2e README, `docs/HISTORY.md` and the open-work list are updated. The old item 1 is removed and the list renumbered.\n\n## Two things to know\n- **Your sync wipes the e2e toolchain.** Your pull at [clock] recreated `tests/`, which deleted the gitignored `tests/e2e/node_modules` and `tests/e2e/playwright-deps`. With no `node_modules`, Bun auto-installs a newer Playwright, and the error you get is a misleading \"Chromium executable doesn't exist\". Running `make e2e-prep` fixes it. I saved a memory about this.\n- **The backticks ate `app` again.** Your last commit message reads \"Makefile echo ran  as a command\". The backticks I put around `app` in the suggested message were executed by your shell, the same bug the commit fixes. The message below has none.\n\nSuggested message:\n\n```\nrenderer-only pixel tests: postfx-kinds (t=0 identity, every kind its own image, clock + colour wired, modal static coverage = t, warp accumulates + clears), text-glyphs (baseline / size / monospace pen / colour / transform / arena, text after an ATLAS RESET == before), drive-backdrop (art grid, dim, one torn band = the image shifted, split threshold, placement, occlusion rect) — tests/e2e/render/lib.js drives web/renderer.js through /render-tests (real VT323, window.__rt), clock + Math.random pinned, properties not goldens, FP hashes per case for refactor diffs, mutation-tested 7/7 + fix: an unknown POSTFX kind ran the modal static, now the no-op its doc promises + check-render loops over RENDER_SCRIPTS (9 scripts) + docs: TESTING, HISTORY (findings: atlas zeroing tried / measured / removed), open-work list item 1 done\n```\n\nThe next item is a `cargo test` that pins the drive scene geometry in `src/drive.rs` to the `DRIVE_FS` shader. Tell me when this is committed and I'll start on it."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "keep on rollin ?"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git status --short | head; git log --oneline | head -2 | cut -c1-120;…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "That's committed and the tree is clean. The sync wiped the e2e toolchain again, as I expected. Next is the drive scene geometry test, so I'm reading what `src/drive.rs` says is mirrored."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1,135p src/drive.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"include_str\\|read_to_string\\|CARGO_MANIFEST_DIR\" src/graphic…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"#\\[cfg(test)\\]\" -A12 src/drive.rs | head -30; grep -n \"pub c…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/drive.rs'; s=open(p).read() # 1) named hash …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cargo test --lib drive::tests::the_js_mirror 2>&1 | grep -A4 \"panicke…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "awk 'NR>=452 && NR<=640 && /float halfW = /{print NR\": \"$0}' web/rend…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The shader defines `halfW` twice, once for the sun and once for the road. I'm scoping the road literals to the road section of the shader so each pattern matches exactly once."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/drive.rs'; s=open(p).read() a=s.index(\" let …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The test passes. I'm mutation-testing it next, since the test is only worth keeping if it fails whenever any side of the mirror moves."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import subprocess muts=[ ('web/renderer/shaders.js'…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "All 9 mutations are caught. The last one is caught by the compiler, since the op's argument array is sized by `BANDS`. I'm updating the rules and docs that described this mirror as untested."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='CLAUDE.md'; s=open(p).read() old=\"\"\"the DRIVE sc…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='CLAUDE.md'; s=open(p).read() old=\"\"\" PINNED (`th…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The hashes are stable. Next I'm mapping the three subsystems inside `initRenderer`: what each owns, and what it takes from the batch core."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"^ /\\* ----\\|^ function \\|^ const [a-zA-Z]* = gl.createProgra…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1096,1158p web/renderer.js; echo ....; sed -n 871,912p web/ren…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 646,699p web/renderer.js; echo .....; sed -n 806,870p web/rend…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"^bundle:\" -A14 Makefile | head -24; sed -n 160,180p web/rend…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "It bundles. The drive test from the previous step should now fail, because `drawDrive` no longer lives in `web/renderer.js`. I'm confirming that before repointing it."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "It bundles, and `web/renderer.js` is down from 2,331 to 1,799 lines. Now the proof: the per-case hashes first, then the full suites."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "All 124 hashes are identical after all three moves. I'm also running the token check to show it was a pure move, then the full suites."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(make verify 2>&1 | grep -E \"✓|✗|^error|FAILED|panicked\" | head -10);…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='Makefile'; s=open(p).read() old=\"$$(cat web/rend…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The render job failing in CI is worth checking before I go further. I can't use `gh` here because it isn't authenticated, but if the repo is public the API will at least show which step failed."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git remote -v | head -4; nproc; REPO=$(git remote get-url origin | se…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "curl -s \"https://api.github.com/repos/c4ffein/open-miami/actions/runs…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "curl -s \"https://api.github.com/repos/c4ffein/open-miami/check-runs/1…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"check-render\\|Upload test results\" -B2 -A12 .github/workflow…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git stash list | head -2; (time taskset -c 0-3 make check-render 2>&1…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(time taskset -c 0-1 make check-render 2>&1 | grep -E \"^--- |✓ Render…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 76,104p .github/workflows/e2e-tests.yml"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='.github/workflows/e2e-tests.yml'; s=open(p).read…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The annotation path works. Now I'm finishing the docs for the factories step so the tree is coherent, then running the final verification."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"initRenderer\\|renderer/shaders.js\" CLAUDE.md docs/CODEMAP.md…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='CLAUDE.md'; s=open(p).read() old=\"\"\"`i…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "START=$(grep -n \"^export function initRenderer\" web/renderer.js | cut…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/HISTORY.md'; s=open(p).read() old=\" at anot…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I can't tell you why the render job failed, because the CI log needs authentication and I couldn't reproduce the failure here.\n\n## What I found\n- **CI facts:** the E2E workflow's `check-render` job failed at 58a3af1, the commit that added the three new scripts. It took 123 s, so it wasn't the 180 s timeout, and `check-e2e` and the main CI both passed. The previous commit ran six render scripts and was green. The new tests are the likely cause, but I can't see which script failed.\n- **Commit contents:** every file that commit needs is in it, including the font.\n- **What I tried locally:** the suite passes in all of these, which were my guesses at where CI differs from this box:\n  - pinned to 4 cores, then to 2, in case nine parallel Chromiums starve a CI runner;\n  - with mixed glyph cell widths forced;\n  - under four simulated font-hinting setups.\n- **`/bin/sh`:** it is dash on this box as it is on CI, so the rewritten Makefile loop isn't a bashism problem.\n- **Fonts:** this box has no system fonts at all. Every fallback glyph here is exactly as wide as VT323's, so text rendering is the area where CI most plausibly differs.\n\n## What I need from you\nCan you paste the `FAIL` lines from the job log? The Makefile prints each script's log under `--- render/<name>.js (exit N)`. With those lines I can tell whether the failure is in the renderer or in one of my test thresholds.\n\nSo I can read the failure myself next time:\n- On CI, a failed render run now emits its `FAIL` lines as GitHub error annotations, which the public API exposes. I tested that path.\n- The workflow now uploads `test-results/` for both jobs. Until now only the Playwright job uploaded artifacts, so a failed render run left nothing behind.\n\n## Work done meanwhile\nEverything below is unstaged and passes locally: `make verify`, `make check-render` (all 9) and `make check-e2e` (20 tests).\n- **Drive scene mirror test.** `the_js_mirror_matches` in `src/drive.rs` parses the drive shader's literals, the palm placement and `driveHash`, and compares them to the Rust constants. I mutation-tested it with 9 changes, and all 9 were caught.\n- **Renderer factories.** Three subsystems moved out of `web/renderer.js`:\n  - `web/renderer/text.js`: the glyph atlas and text drawing;\n  - `web/renderer/backgrounds.js`: the drive scene and the backdrop;\n  - `web/renderer/postfx.js`: the scene target, the post pass and the warp accumulator.\n\n  `web/renderer.js` went from 2,331 to 1,799 lines, and the batch core stays one closure. After each of the three moves, all 124 per-case pixel hashes matched the baseline. When `drawDrive` moved, the drive mirror test failed and needed repointing, which is what it's for. The bundle builds.\n- **A correction.** I wrote \"150+ cases\" in `docs/TESTING.md` and the real count is 124, so it now says \"120+\".\n\nI'd hold this commit until we know why CI failed. If one of the new tests is the problem, the fix belongs in the same push. If you'd rather commit now, these changes touch different files from the failing tests."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "render scripts failed: props-stability text-glyph"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Two scripts failed, and they're different kinds of script. `props-stability` is an old live-game script that waits on fixed sleeps. `text-glyphs` is one of my new deterministic scripts. I'm checking the tree state first, then what each one is sensitive to."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git status --short | head -14; git log --oneline | head -3 | cut -c1-…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "find / -xdev \\( -name \"*.ttf\" -o -name \"*.otf\" -o -name \"*.ttc\" \\) -n…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"apt\\|Dir::\\|sources\\|download\" tests/e2e/setup-browser-deps.…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"waitForTimeout\\|waitForFunction\\|__fakeT\\|async function\\|co…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='Makefile'; s=open(p).read() a=s.index(\"# The sta…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Everything passes under the CI-like setup. Now I'm correcting the docs. My `HISTORY.md` entry says the zeroing was \"tried, measured, removed\", and that conclusion was wrong."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/HISTORY.md'; s=open(p).read() a=s.index(\"- …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Write",
+          "target": "~/.claude/projects/-home-dev-workspace-open-miami/memory/dev-box-has-no-fonts.md",
+          "edit": {
+            "file": "~/.claude/projects/-home-dev-workspace-open-miami/memory/dev-box-has-no-fonts.md",
+            "new": "---\nname: dev-box-has-no-fonts\ndescription: open-miami dev box has ZERO system fonts (fc-list = 0) — headless Chromium text differs from CI; a text/atlas bug hid behind it once\nmetadata:\n  type: project\n---\n\nThe dev box has no system fonts at all: in headless Chromium every glyph VT323 lacks\nfalls back to a VT323-wide tofu (19 px at 48 px), while a GitHub runner (and a player's\nmachine) has real, wider fallback glyphs.\n\n**Why it matters:** on 2026-09-20 I A/B-measured a glyph-atlas fix (zero the atlas on\nreset) as \"changes no pixel\" and REMOVED it — true only on this font-less box. CI went\nred on the next push; with real fonts the stale-texel bleed was up to 54 levels. Same\npush: `props-stability` failed on CI from parallel load only (9 Chromiums on 4 slow\ncores; not reproducible here even with `taskset -c 0-1`).\n\n**How to apply:** before concluding anything about TEXT pixels, re-run with CI-like\nfonts: `apt-get download fonts-dejavu-core fonts-wqy-microhei` using the `-o Dir::State=…`\noptions of tests/e2e/setup-browser-deps.sh, `dpkg -x` into the scratchpad, fonts.conf with\na `<dir>` there, `FONTCONFIG_FILE=… make check-render` (recipe also in docs/TESTING.md).\nA measurement is only as wide as the machine it ran on — say so when reporting one. CI\nlogs need auth, but `::error` annotations are public:\n`curl https://api.github.com/repos/c4ffein/open-miami/check-runs/<job id>/annotations`.\nSee [[sync-wipes-e2e-toolchain]].\n"
+          }
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cd ~/.claude/projects/-home-dev-workspace-open-miami/memory/ …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The two scripts failed for different reasons, and both are fixed. `text-glyphs` found a real renderer bug. `props-stability` is a load problem I caused by adding three scripts to the parallel run. `make verify`, `make check-render` and `make check-e2e` all pass locally. Everything is unstaged. `web/renderer/{text,backgrounds,postfx}.js` are untracked and need adding.\n\n## `text-glyphs`: a real bug that I wrongly dismissed\n- **The bug.** The glyph atlas is sampled with LINEAR filtering, and its reset left the old texels in place. Last turn I added a fix that zeroes the atlas on reset. An A/B run showed it changed no pixel, so I removed it and wrote \"not a bug\" in `docs/HISTORY.md`.\n- **Why that measurement was wrong.** This box has no system fonts at all, so every fallback glyph here is exactly as wide as a VT323 glyph. Every generation of the atlas lands on the same grid, and the bug can't show. CI and players' machines have real fonts, whose fallback glyphs are wider. There, stale ink ends up right against a fresh cell and bleeds into magnified text.\n- **Reproduction.** I downloaded DejaVu and a CJK font without root and pointed fontconfig at them. Under those fonts the test fails without the zeroing, with a worst delta of 54 levels, and passes with it.\n- **Reach.** The game never reaches a reset, which takes about 670 distinct glyphs, so players never saw this.\n- **What changed:**\n  - The zeroing is restored in `web/renderer/text.js`.\n  - The test now gives its flood glyphs wide ink through a patched `measureText` and `fillText`, so it fails without the fix on any machine, this one included. I checked both directions.\n  - `docs/HISTORY.md` is corrected to say the original measurement was wrong.\n  - `docs/TESTING.md` has the recipe for running with CI-like fonts.\n\n## `props-stability`: slowed down by load\nIt passes under real fonts when run alone. It waits a fixed 150 ms for a software-rendered frame, and I had raised the number of parallel Chromiums from 6 to 9 on CI's 4 cores. I couldn't reproduce the failure here even pinned to 2 cores, since these cores are faster than CI's. That cause is inferred, not confirmed.\n\n`make check-render` now runs two waves. The six live-game scripts run first, at the width CI was green with, and then the three renderer-only ones. The whole suite also passes here under real fonts on 4 cores, the closest I can get to CI.\n\n## For the next CI failure\n- A failed render run now prints its `FAIL` lines as GitHub error annotations. I can read those through the public API, which I can't do with the job log.\n- The workflow now uploads `test-results/` for both jobs.\n\n## Also in this diff\n- The drive scene mirror test from last turn, `the_js_mirror_matches` in `src/drive.rs`.\n- The three renderer factories from last turn.\n\nSuggested message, with no backticks:\n\n```\nfix check-render on CI: text-glyphs was RIGHT (glyph atlas reset left stale texels: LINEAR bleed into magnified text, up to 54 levels with real fonts - invisible on the font-less dev box, where I had measured the fix away; the reset now zeroes the atlas, the test makes its fallback glyphs wide so it fails without the fix on any box) + props-stability was starved (fixed 150 ms sleeps, 9 parallel Chromiums on 4 cores): check-render runs two waves, RENDER_LIVE six wide as before then RENDER_ONLY + CI: FAIL lines as ::error annotations, test-results uploaded for both suites + renderer subsystems as factories: web/renderer/{text,backgrounds,postfx}.js (renderer.js 2331 -> 1799 lines, batch core stays one closure, 124 FP hashes identical after each move) + drive scene geometry and driveHash pinned to src/drive.rs by a cargo test (the_js_mirror_matches, mutation-tested 9/9) + docs: HISTORY corrected, TESTING (two waves, CI-like fonts recipe), ARCHITECTURE open-work list\n```\n\nTwo items remain on the open-work list: native tests for the audio engine, which need a recording `AudioGraph` seam and amount to a real design change, and splitting `update_game`. After you push, send me the result of the render job. If it fails, I can now read the annotations."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "committed and pushed! next?"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I'll check how CI took the push before starting the next item."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git status --short | head -5; git log --oneline | head -1 | cut -c1-8…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "wc -l src/audio.rs src/audio/*.rs src/audio/engine/*.rs | sort -n | t…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"^pub fn \\|^fn \\|^pub(super) fn \\|^pub(crate) fn \\|^ pub fn \\…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat src/audio.rs; echo \"--- web_sys types used:\"; grep -oh \"web_sys::…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 60,200p src/audio/engine.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "curl -s \"https://api.github.com/repos/c4ffein/open-miami/actions/runs…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The release build is reproducible, with the same hash twice, so the byte-identical proof will be meaningful. The browser-only constructs sit in just three files. I'm reading them now."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"Closure\\|JsValue\\|JsCast\\|js_sys\\|wasm_bindgen\\|dyn_into\\|dy…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re,glob # 1) code paths web_sys::X -> webaud…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat > src/audio/engine/webaudio.rs <<'EOF' //! THE SEAM between the a…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The wasm build compiles through the facade. I'm checking straight away that the release binary is still byte-identical."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The two binaries are the same size and only 6 of 1,536,284 bytes differ. I'm looking at those 6 bytes to confirm they're line numbers."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cargo check --lib --tests 2>&1 | grep -E \"^error\" | sed 's/`//g' | so…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -hn \"create_buffer(\\|copy_to_channel\\|set_value_curve\\|set_curve…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 150,273p src/audio/engine/bake.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/audio/engine/webaudio.rs'; s=open(p).read() …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The mock is close. It needs the `AsRef<AudioScheduledSourceNode>` upcasts and `connect_with_audio_param`. I'm adding those and iterating."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/audio/engine/webaudio.rs'; s=open(p).read() …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/audio/engine/webaudio.rs'; s=open(p).read() …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -i 's/^#\\[cfg(target_arch = \"wasm32\")\\]\\npub use engine::AudioEng…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"pub enum SfxKind\" -A32 src/audio/sfx.rs | head -50; grep -n …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"SFX_KINDS\\|SFX_COMBAT_KINDS\\|fn spec\\|pub len\\|pub struct\\|p…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat > src/audio/engine/tests.rs <<'EOF' //! Host tests of the WebAudi…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "`SfxKind` has no `Debug` implementation. I'm deriving it for test builds only, so the wasm binary is unaffected."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 136,140p src/audio/sfx.rs && python3 - <<'EOF' p='~/wo…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"set_value_at_time([^,]*, 0\\.0)\" src/audio/engine/*.rs src/au…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='src/audio/engine/tests.rs'; s=open(p).…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/audio/engine/tests.rs'; s=open(p).read() a=s…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "All five pass. Clippy flags the mock methods and enum variants the engine never calls. The mock's contract is \"exactly what the engine uses\", so I'm removing them rather than silencing the lint."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cargo clippy --all-targets -- -D warnings 2>&1 | grep -E \"^error\" | s…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='src/audio/engine/webaudio.rs'; s=open(…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Native clippy is clean. Now the definitive check on the shipped side: wasm clippy, and the byte comparison of the release wasm against the baseline."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 808,822p src/audio/engine/voices.rs && python3 - <<'EOF' impor…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The first mutation is caught, and its failure message says exactly what went wrong. The other three patterns matched more than once in the file, so I'm scoping those mutations to one function."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import subprocess path='src/audio/engine/voices.rs'…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/audio/engine/tests.rs'; s=open(p).read() s=s…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='CLAUDE.md'; s=open(p).read() old=\"\"\"`audio/compo…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -i 's/every note voice of every song were CLEAN — three of the fi…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(make check-e2e 2>&1 | grep -E \" passed| failed|flaky|✓ E2E|✗\" | tail…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "CI is fully green on 7a88a61, including `check-render`, so the glyph-atlas fix and the two-wave `check-render` run held on a real runner.\n\nThe next item is done too: the audio engine now has native tests. Locally `make verify` passes, clippy is clean on 1.98.1 for both targets, and `make check-e2e` passes all 20 tests. Everything is unstaged. `src/audio/engine/tests.rs` and `src/audio/engine/webaudio.rs` are untracked and need adding.\n\n## The approach: a seam, not a rewrite\nThe engine now names every Web Audio type through `src/audio/engine/webaudio.rs`, never through `web_sys` directly.\n- **On wasm:** the module is plain re-exports of the `web_sys` types, so the game compiles to the same code as before.\n- **Under `cargo test`:** the same names resolve to a small recording mock with the roughly 40 methods the engine calls. It also has stand-ins for `Closure`, `JsValue` and `Promise`, so `bake.rs` needed no `cfg` in its function bodies. `AudioEngine::new()` therefore runs natively, and a test can play any sound and read back the node graph it built.\n- **The code change:** apart from renaming `web_sys::` paths to `webaudio::`, the engine files gained 7 lines.\n\n## Proof that the shipped audio is unchanged\nI compared the release `.wasm` before and after. It is the same size, 1,536,284 bytes, and exactly 6 bytes differ. Each of those is a panic line number in `src/audio/engine.rs`, shifted by +7, which matches the 7 lines I added above them. The release build is reproducible here (same hash twice), so the comparison is meaningful. `docs/HISTORY.md` records the technique.\n\n## What the 6 new tests check\nThey run the real voice builders: all 20 sound-effect bakes, every note voice of all 7 songs, the live buses and live one-shots. The engine deliberately swallows every Web Audio error, so these defects would otherwise go unnoticed:\n- an exponential ramp to zero or below, which throws in Web Audio and leaves the envelope missing;\n- an oscillator that is never stopped;\n- a node that reaches no destination;\n- an event scheduled in the past;\n- a sound longer than its bake length, which makes the baked version truncated compared with the live one.\n\nA sixth test fails if engine code ever names `web_sys` directly.\n\nAll the existing recipes passed on the first run. The three failures I hit while writing the tests were wrong expectations of mine, not engine bugs. I mutation-tested the tests with 5 recipe breaks, and all 5 were caught with messages naming the sound. What stays untested is how the audio sounds, and the async bake plumbing, since the mock's offline render never resolves.\n\n**Docs:** `CLAUDE.md`, `docs/ARCHITECTURE.md`, `docs/TESTING.md` and `docs/HISTORY.md` are updated.\n\nSuggested message:\n\n```\naudio engine host-tested through a seam: audio/engine/webaudio.rs = web_sys re-exports on wasm, a recording mock under cargo test (same names, the ~40 methods the engine calls, stand-ins for Closure / JsValue / Promise) - AudioEngine::new() runs natively and engine/tests.rs reads back the node graphs of the REAL builders: all 20 SFX bakes, every note voice of all 7 songs, the live buses, live one-shots; asserts what the engine's swallow-every-error design hides (exp ramp to <= 0, unstopped oscillators, orphan nodes, events in the past, a sound longer than its bake) + a guard against naming web_sys around the seam; mutation-tested 5/5. Shipped code unchanged, proven on the artifact: release wasm same size, 6 bytes differ = six panic line numbers each shifted by the +7 lines added above them. docs: CLAUDE, ARCHITECTURE (known debt + open-work list), TESTING, HISTORY\n```\n\nOne item remains on the open-work list: splitting `update_game`'s orchestration. The docs rate it lowest priority, since it is readability only and can be tested only through Playwright. I'd still do it as a pure move into named methods, with the e2e specs as the net. Tell me when this is committed and I'll start."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "committed and pushed!"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Last item on the list is splitting `update_game`. I'm reading it in full first, because how it splits depends on what state flows between its phases."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git status --short | head -3; wc -l src/app/game_loop.rs; grep -n \"^ …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/src/app/game_loop.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Read",
+          "target": "~/workspace/open-miami/src/app/game_loop.rs"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/app/game_loop.rs' L=open(p).read().split('\\n…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "It compiles for wasm on the first attempt. I'm reading the new spine and the cut points to check the order and that nothing was dropped."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n '/pub(crate) fn update_game/,/^ \\/\\/\\/ The simulation tick/p' …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Clippy flags `update_camera`'s last two lines, a `let` binding that's immediately returned. I'm returning the expression directly."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='src/app/game_input.rs'; s=open(p).read() old=\"\"\"…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Clean on both toolchains. Now the docs, then the full verification and both browser suites."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/ARCHITECTURE.md'; s=open(p).read() old=\"| `…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I'm removing \"empty right now\" from `CLAUDE.md`. It would go stale, and `ARCHITECTURE.md` already says it. I'm also re-wrapping two long lines, then running the browser suites."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='CLAUDE.md'; s=open(p).read() s=s.replace(\"\"\" sta…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "curl -s \"https://api.github.com/repos/c4ffein/open-miami/actions/runs…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "CI is fully green on the audio-seam commit 537f582: main CI, both E2E jobs, and the build and deploy.\n\nThe last open item is done too. `update_game` was one 510-line function and is now a spine of about 110 lines that calls named phases. Locally `make verify` passes, clippy is clean on both toolchains, `make check-e2e` passes all 20 tests and `make check-render` passes all 9 scripts. Everything is unstaged. `src/app/game_input.rs` and `src/app/game_events.rs` are untracked and need adding.\n\n## What changed\n- **`src/app/game_loop.rs`:** the spine. A frame runs in this order: camera, input, debug keys, simulation tick, scenario and elevators, `render_world`, events, `render_hud`, extraction, restart. The small phases stay in this file: `tick_world`, `tick_scenario`, `finish_extraction` and `handle_restart`.\n- **`src/app/game_input.rs` (new):** `update_camera`, `handle_player_input` (conversations, tutorial gates, holds, combat) and `handle_debug_keys`.\n- **`src/app/game_events.rs` (new):** `bridge_events_to_scenario` (gate release and the checkpoint snapshot), `play_event_sfx` and `play_transition_sfx`.\n\n## Why behaviour is unchanged\n- **Pure move.** I compared the statements before and after. Apart from the new method signatures and call lines, only four statements changed: two `gate` conditions now read the flag captured at the start of the frame, one argument lost its `&`, and the early `return`s became `return true`.\n- **Gate state keeps its meaning.** The G debug key can skip a tutorial gate mid-frame. The rest of that frame still uses the gate state captured when the frame started, exactly as before.\n- **Perf traces unchanged.** The `?perf` span guards stay in the spine, so each span measures what it measured before.\n- **One clippy fix.** `update_camera` now returns its last expression directly where it had used a `let` binding.\n- **Browser suites as the net.** This is app-layer code, so nothing native can test it. The gameplay, menu-transition and all-floors specs all pass.\n\n## The open-work list is now empty\nAll five items from the start of this session are closed. `docs/ARCHITECTURE.md` now says so and lists what is knowingly not covered:\n- how the audio sounds, and its async bake plumbing;\n- `src/app/` beyond what the Playwright specs drive;\n- the robot rig's rotation order, which is pinned only in the browser.\n\n`docs/HISTORY.md` carries the record of each item. `CLAUDE.md` and `docs/CODEMAP.md` have the new module map.\n\nSuggested message:\n\n```\nupdate_game: 510 lines -> a ~110-line spine of named phases (camera -> input -> debug keys -> tick -> scenario + elevators -> render_world -> events -> render_hud -> extraction -> restart); app/game_input.rs (update_camera, handle_player_input, handle_debug_keys) + app/game_events.rs (bridge_events_to_scenario, play_event_sfx, play_transition_sfx); pure move (statement multiset: only the seams changed), order kept, a gate skipped mid-frame by the debug keys still freezes that frame, the perf span guards stay in the spine. docs: the open-work list is closed (ARCHITECTURE says so, HISTORY has the record of all five items), CODEMAP + CLAUDE module map\n```\n\nEverything else this session touched is already in the docs. If you want something beyond the list, I see two candidates. `docs/ARCHITECTURE.md` lists the rig rotation order as the one mirror still pinned only in the browser. And `props-stability.js` still waits on fixed sleeps; the two-wave run keeps it green, but waiting on rendered frames would make it robust under load."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "anyhting remaining on your list?"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "git status --short | head -8; git log --oneline | head -1 | cut -c1-7…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "No, the list is empty. All five open-work items are done, along with the five things you asked for at the start: the CI fix, the README, the two file splits and the `CLAUDE.md` cleanup. The `update_game` split is committed as 07ce6e5 and the tree is clean. CI and the build and deploy are green on it; the E2E job is still running.\n\nI noticed some things along the way and deliberately left them alone. None of them is broken.\n\n1. **`props-stability.js` still waits on fixed 150 ms sleeps.** The two-wave `make check-render` run keeps it green, but under enough load it could flake again. The fix is to wait for rendered frames. It would take care, because the script freezes the clock and the FPS cap skips frames while it's frozen.\n2. **CI still floats on Rust `@stable`.** That is how this session's CI break started. `CLAUDE.md` now says how to reproduce such a break, but only a `rust-toolchain.toml` would prevent the next one. It's your decision, since it also pins every dev machine.\n3. **The rig rotation order is the last mirror pinned only in the browser.** `rig-parity.js` covers it today. A `cargo test` would mean parsing the GLSL's rotation order against the JS, and I'm not sure it's worth the effort.\n4. **The `unwrap()` calls I flagged in my first review are mostly still there.** That is in `scenario/state.rs` and the rest of `systems/`. I removed only the one in `AISystem::run`. They matter because the release build uses `panic = \"abort\"`, so a panic kills the game. This is the item I'd pick if you want one more.\n5. **`CLAUDE.md` has two over-long lines from my edits.** They're around lines 180 and 195. I can fold the fix into whatever comes next.\n6. **The repo is heavy.** `inspirations/` is 45 MB. I haven't checked whether it's tracked.\n7. **There's a `// TODO` in `src/app/game_events.rs`.** It sits where a dry-fire sound would go; the audio engine doesn't have one yet. That's a feature, not debt.\n\nThe E2E result for 07ce6e5 will land on its own. If it goes red, I can read the failure annotations from here."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "1: improve?  ;  2: lets keep as-is for now  ;  3: explain ?  ;  4: also explain more thoroughly?  ;  5: agree  ;  6: i think these are untracked, but check that?  ;  7: what is a \"dry-fire\" again?... implement? or missing infos?"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I'll start with the quick checks, items 6 and 7, and gather data for the two explanations, then do the work on items 1, 5 and 7."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "echo \"--- 6) inspirations / shots:\"; git ls-files inspirations shots …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "for loc in src/systems/ai/nav.rs:52 src/scenario/state.rs src/scenari…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 258,300p src/game.rs; sed -n 488,500p src/ecs/world.rs; echo -…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n '/pub fn play_pickup/,/^ }/p;/fn synth_pickup/,/^ }/p;/pub fn …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 139,160p src/audio/sfx.rs; sed -n 300,365p src/audio/sfx.rs; g…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' import re p='src/audio/sfx.rs'; s=open(p).read() s=…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='CLAUDE.md'; s=open(p).read() reps=[(\"\"\" the POST…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='CLAUDE.md'; s=open(p).read() a=\"\"\" `ops.js`, `ro…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "cat [scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/TESTING.md'; s=open(p).read() old=\"path) an…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "grep -n \"function leg\\|function arm\\|rotX\\|rotY\\|rotZ\\|rigVS\" web/rob…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "tail -5 [scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "ToolSearch",
+          "target": "select:Monitor"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/HISTORY.md'; s=open(p).read() old=\" A faile…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "I'm waiting for the stress run of the new version to finish. I wrote the `HISTORY.md` note ahead of that result, so I'll correct it if the result contradicts it."
+        },
+        {
+          "t": "tool",
+          "name": "Monitor",
+          "target": "F=[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "The new version's stress run is still going. I haven't run `make verify` or the browser suites on any of this yet, because they would compete with that run for CPU. They come next.\n\n**1. `props-stability.js`: improved, final A/B pending.** Every fixed sleep is now a wait for rendered engine frames, counted by tapping `frameRender`. Unloaded it passes and runs faster, 37 s against about 60 s. Under heavy load (one core shared with four busy loops) the old version fails 5 checks with missed clicks and stale frames, which is the kind of failure CI had. I wrote the `docs/HISTORY.md` note as if the new version had passed under that load, so I'll confirm or correct it when the run finishes.\n\n**2. Rust toolchain pinning:** left as it is.\n\n**3. Rig rotation order.**\n- **What it is.** The robot skeleton is evaluated twice, both times inside `web/robot-core.js`. `leg()` and `arm()` build it on the CPU by multiplying matrices parent to child, and that version is the reference. The `rigVS` vertex shader applies the same rotations on the GPU, one call after another, innermost first. Rotations don't commute, so swapping `rotZ` and `rotX` in one of them bends the arm differently.\n- **Why it's checked only in the browser.** Every other mirror compares literal numbers, so a `cargo test` can parse them from disk and compare. This one compares two programs in different notations, and a test would have to prove they're equivalent. Rendering both and comparing pixels is the right tool, and `rig-parity.js` already does that in about 5 s on every pose and weapon.\n- **Recommendation:** leave it.\n\n**4. `unwrap()`: I withdraw the concern.**\n- **My review was wrong.** I said the scenario and AI files carried the most `unwrap()` calls in non-test code, but my grep had counted their test modules. Excluding tests, the whole crate has 13.\n- **All 13 are safe by construction:**\n  - a `pop_front()` right after a `push_back()` (two of them);\n  - a component lookup one line after that component is added;\n  - the animation-frame bootstrap in `src/app.rs` (four);\n  - six in the level editor, which isn't part of the shipped game.\n- **What the real issue would have been.** With `panic = \"abort\"`, any panic kills the tab with no recovery. Slice indexing and a double `RefCell` borrow are other ways to panic. The all-floors and playthrough tests are the practical protection against those.\n- **Recommendation:** nothing to do.\n\n**5. `CLAUDE.md`:** the over-long lines are re-wrapped.\n\n**6. `inspirations/` and `shots/`:** you were right. Both are gitignored, git tracks zero files under them, and `.git` is 16 MB.\n\n**7. Dry fire: implemented.**\n- **What it is.** \"Dry fire\" is pulling the trigger on an empty gun, so the hammer clicks on nothing.\n- **What already existed.** The gameplay side was complete. `fire_player_weapon` emits `GameEvent::DryFire` once per would-be shot at the weapon's fire cadence, so a held trigger doesn't spam it. Only the sound was missing.\n- **What I added:**\n  - `SfxKind::DryFire`, placed right after `Throw` in the combat prefix, which now holds 13 kinds;\n  - `play_dry_fire` and `synth_dry_fire`, and the hook in `src/app/game_events.rs`.\n- **The sound.** A bright 12 ms noise tick for the hammer, a short hollow low \"tock\" under it, and a faint second tick 34 ms later. It's quiet next to a gunshot and has a little rate jitter so repeated clicks aren't identical.\n- **What's verified.** The engine tests passed after adding it; they iterate `SFX_KINDS`, so they cover it automatically. It fits its 0.2 s bake and passes every graph invariant.\n- **What isn't.** I can't hear it, so whether it sounds right is for you to judge. The three lines in `synth_dry_fire` are easy to tune.\n\nI'll run the full verification as soon as the stress run reports."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n '/== props-stability on/,$p' [scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/HISTORY.md'; s=open(p).read() a=s.index(\" F…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "[scratch]…"
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(taskset -c 2-7 make verify 2>&1 | grep -E \"✓|✗|^error|FAILED|panicke…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "`make verify` passes with the dry-fire sound in, and clippy is clean on 1.98.1. The Playwright specs can run on the other six cores while the stress A/B continues."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "(taskset -c 2-7 make check-e2e 2>&1 | grep -E \" passed| failed|flaky|…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "ls -t tests/e2e/test-results/ | head -8; find tests/e2e/test-results …"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "sed -n 1,40p \"tests/e2e/test-results/level-completion-Open-Miam-80ba5…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Monitor",
+          "target": "F=[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "Two things are still outstanding, and I won't call this done until both are settled.\n\n- **Stress A/B for `props-stability.js`.** At the extreme load, the old version produced 5 false failures. The new one produced none but ran past my timeout. I'm measuring a realistic load now.\n- **The `level-completion` timeout in `make check-e2e`.** It needs a re-run once the stress test has stopped using the CPU.\n\n`make verify` passes with everything else in place."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "python3 - <<'EOF' p='docs/HISTORY.md'; s=open(p).read() new=\"\"\" FOLLO…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "On a quiet machine both browser suites pass: `make check-e2e` 20 of 20 and `make check-render` 9 of 9. The earlier `level-completion` timeout was my stress test burning CPU in the background, not the dry-fire change. `make verify` passes, clippy is clean on 1.98.1, everything is unstaged, and there are no new untracked files.\n\n**1. `props-stability.js`: fixed.** Every fixed sleep is now a wait for rendered engine frames, counted by tapping `window.frameRender`.\n- **Unloaded:** it runs in about 37 s, down from about 60 s.\n- **Realistic load** (two cores shared with four busy loops): the new version passes 16 of 16. The old one reports 2 false failures, a missed click and stale frames, which is what CI saw.\n- **A correction:** I had written \"the new one passes\" into `docs/HISTORY.md` before its stress run finished. At the extreme load, one core shared with four busy loops, it did not pass. It ran past my 560 s cap, with zero false failures up to that point. The note is rewritten.\n- **The trade-off:** under starvation it gets slow. It took 324 s at the realistic load, which is over the Makefile's 180 s `RENDER_TIMEOUT`. A starved run now ends as a timeout, where the old version gave false pixel failures.\n- **Docs:** `docs/TESTING.md` names frame-waiting as the pattern for any new live-game script.\n\n**7. Dry fire: implemented.**\n- **What it is.** \"Dry fire\" is pulling the trigger on an empty gun, so the hammer clicks on nothing.\n- **What already existed.** The gameplay side was complete. `fire_player_weapon` emits `GameEvent::DryFire` once per would-be shot at the weapon's fire cadence, so a held trigger doesn't spam it. Only the sound was missing.\n- **What I added:**\n  - `SfxKind::DryFire`, placed right after `Throw` in the combat prefix, which now holds 13 kinds;\n  - `play_dry_fire` and `synth_dry_fire`, and the hook in `src/app/game_events.rs`.\n- **The sound.** A bright 12 ms noise tick for the hammer, a short hollow low \"tock\" under it, and a faint second tick 34 ms later. It's quiet next to a gunshot and has a little rate jitter so repeated clicks aren't identical.\n- **What's verified.** The engine tests picked it up with no test change, because they iterate `SFX_KINDS`. It fits its 0.2 s bake and passes every graph invariant.\n- **What isn't.** I can't hear it, so whether it sounds right is for you to judge. The three lines in `synth_dry_fire` are easy to tune.\n\n**The other five items:**\n- **2. Rust toolchain pinning:** left as it is.\n- **3. Rig rotation order:** explained above. It compares two programs, not literal numbers, so `rig-parity.js`'s pixel check is the right tool. Leave it.\n- **4. `unwrap()`:** I withdraw the concern. The crate has 13 outside tests, and all are safe by construction. My original count had included the test modules.\n- **5. `CLAUDE.md`:** the long lines are re-wrapped.\n- **6. `inspirations/` and `shots/`:** gitignored, and git tracks no files under them.\n\nSuggested message:\n\n```\nprops-stability waits on rendered ENGINE FRAMES, never on sleeps (tap on window.frameRender): ~37 s unloaded (was ~60), and under load - 2 cores shared with 4 busy loops - 16/16 where the sleeping version reports 2 false failures (missed click, stale frames: what CI saw); a starved run now ends as a timeout, not as pixel failures + the DRY-FIRE click: SfxKind::DryFire (hammer tick, hollow tock, spring tick; 0.2 s bake, rate jitter), play_dry_fire, hooked to GameEvent::DryFire which had been emitted silently - covered by the engine graph tests the moment it joined SFX_KINDS + CLAUDE.md long lines re-wrapped + docs: TESTING (frame-waiting = the pattern for live-game scripts), HISTORY\n```\n\nNothing else is on my list."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "text": "ok, also publish this session ? WDYT?"
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "text",
+          "text": "You already publish sessions under `docs/transcripts/`, so I take \"publish\" to mean adding this one there. Before giving an opinion I'm looking at how the existing ones were exported and what the exporter lets through."
+        },
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "ls -la docs/transcripts/ | awk '{print $5, $9}'; sed -n 1,60p docs/tr…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "find / -xdev -name \"export_transcript.py\" 2>/dev/null | head -3; ls -…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "items": [
+        {
+          "t": "tool",
+          "name": "Bash",
+          "target": "S=\"[scratch]…"
+        }
+      ]
+    }
+  ]
+}

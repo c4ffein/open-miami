@@ -672,6 +672,34 @@ impl AudioEngine {
         self.noise(t, 0.22, 0.22, BiquadFilterType::Highpass, 200.0, 1600.0);
     }
 
+    /// An empty gun: the hammer falls on nothing. Quiet next to a shot, dry
+    /// (no room tail to speak of) — the sound of having to throw the thing.
+    pub fn play_dry_fire(&self) {
+        if !self.enabled.get() {
+            return; // sound off: build NO nodes (the context is suspended anyway)
+        }
+        if self.play_baked(SfxKind::DryFire) {
+            return;
+        }
+        self.synth_dry_fire();
+    }
+    pub(super) fn synth_dry_fire(&self) {
+        let t = self.t0();
+        // The hammer's tick: a bright 12 ms noise snap...
+        self.noise(t, 0.012, 0.30, BiquadFilterType::Highpass, 3800.0, 2600.0);
+        // ...the mechanism's small hollow "tock" under it...
+        self.tone(210.0, 130.0, t, 0.045, 0.16, OscillatorType::Square);
+        // ...and the sear / spring settling a moment later.
+        self.noise(
+            t + 0.034,
+            0.010,
+            0.12,
+            BiquadFilterType::Highpass,
+            5200.0,
+            3400.0,
+        );
+    }
+
     /// The player takes a hit — mean: a hard body blow (click, low-passed
     /// slam, a big 130 → 45 Hz thump, a crunch band) driven hot, with a
     /// loud, longer clipped grunt.
