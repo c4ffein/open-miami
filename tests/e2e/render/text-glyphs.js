@@ -93,6 +93,24 @@ const BLACK = ops.CLEAR(0, 0, 0);
   await draw('arena-oob', ['ONLY ONE'], ops.TEXT(5, 40, 120, 32, 1, 1, 1));
   t.report((await t.stats('arena-oob')).lit === 0, 'an out-of-range text index draws nothing');
 
+  // WIDE FALLBACK GLYPHS, on every machine. What VT323 lacks falls back to
+  // the box's fonts: real ones on a CI runner (wide CJK cells full of ink),
+  // NONE on a bare dev box (every fallback glyph is then a VT323-wide tofu,
+  // all atlas generations share one grid, and the reset bug below cannot
+  // show — which is how it was first measured away). So the flood's code
+  // points are MADE wide here: `measureText` reports 19 + 7k px and
+  // `fillText` inks the whole advance.
+  await t.page.evaluate(() => {
+    const P = CanvasRenderingContext2D.prototype, measure = P.measureText, fill = P.fillText;
+    const wide = (str) => { const cp = str.codePointAt(0); return cp >= 0x4e00 ? 19 + (cp % 5) * 7 : 0; };
+    P.measureText = function (str) { const w = wide(str); return w ? { width: w } : measure.call(this, str); };
+    P.fillText = function (str, x, y) {
+      const w = wide(str);
+      if (w) this.fillRect(x, y - 40, w, 52); // ink across the whole ADVANCE; the cell's padding stays clear, as with a real glyph
+      else fill.call(this, str, x, y);
+    };
+  });
+
   // 7) the atlas reset. `before` = a HUD-like frame on a fresh-ish atlas.
   const hud = ['HEALTH: 100', 'AMMO 12/12', 'PURGE THE FLOOR — 3 LEFT', 'EXIT'];
   // Sizes on both sides of the atlas's 48 px: MAGNIFIED text (the last line)
@@ -102,7 +120,7 @@ const BLACK = ops.CLEAR(0, 0, 0);
   await draw('hud-before', hud, hudCmds);
   // Flood the atlas with distinct glyphs, 60 a frame, until it has been
   // rebuilt at least once (capacity: 1024 / ~24 px cells x 16 rows ~ 670).
-  let cp = 0x4e00; // CJK: never in VT323 (fallback glyphs or tofu), no combining marks, no overhang
+  let cp = 0x4e00; // CJK: never in VT323 — the wide fallback glyphs patched in above
   for (let f = 0; f < 16; f++) {
     let s = '';
     for (let k = 0; k < 60; k++) s += String.fromCodePoint(cp++);

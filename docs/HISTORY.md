@@ -182,14 +182,24 @@ turned up one real mismatch and two non-bugs worth remembering:
   shader's last `else` — the MODAL STATIC branch, reading the colour as
   panel extents. The game never emits one, so nothing was visible. Fixed in
   `frameRender` (the frame is no longer routed through the scene target).
-- **Zeroing the glyph atlas on reset: tried, measured, removed.** The atlas
-  is sampled LINEAR and its reset leaves the old texels in place, which
-  looks like a bleed bug for magnified text. It is not: VT323 cells all have
-  one width, every generation lays out on the same grid, and a stale
-  neighbour presents its transparent padding. Zeroing changed no pixel
-  (A/B, magnified text included). What DOES differ after a reset: up to +-1
-  on a channel for a few dozen px — float rounding of the interpolated UVs
-  at another atlas position. The test's tolerance is 1 for that reason.
+- **The glyph atlas reset left stale texels — a real bug, first measured
+  AWAY.** The atlas is sampled LINEAR and its reset kept the old texels. The
+  first A/B (zero it / don't) changed no pixel, so the fix was removed and
+  this page said "not a bug: every cell has one width". WRONG, and CI said so
+  on the next push: the dev box has NO system fonts, so every fallback glyph
+  there is a VT323-wide tofu and all atlas generations share one grid. With
+  real fonts (a CI runner, a player's machine) a fallback glyph has another
+  cell width, a new generation does not line up with the old one, stale ink
+  lands right against a fresh cell, and magnified text picks it up: up to 54
+  levels off. The reset now ZEROES the atlas (web/renderer/text.js). The game
+  never reaches a reset (~670 distinct glyphs), so nothing was ever visible.
+  LESSONS: a measurement is only as wide as the machine it ran on — the test
+  now MAKES its fallback glyphs wide (patched `measureText` / `fillText`), so
+  it fails without the fix on any box; and the dev box's font-less Chromium
+  is a blind spot (docs/TESTING.md has the recipe for CI-like fonts). What
+  still differs after a reset, with the fix: +-1 on a channel for a few
+  dozen px — float rounding of the UVs at another atlas position; hence the
+  test's tolerance of 1.
 - **DRIVE's torn band keeps one art column of scene in the vacated slice**:
   the shader's void test is `p.x < -0.5 * uPx` (a cell whose centre lands
   exactly half a cell outside still samples). By design; the test allows it.
@@ -221,3 +231,12 @@ turned up one real mismatch and two non-bugs worth remembering:
   where `make verify` was green). Fixed with `as_chunks`. To reproduce a
   CI-only lint: `rustup toolchain install <version>` and
   `cargo +<version> clippy …` — no need to move the default toolchain.
+- **`check-render` went red on CI with the three renderer-only scripts
+  (2026-09).** Two causes in one run: `text-glyphs` (the atlas bug above — CI
+  was right) and `props-stability`, which was only STARVED: it waits fixed
+  150 ms sleeps for a software-rendered frame, and the target had gone from
+  six parallel Chromiums to nine on a 4-core runner. `check-render` now runs
+  two waves (`RENDER_LIVE`, six wide as before, then `RENDER_ONLY`). Not
+  reproducible on the dev box even pinned to 2 cores — its cores are faster.
+  A failed run now prints its `FAIL` lines as `::error` annotations (readable
+  through the public API, unlike the job log) and uploads `test-results/`.

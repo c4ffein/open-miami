@@ -108,7 +108,7 @@ bundle:
 	@echo "$(YELLOW)Bundling web/renderer.js -> $(BUNDLE_OUT)/renderer.js...$(NC)"
 	@mkdir -p $(BUNDLE_OUT)
 	bun build web/renderer.js --outfile $(BUNDLE_OUT)/renderer.js --target browser --format esm --minify
-	@echo "$(GREEN)✓ Bundle written ($$(wc -c < $(BUNDLE_OUT)/renderer.js) bytes; sources: $$(cat web/renderer.js web/ops.js web/gpu-probe.js web/robot-core.js web/shoggoth-core.js web/renderer/shaders.js | wc -c))$(NC)"
+	@echo "$(GREEN)✓ Bundle written ($$(wc -c < $(BUNDLE_OUT)/renderer.js) bytes; sources: $$(cat web/renderer.js web/ops.js web/gpu-probe.js web/robot-core.js web/shoggoth-core.js web/renderer/*.js | wc -c))$(NC)"
 
 # Browser suites - shared preparation: the wasm + glue (build-wasm), the Bun
 # deps, the Chromium browser (+ its system libs, rootless fallback via
@@ -164,11 +164,16 @@ ifeq ($(origin RENDER_PORT), undefined)
 RENDER_PORT := $(shell python3 -c 'import socket; s = socket.socket(); s.bind(("", 0)); print(s.getsockname()[1])')
 endif
 RENDER_TIMEOUT ?= 180
-# The standalone scripts of tests/e2e/render/, run in parallel (one log each:
+# The standalone scripts of tests/e2e/render/ (one log each:
 # tests/e2e/test-results/render-<name>.log — the `FP <case> <hash>` lines the
 # renderer-only ones print stay in the log, for diffing across a refactor).
-RENDER_SCRIPTS = composite-coherence props-stability rig-parity grain-fold backdrop-clip \
-	shoggoth-parity postfx-kinds text-glyphs drive-backdrop
+# TWO WAVES, each one parallel: the LIVE-GAME scripts wait on fixed sleeps for
+# a software-rendered frame to land (props-stability: 150 ms), so their
+# parallel width is what a 4-core CI runner was proven green with — six. Going
+# to nine starved props-stability there (2026-09). The renderer-only scripts
+# (~5 s each, no sleeps) run after them.
+RENDER_LIVE = composite-coherence props-stability rig-parity grain-fold backdrop-clip shoggoth-parity
+RENDER_ONLY = postfx-kinds text-glyphs drive-backdrop
 check-render: e2e-prep
 	@echo "$(YELLOW)Running renderer acceptance tests (serve.py on :$(RENDER_PORT), $(RENDER_TIMEOUT) s timeout each)...$(NC)"
 	@ulimit -c 0; \
@@ -176,16 +181,23 @@ check-render: e2e-prep
 	trap 'kill $$SRV 2>/dev/null' EXIT; \
 	for i in $$(seq 1 50); do curl -sf -o /dev/null http://127.0.0.1:$(RENDER_PORT)/index.html && break; sleep 0.1; done; \
 	kill -0 $$SRV 2>/dev/null || { echo "$(RED)serve.py did not start on :$(RENDER_PORT) (port in use?) — set RENDER_PORT$(NC)"; exit 1; }; \
-	cd tests/e2e && mkdir -p test-results; PIDS=""; \
-	for s in $(RENDER_SCRIPTS); do \
-		( $(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/$$s.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-$$s.log 2>&1; echo $$? > test-results/render-$$s.exit ) & PIDS="$$PIDS $$!"; \
-	done; wait $$PIDS; \
+	cd tests/e2e && mkdir -p test-results; \
+	for wave in "$(RENDER_LIVE)" "$(RENDER_ONLY)"; do \
+		PIDS=""; \
+		for s in $$wave; do \
+			( $(E2E_ENV) timeout $(RENDER_TIMEOUT) bun render/$$s.js http://127.0.0.1:$(RENDER_PORT) > test-results/render-$$s.log 2>&1; echo $$? > test-results/render-$$s.exit ) & PIDS="$$PIDS $$!"; \
+		done; \
+		wait $$PIDS; \
+	done; \
 	FAILED=""; \
-	for s in $(RENDER_SCRIPTS); do \
+	for s in $(RENDER_LIVE) $(RENDER_ONLY); do \
 		R=$$(cat test-results/render-$$s.exit); rm -f test-results/render-$$s.exit; \
 		echo "--- render/$$s.js (exit $$R)"; grep -v '^FP ' test-results/render-$$s.log; \
 		[ "$$R" = 0 ] || FAILED="$$FAILED $$s"; \
 	done; \
+	if [ -n "$$FAILED" ] && [ -n "$$GITHUB_ACTIONS" ]; then \
+		for s in $$FAILED; do { grep -E '^FAIL|rror' test-results/render-$$s.log || tail -n 3 test-results/render-$$s.log; } | head -n 8 | sed "s/^/::error title=render\/$$s.js::/"; done; \
+	fi; \
 	[ -z "$$FAILED" ] || { echo "$(RED)✗ render scripts failed:$$FAILED$(NC)"; exit 1; }
 	@echo "$(GREEN)✓ Render tests passed$(NC)"
 

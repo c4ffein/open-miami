@@ -166,11 +166,11 @@ import { createRobotPipeline, planFromScalars, POSE_SCALARS } from "./robot-core
 import { wrapGpuProbe } from "./gpu-probe.js";
 import { createShoggothPipeline, SPHERE_FLOATS } from "./shoggoth-core.js";
 import { OP, OP_ARGS, TEXT_SEP } from "./ops.js";
-import {
-  VS, FS, POST_VS, POST_FS, WARP_FS, DRIVE_VS, DRIVE_FS, BACKDROP_FS,
-} from "./renderer/shaders.js";
+import { createText } from "./renderer/text.js";
+import { createBackgrounds } from "./renderer/backgrounds.js";
+import { createPostfx } from "./renderer/postfx.js";
+import { VS, FS } from "./renderer/shaders.js";
 
-const OP_POSTFX = OP.POSTFX;
 
 /* ---- robot tables (indices mirror src/graphics.rs draw_robot; there is no
    pose table: the engine sends the pose as NUMBERS, src/render/pose.rs) ---- */
@@ -222,11 +222,6 @@ const HEADSHOT_HALFV = 0.52; // ortho half-extent: head + a hint of shoulders
 const HEADSHOT_CENTER = [0, 1.86, 0]; // orbit focus at head height (head y=1.95)
 const PORTRAIT_HALFV = 1.55; // bust ortho half-extent (whole robot)
 const PORTRAIT_CENTER = [0, 0.95, 0]; // bust orbit focus (robot-core default)
-
-/* ---- glyph atlas config ------------------------------------------------- */
-const GLYPH_FS = 48; // rasterization font size; quads scale from this
-const GLYPH_PAD = 2; // padding inside each glyph cell
-const GLYPH_ATLAS_SIZE = 1024;
 
 /* ---- pixel-art group scratch target ---- */
 const PIX_MAX = 1024; // texels per side of a scratch texture (= the group cap)
@@ -432,7 +427,6 @@ export function initRenderer(canvas) {
     new Uint8Array([255, 255, 255, 255])
   );
 
-  const glyphTex = makeTexture(GLYPH_ATLAS_SIZE);
 
   // ---- TV static (POSTFX kind 13): a pre-rolled noise sheet ----
   // One texel = one 6-physical-px static cell: rgb = a hard black/white
@@ -643,45 +637,11 @@ export function initRenderer(canvas) {
     return slot;
   }
 
-  /* ---- POSTFX: offscreen scene target + the full-screen post program ---- */
-  const postProg = gl.createProgram();
-  gl.attachShader(postProg, compile(gl.VERTEX_SHADER, POST_VS));
-  gl.attachShader(postProg, compile(gl.FRAGMENT_SHADER, POST_FS));
-  gl.linkProgram(postProg);
-  if (!gl.getProgramParameter(postProg, gl.LINK_STATUS)) {
-    throw new Error("Post program link failed: " + gl.getProgramInfoLog(postProg));
-  }
-  const postLoc = {
-    aPos: gl.getAttribLocation(postProg, "aPos"),
-    uScene: gl.getUniformLocation(postProg, "uScene"),
-    uRes: gl.getUniformLocation(postProg, "uRes"),
-    uKind: gl.getUniformLocation(postProg, "uKind"),
-    uT: gl.getUniformLocation(postProg, "uT"),
-    uColor: gl.getUniformLocation(postProg, "uColor"),
-    uTime: gl.getUniformLocation(postProg, "uTime"),
-  };
+  /* ---- the full-screen quad every full-shader pass draws (post, warp,
+     drive, backdrop) ---- */
   const postVbo = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, postVbo);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
-  const sceneTex = makeTexture();
-  const sceneFbo = gl.createFramebuffer();
-  let sceneW = 0, sceneH = 0;
-  // (Re)allocate the scene target to the canvas size (lazily, on first use /
-  // resize) — the FBO is only touched on frames that carry a POSTFX.
-  function ensureSceneTarget(w, h) {
-    if (sceneW === w && sceneH === h) return;
-    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-      throw new Error("Scene framebuffer is incomplete; the post pass cannot render.");
-    }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    sceneW = w;
-    sceneH = h;
-  }
   // The framebuffer the batch draws into: null (the canvas) normally, the
   // scene FBO on frames that end in a post pass, the pixel-group scratch
   // target inside a PIX_BEGIN/PIX_END group — plus the target's size:
@@ -699,60 +659,11 @@ export function initRenderer(canvas) {
   // recorded in) and physical (the backing buffer).
   let frameW = 1, frameH = 1;
   let framePW = 1, framePH = 1;
-  // The POSTFX request of the current frame (kind, t, r, g, b) or null.
-  const postfx = { kind: 0, t: 0, r: 0, g: 0, b: 0 };
+  /* ---- POSTFX: the scene target, the post shader, the warp accumulator
+     (web/renderer/postfx.js). `postfxActive` = this frame is routed through
+     the scene target; it stays here, frameRender decides it. ---- */
   let postfxActive = false;
-
-  // Walk the stream by the opcode table (no execution) and pick up the LAST
-  // POSTFX, if any — it must be known before the first draw so the whole
-  // frame lands in the scene target.
-  let scanSawBackdrop = false;
-  function scanPostfx(cmds) {
-    scanSawBackdrop = false;
-    let i = 0;
-    const n = cmds.length;
-    let found = false;
-    while (i < n) {
-      const op = cmds[i++];
-      const args = OP_ARGS[op];
-      if (args === undefined) break; // corrupt stream: frameRender reports it
-      if (op === 24) scanSawBackdrop = true; // BACKDROP: the frame has an opaque base layer
-      if (op === OP_POSTFX) {
-        postfx.kind = cmds[i] | 0;
-        postfx.t = cmds[i + 1];
-        postfx.r = cmds[i + 2];
-        postfx.g = cmds[i + 3];
-        postfx.b = cmds[i + 4];
-        found = true;
-      }
-      i += args;
-    }
-    return found;
-  }
-
-  // Draw the scene target to the canvas through the post shader, then hand
-  // the GL state back to the batch pipeline.
-  function runPostPass(w, h) {
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, w, h);
-    gl.disable(gl.BLEND);
-    gl.useProgram(postProg);
-    gl.disableVertexAttribArray(loc.aUv);
-    gl.disableVertexAttribArray(loc.aColor);
-    gl.bindBuffer(gl.ARRAY_BUFFER, postVbo);
-    gl.enableVertexAttribArray(postLoc.aPos);
-    gl.vertexAttribPointer(postLoc.aPos, 2, gl.FLOAT, false, 0, 0);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
-    gl.uniform1i(postLoc.uScene, 0);
-    gl.uniform2f(postLoc.uRes, w, h);
-    gl.uniform1f(postLoc.uKind, postfx.kind);
-    gl.uniform1f(postLoc.uT, postfx.t);
-    gl.uniform3f(postLoc.uColor, postfx.r, postfx.g, postfx.b);
-    gl.uniform1f(postLoc.uTime, (performance.now() % 100000) / 1000);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    if (postLoc.aPos !== loc.aPos) gl.disableVertexAttribArray(postLoc.aPos);
+  function handBackToBatch() { // after a post pass: the canvas is the batch target again
     batchFbo = null;
     batchW = frameW;
     batchH = frameH;
@@ -761,400 +672,26 @@ export function initRenderer(canvas) {
     bindBatchState();
     gl.uniform1i(loc.uTex, 0);
   }
+  const post = createPostfx({
+    gl, compile, makeTexture, loc, quadVbo: postVbo, handBack: handBackToBatch,
+  });
+  const postfx = post.request; // { kind, t, r, g, b } of the frame's last POSTFX
 
-  /* ---- POSTFX kind 10 (WARP TRAILS): ping-pong feedback accumulator ---- */
-  const warpProg = gl.createProgram();
-  gl.attachShader(warpProg, compile(gl.VERTEX_SHADER, POST_VS));
-  gl.attachShader(warpProg, compile(gl.FRAGMENT_SHADER, WARP_FS));
-  gl.linkProgram(warpProg);
-  if (!gl.getProgramParameter(warpProg, gl.LINK_STATUS)) {
-    throw new Error("Warp program link failed: " + gl.getProgramInfoLog(warpProg));
+  /* ---- DRIVE (opcode 20) + BACKDROP (opcode 24): the two full-shader
+     backgrounds (web/renderer/backgrounds.js) ---- */
+  const batchViewOut = { identity: true, inGroup: false, vw: 1, vh: 1, w: 1, h: 1 };
+  function batchView() { // what drawBackdrop needs to know about the batch, live
+    batchViewOut.identity = m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
+    batchViewOut.inGroup = !!pix;
+    batchViewOut.vw = batchVW;
+    batchViewOut.vh = batchVH;
+    batchViewOut.w = batchW;
+    batchViewOut.h = batchH;
+    return batchViewOut;
   }
-  const warpLoc = {
-    aPos: gl.getAttribLocation(warpProg, "aPos"),
-    uScene: gl.getUniformLocation(warpProg, "uScene"),
-    uPrev: gl.getUniformLocation(warpProg, "uPrev"),
-    uRes: gl.getUniformLocation(warpProg, "uRes"),
-    uT: gl.getUniformLocation(warpProg, "uT"),
-    uColor: gl.getUniformLocation(warpProg, "uColor"),
-    uMode: gl.getUniformLocation(warpProg, "uMode"),
-  };
-  // Two canvas-sized LINEAR accumulators (the sub-texel pull needs bilinear
-  // sampling), created lazily on the first warp frame, reallocated on resize.
-  const warpTex = [null, null];
-  const warpFbo = [null, null];
-  let warpW = 0, warpH = 0;
-  let warpRead = 0; // index of the accumulator holding last frame's trails
-  let warpLive = false; // did the PREVIOUS frame run the warp pass?
-  function ensureWarpTargets(w, h) {
-    if (warpW === w && warpH === h) return;
-    for (let i = 0; i < 2; i++) {
-      if (!warpTex[i]) {
-        warpTex[i] = makeTexture();
-        warpFbo[i] = gl.createFramebuffer();
-      }
-      gl.bindTexture(gl.TEXTURE_2D, warpTex[i]);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, warpFbo[i]);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, warpTex[i], 0);
-      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-        throw new Error("Warp framebuffer is incomplete; the trails cannot render.");
-      }
-    }
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    warpW = w;
-    warpH = h;
-    warpLive = false; // fresh (or resized) buffers hold garbage: clear first
-  }
-  function clearWarpAccum() {
-    for (let i = 0; i < 2; i++) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, warpFbo[i]);
-      gl.viewport(0, 0, warpW, warpH);
-      gl.clearColor(0, 0, 0, 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-    }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  }
-  // The kind-10 replacement for runPostPass: pass A folds last frame's
-  // trails (pulled toward the centre = streaming outward) + the scene's
-  // bright pixels into the write accumulator, pass B presents scene+trails
-  // to the canvas, then read/write swap. State handed back to the batch
-  // pipeline exactly like runPostPass.
-  function runWarpPass(w, h) {
-    ensureWarpTargets(w, h);
-    if (!warpLive) clearWarpAccum(); // the effect was off last frame: start clean
-    const write = 1 - warpRead;
-    gl.disable(gl.BLEND);
-    gl.useProgram(warpProg);
-    gl.disableVertexAttribArray(loc.aUv);
-    gl.disableVertexAttribArray(loc.aColor);
-    gl.bindBuffer(gl.ARRAY_BUFFER, postVbo);
-    gl.enableVertexAttribArray(warpLoc.aPos);
-    gl.vertexAttribPointer(warpLoc.aPos, 2, gl.FLOAT, false, 0, 0);
-    gl.uniform1i(warpLoc.uScene, 0);
-    gl.uniform1i(warpLoc.uPrev, 1);
-    gl.uniform2f(warpLoc.uRes, w, h);
-    gl.uniform1f(warpLoc.uT, postfx.t);
-    gl.uniform3f(warpLoc.uColor, postfx.r, postfx.g, postfx.b);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, warpTex[warpRead]);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
-    // Pass A: combine into the write accumulator.
-    gl.bindFramebuffer(gl.FRAMEBUFFER, warpFbo[write]);
-    gl.viewport(0, 0, w, h);
-    gl.uniform1f(warpLoc.uMode, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    // Pass B: present the scene + the fresh trails on the canvas.
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, warpTex[write]);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, w, h);
-    gl.uniform1f(warpLoc.uMode, 1);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    if (warpLoc.aPos !== loc.aPos) gl.disableVertexAttribArray(warpLoc.aPos);
-    warpRead = write;
-    warpLive = true;
-    batchFbo = null;
-    batchW = frameW;
-    batchH = frameH;
-    batchVW = framePW;
-    batchVH = framePH;
-    bindBatchState();
-    gl.uniform1i(loc.uTex, 0);
-  }
-
-  /* ---- DRIVE (opcode 20): the synthwave backdrop as ONE shader pass ----
-     Every pixel of the scene — banded dusk sky, cut-band sun, stars, digital
-     rain, the road rushing at the camera, palm silhouettes, tear bands,
-     red/cyan channel split, neon debris — is COMPUTED in the fragment
-     shader, shadertoy-style, AT ART RESOLUTION: the shader runs once per
-     art pixel into a tiny NEAREST target (the quantization for free), and
-     the finished image lands as one upscaled textured quad. No pixel-group
-     re-records, no stacked blended layers, and the scene math costs ~84K
-     fragment evaluations however large the canvas or DPR. The wasm
-     side (src/drive.rs) stays the source of truth for the deterministic
-     glitch schedules and ships them as op args; palm slots and debris
-     blocks are placed here per frame (same integer hash as Rust's
-     `hash01`) and handed over as uniforms so the per-pixel loop stays
-     cheap. The scene geometry constants mirror src/drive.rs's tunables. */
-  const driveProg = gl.createProgram();
-  gl.attachShader(driveProg, compile(gl.VERTEX_SHADER, DRIVE_VS));
-  gl.attachShader(driveProg, compile(gl.FRAGMENT_SHADER, DRIVE_FS));
-  gl.linkProgram(driveProg);
-  if (!gl.getProgramParameter(driveProg, gl.LINK_STATUS)) {
-    throw new Error("Drive program link failed: " + gl.getProgramInfoLog(driveProg));
-  }
-  const driveLoc = {
-    aPos: gl.getAttribLocation(driveProg, "aPos"),
-    uSize: gl.getUniformLocation(driveProg, "uSize"),
-    uTexH: gl.getUniformLocation(driveProg, "uTexH"),
-    uT: gl.getUniformLocation(driveProg, "uT"),
-    uGlitch: gl.getUniformLocation(driveProg, "uGlitch"),
-    uSplit: gl.getUniformLocation(driveProg, "uSplit"),
-    uPx: gl.getUniformLocation(driveProg, "uPx"),
-    uDim: gl.getUniformLocation(driveProg, "uDim"),
-    uOffs: gl.getUniformLocation(driveProg, "uOffs[0]"),
-    uSunSeed: gl.getUniformLocation(driveProg, "uSunSeed"),
-    uPalmA: gl.getUniformLocation(driveProg, "uPalmA[0]"),
-    uPalmB: gl.getUniformLocation(driveProg, "uPalmB[0]"),
-    uDebris: gl.getUniformLocation(driveProg, "uDebris[0]"),
-    uDebrisC: gl.getUniformLocation(driveProg, "uDebrisC[0]"),
-  };
-  // The drive's ART-RESOLUTION render target (ceil(w/px) x ceil(h/px)
-  // texels, NEAREST): the shader runs once per art pixel, the result is
-  // upscaled by a single textured quad — so the per-pixel scene math costs
-  // ~84K fragment evaluations instead of millions, whatever the canvas /
-  // DPR. Reallocated when the rect or art-pixel size changes.
-  let driveTex = null, driveFbo = null, driveTW = 0, driveTH = 0;
-  function ensureDriveTarget(tw, th) {
-    if (driveTW === tw && driveTH === th) return;
-    if (!driveTex) {
-      driveTex = gl.createTexture();
-      driveFbo = gl.createFramebuffer();
-      gl.bindTexture(gl.TEXTURE_2D, driveTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    } else {
-      gl.bindTexture(gl.TEXTURE_2D, driveTex);
-    }
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tw, th, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, driveFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, driveTex, 0);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-      throw new Error("Drive framebuffer is incomplete; the backdrop cannot render.");
-    }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    driveTW = tw;
-    driveTH = th;
-  }
-  const drivePalmA = new Float32Array(24 * 4);
-  const drivePalmB = new Float32Array(24 * 4);
-  const driveDebris = new Float32Array(7 * 4);
-  const driveDebrisC = new Float32Array(7 * 4);
-  // Exact port of src/drive.rs `hash01` (u32 wrapping arithmetic), so palm
-  // stutter / debris scheduling stay bit-identical to the primitive era.
-  function driveHash(a, b) {
-    let x = (Math.imul(a >>> 0, 374761393) + Math.imul(b >>> 0, 668265263)) >>> 0;
-    x = Math.imul(x ^ (x >>> 13), 1274126177) >>> 0;
-    return ((x ^ (x >>> 16)) & 0xffffff) / 0xffffff;
-  }
-  function drawDrive(w, h, t, glitch, split, px, dim, offs, offsBase) {
-    flush();
-    // Palm slots (mirrors the old `scene` palm loop, far to near): the
-    // per-slot placement runs once here; the shader only does bbox tests
-    // and, inside a palm's box, the trunk / frond segment distances.
-    const horizon = h * 0.44, ppu = w * 0.14;
-    const SPEED = 13.0, SPACING = 6.5, PX = 4.6, PH = 3.4, ZFAR = 36.0;
-    drivePalmA.fill(0);
-    drivePalmB.fill(0);
-    let pi = 0;
-    for (let i = 11; i >= 0; i--) {
-      for (const side of [-1, 1]) {
-        const slot = pi++;
-        const phase = side > 0 ? 0.5 : 0.0;
-        const travelled = (t * SPEED) / SPACING + phase;
-        const pid = ((Math.floor(travelled) + i) * 2 + (side > 0 ? 1 : 0)) >>> 0;
-        // Stutter: on hashed ~130ms buckets a palm freezes on the bucket's
-        // start time, then snaps forward.
-        const bkt = Math.floor(t / 0.13);
-        const te = driveHash(pid, (505 + bkt) >>> 0) < glitch * 0.4 ? bkt * 0.13 : t;
-        const trav = (te * SPEED) / SPACING + phase;
-        const off = trav - Math.floor(trav);
-        const z = (i + 1 - off) * SPACING;
-        if (z < 1.05 || z > ZFAR) continue;
-        const s = 1 / z;
-        const yb = horizon + (h - horizon) / z;
-        const xb = w * 0.5 + side * PX * ppu * s * (1 + 0.12 * driveHash(pid, 61));
-        const ht = PH * ppu * s * (0.8 + 0.4 * driveHash(pid, 62));
-        if (ht < 3) continue;
-        const fog = Math.pow(z / ZFAR, 1.3);
-        const lean = -side * 0.10 + (driveHash(pid, 63) - 0.5) * 0.24;
-        const sway = Math.sin(t * 1.1 + pid) * 0.05;
-        const o = slot * 4;
-        drivePalmA[o] = xb; drivePalmA[o + 1] = yb; drivePalmA[o + 2] = ht; drivePalmA[o + 3] = lean;
-        drivePalmB[o] = fog; drivePalmB[o + 1] = pid % 1024; drivePalmB[o + 2] = sway; drivePalmB[o + 3] = 1;
-      }
-    }
-    // Debris blocks: on hashed ~100ms buckets a handful of neon rects flash.
-    driveDebris.fill(0);
-    const db = Math.floor(t / 0.10);
-    if (glitch > 0 && driveHash(db, 611) < glitch * 0.5) {
-      const n = 2 + Math.floor(driveHash(db, 612) * 5);
-      for (let i = 0; i < n; i++) {
-        const kind = Math.floor(driveHash(db, 780 + i) * 3);
-        const c = kind === 0 ? [0.2, 0.95, 1.0] : kind === 1 ? [1.0, 0.25, 0.85] : [0.95, 0.95, 1.0];
-        const o = i * 4;
-        driveDebris[o] = driveHash(db, 700 + i) * w;
-        driveDebris[o + 1] = driveHash(db, 720 + i) * h;
-        // At least one art pixel each way, so quantized sampling can't miss.
-        driveDebris[o + 2] = Math.max(4 + driveHash(db, 740 + i) * 50, px);
-        driveDebris[o + 3] = Math.max(2 + driveHash(db, 760 + i) * 8, px);
-        driveDebrisC[o] = c[0]; driveDebrisC[o + 1] = c[1]; driveDebrisC[o + 2] = c[2];
-        driveDebrisC[o + 3] = 0.25 + 0.35 * driveHash(db, 790 + i);
-      }
-    }
-    // Sun-band glitch bucket (the shader hashes per slice off this seed).
-    const sb = Math.floor(t / 0.12);
-    const sunSeed = driveHash(sb, 399) < glitch * 0.3 ? (sb % 997) + 1 : 0;
-    // PASS 1: the scene, one fragment per art pixel, into the tiny target.
-    const tw = Math.ceil(w / px), th = Math.ceil(h / px);
-    ensureDriveTarget(tw, th);
-    gl.useProgram(driveProg);
-    gl.disableVertexAttribArray(loc.aUv);
-    gl.disableVertexAttribArray(loc.aColor);
-    gl.bindBuffer(gl.ARRAY_BUFFER, postVbo);
-    gl.enableVertexAttribArray(driveLoc.aPos);
-    gl.vertexAttribPointer(driveLoc.aPos, 2, gl.FLOAT, false, 0, 0);
-    gl.uniform2f(driveLoc.uSize, w, h);
-    gl.uniform1f(driveLoc.uTexH, th);
-    gl.uniform1f(driveLoc.uT, t);
-    gl.uniform1f(driveLoc.uGlitch, glitch);
-    gl.uniform1f(driveLoc.uSplit, split);
-    gl.uniform1f(driveLoc.uPx, px);
-    gl.uniform1f(driveLoc.uDim, dim);
-    gl.uniform1fv(driveLoc.uOffs, offs.subarray(offsBase, offsBase + 9));
-    gl.uniform1f(driveLoc.uSunSeed, sunSeed);
-    gl.uniform4fv(driveLoc.uPalmA, drivePalmA);
-    gl.uniform4fv(driveLoc.uPalmB, drivePalmB);
-    gl.uniform4fv(driveLoc.uDebris, driveDebris);
-    gl.uniform4fv(driveLoc.uDebrisC, driveDebrisC);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, driveFbo);
-    gl.viewport(0, 0, tw, th);
-    gl.disable(gl.BLEND); // the backdrop is opaque
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    if (driveLoc.aPos !== loc.aPos) gl.disableVertexAttribArray(driveLoc.aPos);
-    bindBatchState(); // restores target, program, blend, attribs, buffers
-    // PASS 2: the finished art-pixel image as ONE NEAREST-upscaled quad at
-    // the current transform's origin (texel row 0 is the scene's bottom).
-    setTexture(driveTex);
-    quad(0, 0, w, h, 0, 1, 1, 0, 1, 1, 1, 1);
-  }
-
-  /* ---- BACKDROP (opcode 24): the neon-wave void, one shader pass ----
-     What shows OUTSIDE the level's floor bounds: 2-3 slow overlapping
-     sine-field interference waves in heavily-darkened hot pink / cyan /
-     violet over near-black. DRIVE economics — the shader runs once per ART
-     pixel (px ~6 CSS px) into a tiny NEAREST target, then ONE upscaled
-     opaque quad at the current transform's origin. Normal frame content:
-     when POSTFX is active it lands in the scene FBO like everything else.
-     Deliberately dim — the play area must dominate; peak brightness stays
-     below every floor base tone in src/palette.rs (a void, not a light
-     show). Periods 10 s+ (angular speeds <= ~0.5 rad/s). */
-  const backdropProg = gl.createProgram();
-  gl.attachShader(backdropProg, compile(gl.VERTEX_SHADER, DRIVE_VS));
-  gl.attachShader(backdropProg, compile(gl.FRAGMENT_SHADER, BACKDROP_FS));
-  gl.linkProgram(backdropProg);
-  if (!gl.getProgramParameter(backdropProg, gl.LINK_STATUS)) {
-    throw new Error("Backdrop program link failed: " + gl.getProgramInfoLog(backdropProg));
-  }
-  const backdropLoc = {
-    aPos: gl.getAttribLocation(backdropProg, "aPos"),
-    uSize: gl.getUniformLocation(backdropProg, "uSize"),
-    uTexH: gl.getUniformLocation(backdropProg, "uTexH"),
-    uT: gl.getUniformLocation(backdropProg, "uT"),
-    uPx: gl.getUniformLocation(backdropProg, "uPx"),
-  };
-  // The backdrop's ART-RESOLUTION render target (ceil(w/px) x ceil(h/px)
-  // texels, NEAREST) — its own texture: the drive's target may be live in
-  // the same frame (`?viz` previews).
-  let backdropTex = null, backdropFbo = null, backdropTW = 0, backdropTH = 0;
-  function ensureBackdropTarget(tw, th) {
-    if (backdropTW === tw && backdropTH === th) return;
-    if (!backdropTex) {
-      backdropTex = gl.createTexture();
-      backdropFbo = gl.createFramebuffer();
-      gl.bindTexture(gl.TEXTURE_2D, backdropTex);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    } else {
-      gl.bindTexture(gl.TEXTURE_2D, backdropTex);
-    }
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, tw, th, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, backdropFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, backdropTex, 0);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
-      throw new Error("Backdrop framebuffer is incomplete; the game cannot render.");
-    }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    backdropTW = tw;
-    backdropTH = th;
-  }
-  // `?backdrop=full` = ignore the exclusion rect (the A/B for `?gpuprobe`).
-  const BACKDROP_FULL = typeof location !== "undefined"
-    && new URLSearchParams(location.search).get("backdrop") === "full";
-  function drawBackdrop(w, h, t, px, ex, ey, ew, eh) {
-    // The floor covers the whole screen (mid-level, the common case): there
-    // is no void to see — skip the wave pass and the quad altogether.
-    if (!BACKDROP_FULL && ew > 0 && eh > 0 && ex <= 0 && ey <= 0 && ex + ew >= w && ey + eh >= h) return;
-    flush();
-    // PASS 1: the waves, one fragment per art pixel, into the tiny target.
-    const tw = Math.ceil(w / px), th = Math.ceil(h / px);
-    ensureBackdropTarget(tw, th);
-    gl.useProgram(backdropProg);
-    gl.disableVertexAttribArray(loc.aUv);
-    gl.disableVertexAttribArray(loc.aColor);
-    gl.bindBuffer(gl.ARRAY_BUFFER, postVbo);
-    gl.enableVertexAttribArray(backdropLoc.aPos);
-    gl.vertexAttribPointer(backdropLoc.aPos, 2, gl.FLOAT, false, 0, 0);
-    gl.uniform2f(backdropLoc.uSize, w, h);
-    gl.uniform1f(backdropLoc.uTexH, th);
-    gl.uniform1f(backdropLoc.uT, t);
-    gl.uniform1f(backdropLoc.uPx, px);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, backdropFbo);
-    gl.viewport(0, 0, tw, th);
-    gl.disable(gl.BLEND); // the backdrop is opaque
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    if (backdropLoc.aPos !== loc.aPos) gl.disableVertexAttribArray(backdropLoc.aPos);
-    bindBatchState(); // restores target, program, blend, attribs, buffers
-    // PASS 2: the finished art-pixel image as ONE NEAREST-upscaled quad at
-    // the current transform's origin (texel row 0 is the scene's bottom).
-    // Drawn right away, UNBLENDED: an opaque full-screen quad through the
-    // blending batch would still read the whole destination (see drawStatic).
-    setTexture(backdropTex);
-    const identity = m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
-    gl.disable(gl.BLEND);
-    if (ew > 0 && eh > 0 && !BACKDROP_FULL && identity && !pix) {
-      // OCCLUSION: (ex, ey, ew, eh) is a rect that opaque content drawn later
-      // (the floor) is guaranteed to cover — src/backdrop_clip.rs. Draw the
-      // void only AROUND it: the SAME full-screen quad four times under a
-      // SCISSOR (above / below / left / right of the rect, whole physical
-      // pixels, the rect rounded INWARD). Same triangles = bit-identical
-      // texel choice for every surviving pixel (re-cut strips interpolate
-      // their own UVs and flip NEAREST at texel boundaries —
-      // tests/e2e/render/backdrop-clip.js caught exactly that), and fragments the
-      // floor would paint over are never shaded at all.
-      const sx = batchVW / batchW, sy = batchVH / batchH; // CSS px -> physical
-      const x0 = Math.max(0, Math.ceil(ex * sx)), x1 = Math.min(batchVW, Math.floor((ex + ew) * sx));
-      const y0 = Math.max(0, Math.ceil(ey * sy)), y1 = Math.min(batchVH, Math.floor((ey + eh) * sy));
-      gl.enable(gl.SCISSOR_TEST);
-      const strip = (px0, py0, px1, py1) => { // top-down physical px -> GL's bottom-up scissor
-        if (px1 <= px0 || py1 <= py0) return;
-        gl.scissor(px0, batchVH - py1, px1 - px0, py1 - py0);
-        quad(0, 0, w, h, 0, 1, 1, 0, 1, 1, 1, 1);
-        flush();
-      };
-      strip(0, 0, batchVW, y0);         // above
-      strip(0, y1, batchVW, batchVH);   // below
-      strip(0, y0, x0, y1);             // left
-      strip(x1, y0, batchVW, y1);       // right
-      gl.disable(gl.SCISSOR_TEST);
-    } else {
-      quad(0, 0, w, h, 0, 1, 1, 0, 1, 1, 1, 1);
-      flush();
-    }
-    gl.enable(gl.BLEND);
-  }
+  const { drawDrive, drawBackdrop } = createBackgrounds({
+    gl, compile, loc, quadVbo: postVbo, flush, bindBatchState, setTexture, quad, batchView,
+  });
 
   /* ---- pixel-art groups: a NEAREST scratch target per nesting depth ---- */
   // Groups nest (depth <= PIX_DEPTH): each depth owns its own 1024x1024
@@ -1800,83 +1337,8 @@ export function initRenderer(canvas) {
     vert(x1 - nx, y1 - ny, 0.5, 0.5, r, g, b, a);
   }
 
-  /* ---- glyph atlas: lazy VT323 rasterization ---- */
-  const glyphs = new Map(); // char -> {u0,v0,u1,v1,w,h,advance}
-  const glyphCellH = Math.ceil(GLYPH_FS * 1.3);
-  const glyphBaseline = GLYPH_FS; // baseline offset from cell top
-  let glyphPenX = 0;
-  let glyphPenY = 0;
-  const scratch = document.createElement("canvas");
-  const scratchCtx = scratch.getContext("2d", { willReadFrequently: false });
-
-  function bakeGlyph(ch) {
-    scratchCtx.font = `${GLYPH_FS}px 'GameFont', monospace`;
-    const advance = scratchCtx.measureText(ch).width;
-    const cellW = Math.ceil(advance) + GLYPH_PAD * 2;
-    if (glyphPenX + cellW > GLYPH_ATLAS_SIZE) {
-      glyphPenX = 0;
-      glyphPenY += glyphCellH;
-    }
-    if (glyphPenY + glyphCellH > GLYPH_ATLAS_SIZE) {
-      // Atlas full (would need hundreds of distinct glyphs — the game never
-      // gets there) — reset it. The old texels are NOT cleared: VT323 cells
-      // all have one width, so every generation lays out on the same grid and
-      // a stale neighbour shows its transparent padding at the boundary, which
-      // is as far as the LINEAR footprint of magnified text reaches (measured:
-      // zeroing the atlas here changed no pixel). Pinned by
-      // tests/e2e/render/text-glyphs.js: text after a reset == text before.
-      glyphs.clear();
-      glyphPenX = 0;
-      glyphPenY = 0;
-    }
-    scratch.width = cellW;
-    scratch.height = glyphCellH;
-    scratchCtx.clearRect(0, 0, cellW, glyphCellH);
-    scratchCtx.font = `${GLYPH_FS}px 'GameFont', monospace`;
-    scratchCtx.fillStyle = "#ffffff";
-    scratchCtx.textBaseline = "alphabetic";
-    scratchCtx.fillText(ch, GLYPH_PAD, glyphBaseline);
-    flush(); // texture upload must not reorder past pending quads
-    gl.bindTexture(gl.TEXTURE_2D, glyphTex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, glyphPenX, glyphPenY, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
-    const info = {
-      u0: glyphPenX / GLYPH_ATLAS_SIZE,
-      v0: glyphPenY / GLYPH_ATLAS_SIZE,
-      u1: (glyphPenX + cellW) / GLYPH_ATLAS_SIZE,
-      v1: (glyphPenY + glyphCellH) / GLYPH_ATLAS_SIZE,
-      w: cellW,
-      h: glyphCellH,
-      advance,
-    };
-    glyphs.set(ch, info);
-    glyphPenX += cellW;
-    return info;
-  }
-
-  function drawText(text, x, y, size, r, g, b, a) {
-    const s = size / GLYPH_FS;
-    let pen = x;
-    for (const ch of text) {
-      if (ch === " ") {
-        let info = glyphs.get(" ");
-        if (!info) info = bakeGlyph(" ");
-        pen += info.advance * s;
-        continue;
-      }
-      let info = glyphs.get(ch);
-      if (!info) info = bakeGlyph(ch);
-      setTexture(glyphTex);
-      quad(
-        pen - GLYPH_PAD * s,
-        y - glyphBaseline * s,
-        info.w * s,
-        info.h * s,
-        info.u0, info.v0, info.u1, info.v1,
-        r, g, b, a
-      );
-      pen += info.advance * s;
-    }
-  }
+  /* ---- text: the lazy VT323 glyph atlas (web/renderer/text.js) ---- */
+  const { drawText } = createText({ gl, makeTexture, flush, setTexture, quad });
 
   /* ---- robots: queue a live render into a scratch tile, draw it as a quad ---- */
   // Facing is applied as quad rotation (the tile is rendered facing "up"), so
@@ -2096,7 +1558,7 @@ export function initRenderer(canvas) {
     // offscreen scene target (decided up front, before the first draw) —
     // EXCEPT kind 13 (TV STATIC), which needs nothing from the scene and is
     // drawn as a plain blended noise quad at the end of the frame instead.
-    postfxActive = scanPostfx(cmds);
+    postfxActive = post.scan(cmds);
     // "Any other kind is a no-op" (the table: `Graphics::postfx`): without
     // this an unknown kind fell into the post shader's last branch (12).
     if (postfxActive && !(postfx.kind >= 0 && postfx.kind <= 13)) postfxActive = false;
@@ -2113,15 +1575,15 @@ export function initRenderer(canvas) {
       const off = (typeof window !== "undefined" && window.__grainOffset) || null; // (tests: a fixed roll)
       grainU0 = off ? off[0] : Math.floor(Math.random() * STATIC_SIZE) / STATIC_SIZE;
       grainV0 = off ? off[1] : Math.floor(Math.random() * STATIC_SIZE) / STATIC_SIZE;
-      const fold = GRAIN_FOLD && scanSawBackdrop
+      const fold = GRAIN_FOLD && post.sawBackdrop()
         && !(typeof window !== "undefined" && window.__grainFold === false);
       if (fold) {
         grainT = staticOverlay;
         staticOverlay = 0; // no quad
       }
     }
-    if (postfxActive) ensureSceneTarget(pw, ph);
-    batchFbo = postfxActive ? sceneFbo : null;
+    if (postfxActive) post.ensureSceneTarget(pw, ph);
+    batchFbo = postfxActive ? post.sceneFbo : null;
     batchW = w;
     batchH = h;
     batchVW = pw;
@@ -2313,10 +1775,7 @@ export function initRenderer(canvas) {
     const perfTPost = PERF ? performance.now() : 0;
     if (PERF) window.perfSpan("submit", perfTSubmit, perfTPost - perfTSubmit);
     // The post passes work on the final pixels: physical resolution.
-    const warpFrame = postfxActive && (postfx.kind | 0) === 10;
-    if (warpFrame) runWarpPass(pw, ph);
-    else if (postfxActive) runPostPass(pw, ph);
-    if (!warpFrame) warpLive = false; // next warp frame starts from a clean accumulator
+    post.present(postfxActive, pw, ph);
     if (PERF) {
       if (postfxActive) window.perfSpan("postfx", perfTPost, performance.now() - perfTPost);
       if (perfSpriteMs > 0) window.perfSpan("sprites", perfSpriteT0, perfSpriteMs);

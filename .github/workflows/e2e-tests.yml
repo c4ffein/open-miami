@@ -80,11 +80,13 @@ jobs:
         id: suite
         run: make ${{ matrix.target }}
 
+      # Both suites: check-render's per-script logs (render-<name>.log, with
+      # every measured number and the FP hashes) live in test-results/ too.
       - name: Upload test results
-        if: always() && matrix.target == 'check-e2e'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-test-results
+          name: ${{ matrix.target }}-test-results
           path: |
             tests/e2e/test-results/
             tests/e2e/playwright-report/

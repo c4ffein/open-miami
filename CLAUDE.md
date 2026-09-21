@@ -128,11 +128,14 @@
   arity, an `ops.js` row, a `case N: // NAME` in renderer.js: the tests fail
   until all three agree
 - MIRRORED ACROSS THE BOUNDARY — edit both or neither (pinned where noted):
-  the POSTFX kind table (`Graphics::postfx` doc <-> renderer.js + the `?viz`
+  the POSTFX kind table (`Graphics::postfx` doc <-> web/renderer/postfx.js +
+  renderer/shaders.js + the `?viz`
   EFFECTS list in src/app/viz/effects.rs); the DRIVE scene geometry
-  (`src/drive.rs` tunables <-> `DRIVE_FS`) and its integer hash (`hash01` <->
-  `driveHash`); the robot index tables (src/render/robots.rs <-> renderer.js
-  `ROBOT_COLORS` / `ROBOT_WEAPONS`); the pose scalar ORDER + flag bits
+  (`src/drive.rs` tunables <-> `DRIVE_FS` + the palm placement in
+  web/renderer/backgrounds.js `drawDrive`) and its integer hash (`hash01` <-> `driveHash`),
+  PINNED (`the_js_mirror_matches`); the robot index tables
+  (src/render/robots.rs <-> renderer.js `ROBOT_COLORS` / `ROBOT_WEAPONS`);
+  the pose scalar ORDER + flag bits
   (src/render/pose.rs <-> `POSE_SCALARS` / `planFromScalars`, PINNED); the
   rig's ROTATION ORDER per joint chain inside web/robot-core.js (`leg()` /
   `arm()`, the CPU rig = the reference <-> `rigVS`, the GPU rig;
@@ -171,8 +174,10 @@
   never `bufferSubData` into a live store); the context is `alpha: true` on
   Apple; NEVER leave a DOM element over the game canvas during play (it
   ~doubled GPU cost in measurements — and voids any measurement taken that
-  way); `initRenderer` stays ONE closure (decision + evidence:
-  docs/ARCHITECTURE.md). MEASURE with `?gpuprobe` BEFORE optimizing a layer;
+  way); `initRenderer`'s BATCH CORE stays ONE closure (decision + evidence:
+  docs/ARCHITECTURE.md) — only subsystems that own their state are
+  factories (`web/renderer/{text,backgrounds,postfx}.js`), and a change
+  there is proven by diffing the `FP` hashes (docs/TESTING.md). MEASURE with `?gpuprobe` BEFORE optimizing a layer;
   `?perf` + **P** = the CPU trace (viewer: tools/perf.html)
 
 ## Code map (short — the detailed tour is docs/CODEMAP.md; tools + editor: docs/TOOLS.md)
@@ -190,7 +195,8 @@
   `audio/compose.rs`, docs/MUSIC_CODE.md; the WebAudio engine =
   `audio/engine.rs` + `audio/engine/*`, wasm-only, not host-tested)
 - `web/` = the hand-written JS runtime (plain ES modules, no build step in
-  dev): `renderer.js` + `renderer/shaders.js`, `ops.js`, `robot-core.js`,
+  dev): `renderer.js` + `renderer/{shaders,text,backgrounds,postfx}.js`,
+  `ops.js`, `robot-core.js`,
   `shoggoth-core.js`, `gpu-probe.js`. Root `open_miami.js` / `_bg.wasm` are
   GENERATED (gitignored). `make bundle` (`bun build`) = DEPLOY ONLY
   (.github/workflows/wasm-build.yml)
@@ -206,7 +212,9 @@
   and, read by cargo tests: `POSE_SCALARS` / `planFromScalars` in
   `web/robot-core.js`, the `TABLE` rows of `web/ops.js`, `SPHERE_FLOATS` /
   the `instVS` attributes of `web/shoggoth-core.js`, the `case N: // NAME`
-  labels of `web/renderer.js`
+  labels of `web/renderer.js`, and the DRIVE literals (`float horizon = h *`,
+  `const SPEED =`, … — the exact prefixes are in `src/drive.rs`'s test) of
+  `DRIVE_FS` / `drawDrive` / `driveHash`
 - NEW PROPS are APPENDED (ids are persisted in props/props.json): a name in
   `PROP_NAMES`, a table entry + a draw fn in its family's two files, a
   dispatcher arm in `props/draw.rs`

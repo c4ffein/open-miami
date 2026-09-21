@@ -119,29 +119,35 @@ ships.
   `render::hud::render_hud`). What is left to split is orchestration
   (input handling, the event-to-sound bridge) — app code by nature, only
   reachable by Playwright.
-- `web/renderer.js`'s `initRenderer` is one ~1,650-line closure, and that is
-  a DECISION, not debt to pay down blindly. The dependency graph was
-  measured before deciding: ~30 mutable closure variables (`m` — which
+- `web/renderer.js`'s `initRenderer` BATCH CORE is one ~1550-line closure (it was ~2,100),
+  and that is a DECISION, not debt to pay down blindly. The dependency graph
+  was measured before deciding: ~30 mutable closure variables (`m` — which
   `tSave` / `tRestore` REASSIGN —, `vCount`, `pix`, `batchFbo`, `boundTex`,
-  …) are touched by nearly all 54 inner functions, and `vert` — called per
-  vertex — reads four of them. Splitting it into modules means a shared
+  …) are touched by nearly all of its inner functions, and `vert` — called
+  per vertex — reads four of them. Splitting THAT into modules means a shared
   context object: every one of those reads becomes a property load in the
-  hottest loop of a renderer tuned on a fill-rate-poor GPU, across code
-  whose pixels were only partly under test when this was decided (postfx
-  kinds, text and the drive got their pixel tests since: docs/TESTING.md). What WAS pure data is out: the GLSL
-  (`renderer/shaders.js`) and the opcode table (`ops.js`). A further split
-  should start with the subsystems that own their state — postfx + warp,
-  drive + backdrop, the glyph atlas — as factories, each with a pixel test
-  first.
+  hottest loop of a renderer tuned on a fill-rate-poor GPU. What could leave
+  has left: the GLSL (`renderer/shaders.js`), the opcode table (`ops.js`),
+  and the three subsystems that OWN their state, as factories —
+  `renderer/text.js`, `renderer/backgrounds.js`, `renderer/postfx.js`. They
+  take `gl` and a handful of batch functions (`flush`, `quad`, `setTexture`,
+  `bindBatchState`) from the core ONCE — plain function references, as cheap
+  as closure calls — plus one callback each way where they touch live batch
+  state (`batchView()` for the backdrop's occlusion path, `handBack()` after
+  a post pass). Proven pixel-identical: the 124 `FP` hashes of the
+  renderer-only tests, before / after each of the three moves. What is left
+  in the closure (pixel groups, the static cache, the sprite atlases, the
+  primitives) shares the hot state and stays.
 - `audio/engine.rs` + `audio/engine/*` is split by concern but stays
   browser-only: unlike `Graphics` it is not a recorder — it builds live
   WebAudio node graphs — so none of the SFX / voice recipes are host-tested
   (the sequencer, song data and bake specs in `audio/songs.rs` /
   `compose.rs` / `sfx.rs` are). A recording `AudioGraph` seam would fix
   that; it is a real design change, not a move.
-- Mirrored constants without a test yet: the drive scene geometry
-  (`drive.rs` ↔ `DRIVE_FS`) and the robot rig's rotation order
-  (`leg()` / `arm()` ↔ `rigVS`, covered by `rig-parity.js` in the browser).
+- One mirror is still pinned only in the browser: the robot rig's rotation
+  order (`leg()` / `arm()` <-> `rigVS`, held by `rig-parity.js`). Every other
+  mirrored constant has a `cargo test` (the DRIVE scene geometry + hash got
+  theirs last: `drive::tests::the_js_mirror_matches`).
 
 ## Characters: Rust computes poses, GLSL evaluates rigs, JS ferries
 
@@ -183,17 +189,9 @@ how each move was proven bit-exact: [HISTORY.md](HISTORY.md)):
 Everything the refactor set out to do is done; nothing below is urgent, and
 each item is optional. A new session can start from this list.
 
-1. **Pin the last unpinned mirror: the DRIVE scene geometry** (`src/drive.rs`
-   tunables <-> `DRIVE_FS` in web/renderer/shaders.js) — a `cargo test` that
-   parses the shader's constants, like the opcode / pose / sphere pins.
-2. **The renderer's self-contained subsystems as factories** (postfx + warp,
-   drive + backdrop, the glyph atlas) — their pixel tests exist now
-   (`postfx-kinds` / `text-glyphs` / `drive-backdrop`, docs/TESTING.md): diff
-   their `FP` hashes before / after. Never the batch core: see "Known debt" for why `initRenderer` stays one
-   closure.
-3. **Host tests for the WebAudio engine** — needs a recording `AudioGraph`
+1. **Host tests for the WebAudio engine** — needs a recording `AudioGraph`
    seam (what `Graphics::new_headless` is to drawing). A real design change;
    worth it only if the SFX / voice recipes start changing often.
-4. **Splitting `update_game`'s orchestration** (input handling, the
+2. **Splitting `update_game`'s orchestration** (input handling, the
    event-to-sound bridge) — app code by nature, reachable only by Playwright,
    so the payoff is readability, not testability. Lowest priority.

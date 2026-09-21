@@ -34,7 +34,8 @@
 // `13.0` speed / `2.4` stripe / `1.4` dash / `3.0 * ppu / z` road half
 // width in the road rows) and the palm-placement JS right after it
 // (`SPEED = 13.0, SPACING = 6.5, PX = 4.6, PH = 3.4, ZFAR = 36.0`). Keep
-// both sides equal so the unit tests here keep describing the shader.
+// both sides equal so the unit tests here keep describing the shader —
+// PINNED: `the_js_mirror_matches` parses those literals out of both JS files.
 // ---------------------------------------------------------------------------
 
 /// Horizon height as a fraction of the screen height.
@@ -68,11 +69,18 @@ pub const BANDS: usize = 9;
 /// (bucket, salt) pairs, so equal `t` always renders the exact same frame.
 pub fn hash01(a: u32, b: u32) -> f32 {
     let mut x = a
-        .wrapping_mul(374_761_393)
-        .wrapping_add(b.wrapping_mul(668_265_263));
-    x = (x ^ (x >> 13)).wrapping_mul(1_274_126_177);
+        .wrapping_mul(HASH_MUL_A)
+        .wrapping_add(b.wrapping_mul(HASH_MUL_B));
+    x = (x ^ (x >> 13)).wrapping_mul(HASH_MUL_X);
     ((x ^ (x >> 16)) & 0xff_ffff) as f32 / 0xff_ffff as f32
 }
+
+/// `hash01`'s multipliers — `driveHash` in web/renderer/backgrounds.js is the same
+/// function (it places the palms and the debris off the same buckets);
+/// pinned by `the_js_mirror_matches`.
+const HASH_MUL_A: u32 = 374_761_393;
+const HASH_MUL_B: u32 = 668_265_263;
+const HASH_MUL_X: u32 = 1_274_126_177;
 
 /// Screen y of world depth `z` (`z` >= 1; z = 1 is the bottom edge).
 pub fn project_y(horizon: f32, h: f32, z: f32) -> f32 {
@@ -165,6 +173,105 @@ pub use draw::render_drive;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The number that follows `prefix` in `src` (the prefix must be unique:
+    /// a second match means the pin no longer knows which literal it reads).
+    fn num_after(src: &str, prefix: &str) -> f32 {
+        assert_eq!(
+            src.matches(prefix).count(),
+            1,
+            "`{prefix}` must appear exactly once in the JS mirror"
+        );
+        let rest = &src[src.find(prefix).unwrap() + prefix.len()..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(rest.len());
+        rest[..end]
+            .parse()
+            .unwrap_or_else(|_| panic!("no number after `{prefix}`: `{}`", &rest[..end.min(12)]))
+    }
+
+    /// `src` between `start` and the next `end`.
+    fn section<'a>(src: &'a str, start: &str, end: &str) -> &'a str {
+        let a = src
+            .find(start)
+            .unwrap_or_else(|| panic!("`{start}` not found"));
+        let len = src[a..]
+            .find(end)
+            .unwrap_or_else(|| panic!("`{end}` not found"));
+        &src[a..a + len]
+    }
+
+    /// The scene geometry exists three times: the constants above (what the
+    /// native tests describe), DRIVE_FS (what draws the sky + road) and
+    /// `drawDrive` in web/renderer/backgrounds.js (what places the palms). Editing one alone
+    /// desyncs the picture from its tests — or the palms from the road.
+    #[test]
+    fn the_js_mirror_matches() {
+        let shaders = include_str!("../web/renderer/shaders.js");
+        let fs = section(shaders, "export const DRIVE_FS = `", "`;");
+        let scene: [(&str, f32); 5] = [
+            ("float horizon = h * ", HORIZON_FRAC),
+            ("float ppu = w * ", PPU_FRAC),
+            ("uniform float uOffs[", BANDS as f32),
+            ("float bandH = uSize.y / ", BANDS as f32),
+            (
+                "float band = clamp(floor(p.y / bandH), 0.0, ",
+                (BANDS - 1) as f32,
+            ),
+        ];
+        for (prefix, want) in scene {
+            assert_eq!(num_after(fs, prefix), want, "DRIVE_FS: `{prefix}`");
+        }
+        // The road rows (the sun above them has a `halfW` of its own).
+        let road = section(fs, "// Ground + road", "// Horizon glow line");
+        let rows: [(&str, f32); 5] = [
+            ("float pd = z + uT * ", SPEED),
+            ("bool alt = mod(floor(pd / ", STRIPE),
+            ("} else if (mod(floor(pd / ", DASH),
+            ("float halfW = ", ROAD_HALF),
+            ("float fog = pow(clamp(z / ", Z_FAR),
+        ];
+        for (prefix, want) in rows {
+            assert_eq!(
+                num_after(road, prefix),
+                want,
+                "DRIVE_FS road rows: `{prefix}`"
+            );
+        }
+        // The band loop that picks this slice's offset.
+        let tear = section(fs, "float dx = 0.0;", "p.x -= dx;");
+        assert_eq!(num_after(tear, "for (int i = 0; i < "), BANDS as f32);
+
+        let renderer = include_str!("../web/renderer/backgrounds.js");
+        let js = section(renderer, "function drawDrive(", "// PASS 1");
+        let palms: [(&str, f32); 7] = [
+            ("const horizon = h * ", HORIZON_FRAC),
+            (", ppu = w * ", PPU_FRAC),
+            ("const SPEED = ", SPEED),
+            (", SPACING = ", PALM_SPACING),
+            (", PX = ", PALM_X),
+            (", PH = ", PALM_H),
+            (", ZFAR = ", Z_FAR),
+        ];
+        for (prefix, want) in palms {
+            assert_eq!(num_after(js, prefix), want, "drawDrive: `{prefix}`");
+        }
+
+        // `driveHash` == `hash01`: same multipliers, same shifts, same mask.
+        let hash = section(renderer, "function driveHash(a, b) {", "\n  }");
+        for needle in [
+            format!("Math.imul(a >>> 0, {HASH_MUL_A})"),
+            format!("Math.imul(b >>> 0, {HASH_MUL_B})"),
+            format!("Math.imul(x ^ (x >>> 13), {HASH_MUL_X})"),
+            "((x ^ (x >>> 16)) & 0xffffff) / 0xffffff".to_string(),
+        ] {
+            assert!(hash.contains(&needle), "driveHash lost `{needle}`");
+        }
+
+        // The op carries one offset per band after its 7 scalars.
+        assert_eq!(crate::graphics::stream::OP_ARGS[20], 7 + BANDS);
+    }
 
     #[test]
     fn projection_round_trips_and_is_ordered() {

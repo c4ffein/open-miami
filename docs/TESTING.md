@@ -60,8 +60,10 @@ Headless Chromium on software GL (SwiftShader, ~5–15 fps): correct pixels,
 slow frames. Always run through the Makefile — it builds the wasm, installs
 the browser, sets the library path and the timeouts.
 
-- **`make check-render`** — nine standalone scripts (`RENDER_SCRIPTS` in the
-  Makefile), in parallel, each comparing PIXELS. Two families:
+- **`make check-render`** — nine standalone scripts, each comparing PIXELS, in
+  TWO parallel waves (`RENDER_LIVE` then `RENDER_ONLY` in the Makefile: the
+  live-game ones wait on fixed sleeps, so their parallel width stays at the
+  six a 4-core CI runner is green with). Two families:
   - on LIVE GAME frames: the pixel-group composite (`composite-coherence`),
     prop pixel-art stability (`props-stability`), the robots' GPU rig vs the
     CPU reference (`rig-parity`), the folded TV static (`grain-fold`), the
@@ -82,7 +84,7 @@ the browser, sets the library path and the timeouts.
     mutation-tested (7 renderer breaks, 7 caught). They also print one
     `FP <case> <hash>` line per rendered case into their log: REFACTORING
     `web/renderer.js`? diff those lines before / after — identical =
-    pixel-identical on 150+ cases.
+    pixel-identical on 120+ cases.
 
   These are the safety net for any change to `web/`.
 - **`make check-e2e`** — Playwright: floor 1 loads and draws its HUD, the
@@ -105,6 +107,16 @@ path) and each render script at `RENDER_TIMEOUT` (180 s — measured:
 target ~85 s). The render scripts run against a `serve.py` the
 target starts on `RENDER_PORT` (a free ephemeral port by default) and kills;
 logs in `tests/e2e/test-results/render-*.log`.
+
+**CI has fonts, the dev box may have none** (`fc-list | wc -l` = 0 there): any
+glyph VT323 lacks then falls back to a VT323-wide tofu locally and to a real,
+wider glyph on CI — text pixels differ, and a text bug can hide (it did:
+docs/HISTORY.md). To run a suite with CI-like fonts without root: `apt-get
+download fonts-dejavu-core fonts-wqy-microhei` (with the `-o Dir::State=…`
+options of tests/e2e/setup-browser-deps.sh), `dpkg -x` them somewhere, write a
+fonts.conf whose `<dir>` points there, and run `FONTCONFIG_FILE=<that file>
+make check-render`. On a CI failure, the `FAIL` lines are the run's `::error`
+annotations and the full logs are in its `check-render-test-results` artifact.
 
 What only the browser can catch: GLSL that does not compile, the JS renderer
 mis-walking a stream, robot-core / shoggoth-core failing, a prop or surface
