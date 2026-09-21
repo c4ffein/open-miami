@@ -332,4 +332,14 @@ fingerprint (`tests/ai_fingerprint.rs`).
   Also found while serving the PR for a listen: a saved SOUND OFF
   (`om.sound`) silences `?viz` → MUSICS with no hint at all — it cost an
   hour of "the music does not work" (open-work list).
+- **The e2e suite was one test away from red (2026-09).** Adding a two-test
+  spec (`sound-settings.spec.js`: the SETTINGS MUSIC level — the music bus's
+  gain, `om.music` — and the `?viz` SOUND button) made an UNRELATED test fail,
+  three runs out of three: the floor-1 lift run hit its 60 s limit inside a
+  `page.screenshot` (the limit expires wherever the test happens to be).
+  Measured: that test takes 24 s alone and 56.6 s in the full 20-test suite
+  at the default 4 workers — it only ever passed because workers went IDLE
+  near the end of the run, and the new tests filled them. The pages render in
+  software, so the box is CPU-bound: the 22-test run takes ~125 s at 2, 3 AND
+  4 workers, while that test takes 34 / 53 / 57 s. Local workers are now 2.
 

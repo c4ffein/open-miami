@@ -5,6 +5,10 @@ file formats: [SCENARIO_FORMAT.md](SCENARIO_FORMAT.md), [PROPS_FORMAT.md](PROPS_
 
 ## `?viz` toolbox (one entry point)
 
+- The tab bar's right end is a SOUND: ON / OFF button on every tab — the
+  SETTINGS sound toggle, mirrored (same state, same `om.sound` key; lit
+  while OFF). A saved SOUND OFF silences every play button of the toolbox;
+  this is the only hint of it.
 - `/?viz` tabs: SPRITES (two pages: CHARACTERS — click one → 3D/2D inspector
   iframe — and PROPS — the animated prop library from
   `src/props.rs`, wasm-drawn grid + big preview, one page per FAMILY

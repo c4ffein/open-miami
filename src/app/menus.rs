@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Height of the SETTINGS panel: the chrome + three 46-px rows + the hint.
+const SETTINGS_MODAL_H: f32 = 358.0;
+
 impl GameState {
     pub(crate) fn update_level_select(&mut self, graphics: &Graphics) {
         // Handle input - Left (Arrow, A for QWERTY, Q for AZERTY)
@@ -241,19 +244,21 @@ impl GameState {
         Vec2::new(mx, my)
     }
 
-    /// The SETTINGS modal body — two rows (SOUND, FPS CAP), Up/Down to
-    /// highlight, Enter/Space or a click on a row to act. Shared by the
-    /// main menu and the pause menu's stacked settings.
+    /// The SETTINGS modal body — three rows (SOUND, MUSIC, FPS CAP),
+    /// Up/Down to highlight, Enter/Space or a click on a row to act. Shared
+    /// by the main menu and the pause menu's stacked settings (both size
+    /// their panel with [`SETTINGS_MODAL_H`]).
     pub(crate) fn settings_modal_body(&mut self, graphics: &Graphics, p: Vec2, mw: f32) {
         const ROW_H: f32 = 46.0;
+        const ROWS: usize = 3;
         let rows_y = p.y + 118.0;
-        if input::is_key_pressed("ArrowDown")
-            || input::is_key_pressed("s")
-            || input::is_key_pressed("ArrowUp")
+        if input::is_key_pressed("ArrowDown") || input::is_key_pressed("s") {
+            self.settings_row = (self.settings_row + 1) % ROWS;
+        } else if input::is_key_pressed("ArrowUp")
             || input::is_key_pressed("w")
             || input::is_key_pressed("z")
         {
-            self.settings_row = 1 - self.settings_row;
+            self.settings_row = (self.settings_row + ROWS - 1) % ROWS;
         }
         let mut act: Option<usize> = None;
         if input::is_key_pressed("Enter") || input::is_key_pressed(" ") {
@@ -261,7 +266,7 @@ impl GameState {
         } else if input::is_mouse_button_pressed(input::mouse_buttons::LEFT) {
             let m = input::mouse_position();
             if m.x >= p.x && m.x <= p.x + mw {
-                for i in 0..2usize {
+                for i in 0..ROWS {
                     let ry = rows_y + i as f32 * ROW_H;
                     if m.y >= ry - 8.0 && m.y <= ry + 32.0 {
                         self.settings_row = i;
@@ -277,6 +282,14 @@ impl GameState {
                 set_setting("sound", if now { "on" } else { "off" });
             }
             Some(1) => {
+                // 100 -> 75 -> 50 -> 25 -> 0 -> 100 ... (percent; the SFX
+                // keep their level).
+                let pct = (self.audio.music_level() * 100.0).round() as u32;
+                let next = crate::audio::next_music_percent(pct);
+                self.audio.set_music_level(f64::from(next) / 100.0);
+                set_setting("music", &next.to_string());
+            }
+            Some(2) => {
                 // 30 -> 60 -> 120 -> UNCAPPED -> 30 ...
                 self.fps_cap = match self.fps_cap {
                     30 => 60,
@@ -299,8 +312,12 @@ impl GameState {
         } else {
             format!("{}", self.fps_cap)
         };
-        let rows: [(&str, String); 2] =
-            [("SOUND", sound_label.to_string()), ("FPS CAP", cap_label)];
+        let music_label = format!("{:.0}%", self.audio.music_level() * 100.0);
+        let rows: [(&str, String); ROWS] = [
+            ("SOUND", sound_label.to_string()),
+            ("MUSIC", music_label),
+            ("FPS CAP", cap_label),
+        ];
         for (i, (name, value)) in rows.iter().enumerate() {
             let ry = rows_y + i as f32 * ROW_H;
             let color = if self.settings_row == i {
@@ -318,7 +335,7 @@ impl GameState {
         }
         graphics.draw_text(
             "ENTER / SPACE / CLICK — CHANGE",
-            Vec2::new(p.x + 28.0, rows_y + 2.0 * ROW_H + 10.0),
+            Vec2::new(p.x + 28.0, rows_y + ROWS as f32 * ROW_H + 10.0),
             15.0,
             Color::new(1.0, 1.0, 1.0, 0.6),
         );
@@ -327,7 +344,7 @@ impl GameState {
     pub(crate) fn update_settings(&mut self, graphics: &Graphics) {
         let back = input::is_key_pressed("Escape");
         self.draw_level_select(graphics);
-        let p = self.draw_modal_chrome(graphics, "SETTINGS", 564.0, 312.0, "ESC — BACK");
+        let p = self.draw_modal_chrome(graphics, "SETTINGS", 564.0, SETTINGS_MODAL_H, "ESC — BACK");
         self.settings_modal_body(graphics, p, 564.0);
         // Switch AFTER drawing (see `update_level_select`).
         if back {
@@ -416,7 +433,8 @@ impl GameState {
             let close = input::is_key_pressed("Escape");
             let pp = self.draw_modal_chrome(graphics, "PAUSED", 420.0, 340.0, "");
             self.draw_pause_rows(graphics, pp, false);
-            let p = self.draw_modal_chrome(graphics, "SETTINGS", 564.0, 312.0, "ESC — BACK");
+            let p =
+                self.draw_modal_chrome(graphics, "SETTINGS", 564.0, SETTINGS_MODAL_H, "ESC — BACK");
             self.settings_modal_body(graphics, p, 564.0);
             if close {
                 self.pause_in_settings = false;

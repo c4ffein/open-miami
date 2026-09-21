@@ -211,8 +211,6 @@ eleven v2 songs as tracker-only `const` literals; record: HISTORY.md):
    still name the seven briefed tracks; the v2 songs are 27–80 s loops with
    no role. Options: give v2 songs roles, extend them to briefed lengths,
    or re-voice the briefed tracks with v2 instruments.
-3. The SETTINGS "MUSIC" level row (a bus gain + `om.music`), and the `?viz`
-   sound toggle (a saved SOUND OFF silences `?viz` with no hint).
 
 Done before that (HISTORY.md): the
 renderer-only pixel tests, the DRIVE mirror pin, the renderer's subsystems as

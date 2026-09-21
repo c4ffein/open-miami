@@ -321,6 +321,13 @@ impl GameState {
                 if get_setting("sound").as_deref() == Some("off") {
                     audio.set_enabled(false);
                 }
+                // ... and so does the MUSIC level (a percentage).
+                if let Some(level) = get_setting("music")
+                    .as_deref()
+                    .and_then(crate::audio::music_level_from_setting)
+                {
+                    audio.set_music_level(level);
+                }
                 audio
             },
             audio_unlocked: false,

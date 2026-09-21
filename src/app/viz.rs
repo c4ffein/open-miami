@@ -137,6 +137,22 @@ impl GameState {
             }
         }
 
+        // SOUND, top right of every tab: the SETTINGS toggle, mirrored here
+        // because a saved SOUND OFF silences every play button of `?viz` with
+        // no other hint. Same state, same `om.sound` key; the click is a
+        // user gesture, so switching sound ON also unlocks the context.
+        let sound_on = self.audio.is_enabled();
+        let sound_x = (graphics.width() - 20.0 - 158.0).max(20.0 + tabs.len() as f32 * 168.0);
+        let label = if sound_on { "SOUND: ON" } else { "SOUND: OFF" };
+        // Lit while OFF — that is the state worth noticing.
+        if viz_button(
+            graphics, mouse, sound_x, 14.0, 158.0, 46.0, label, !sound_on,
+        ) && click
+        {
+            self.audio.set_enabled(!sound_on);
+            set_setting("sound", if sound_on { "off" } else { "on" });
+        }
+
         match self.viz_tab {
             VizTab::Sprites => self.draw_viz_sprites(graphics, mouse, click),
             VizTab::Musics => self.draw_viz_musics(graphics, mouse, click),

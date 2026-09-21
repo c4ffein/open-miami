@@ -109,10 +109,19 @@ the browser, sets the library path and the timeouts.
   player purges the floor and rides the lift to floor 2 (the real boot path,
   audio pre-render gate included); `menu-transitions.spec.js`: driving the
   title and pause menus, no frame of the sequence lacks its POSTFX (a
-  screen switch that returns without drawing = a one-frame flash); and
+  screen switch that returns without drawing = a one-frame flash);
+  `sound-settings.spec.js`: `?viz` shows a saved SOUND OFF on every tab and
+  its toggle flips `om.sound` + the `AudioContext` (suspended <-> running),
+  the SETTINGS MUSIC row cycles 100 → 75 → … → 0 → 100, persists `om.music`
+  and is read back on the next load; and
   `all-floors.spec.js`: EVERY floor of
   `levels/index.json` boots, keeps rendering well-formed frames and logs no
-  error (with `?precompute=0`, ~3 s a floor).
+  error (with `?precompute=0`, ~3 s a floor). TWO local workers
+  (`playwright.config.js`), measured: the pages render in software, so the
+  run takes the same ~125 s at 2, 3 or 4 workers while the longest test
+  (the floor-1 lift run, 24 s alone) takes 34 / 53 / 57 s — more workers
+  only push single tests toward the 60 s limit. A page that sits on the
+  title screen or on `?viz` SPRITES is the expensive kind: leave them fast.
 
 Timeouts, so a run cannot hang: Playwright caps each TEST at 60 s, the
 Makefile caps the run at `E2E_TIMEOUT` (180 s — measured: the 3 gameplay

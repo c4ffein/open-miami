@@ -9,7 +9,13 @@ module.exports = defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // TWO local workers, not the default (half the cores = 4 here): the pages
+  // render in SOFTWARE, so the box is CPU-bound and more workers only stretch
+  // every test. Measured, 22 tests on the 8-core dev box: the RUN takes the
+  // same ~125 s at 2, 3 and 4 workers, but the longest test (the floor-1 lift
+  // run, 24 s alone) takes 34 s at 2 workers, 53 s at 3 and 57 s at 4 — it
+  // crossed the 60 s limit the day two tests were added.
+  workers: process.env.CI ? 1 : 2,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'html',
   timeout: 60000, // 60 s per test (the Makefile / CLAUDE.md promise)
   globalTimeout: 10 * 60 * 1000, // whole run: 10 min (retries + serial CI worker)

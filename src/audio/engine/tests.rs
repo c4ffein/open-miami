@@ -185,6 +185,29 @@ fn every_song_bakes_every_note_voice_and_each_fits_its_length() {
     }
 }
 
+/// The SETTINGS music level is the music bus's gain — clamped, applied at
+/// once, and it leaves the SFX path alone.
+#[test]
+fn the_music_level_is_the_bus_gain() {
+    reset_graphs();
+    let engine = AudioEngine::new();
+    let bus = engine.music_bus.as_ref().unwrap();
+    assert_eq!((engine.music_level(), bus.gain().value()), (1.0, 1.0));
+    let events = graphs()[0].borrow().events.len();
+    engine.set_music_level(0.25);
+    assert_eq!((engine.music_level(), bus.gain().value()), (0.25, 0.25));
+    engine.set_music_level(7.0);
+    assert_eq!(bus.gain().value(), 1.0);
+    engine.set_music_level(f64::NAN);
+    assert_eq!(bus.gain().value(), 1.0);
+    engine.set_music_level(-1.0);
+    assert_eq!(bus.gain().value(), 0.0);
+    let g = graphs()[0].borrow().events[events..].to_vec();
+    assert!(g
+        .iter()
+        .all(|e| e.node == bus.as_ref().id && e.param == "gain"));
+}
+
 /// The song named `name` (the tracker's list).
 fn song_named(name: &str) -> SongSpec {
     *SONGS

@@ -324,7 +324,11 @@ pub struct AudioEngine {
     /// ricochet chance). `Cell` because the `play_*` API takes `&self`.
     rng: Cell<u32>,
     /// Input gain for the whole music mix — every music note connects here.
+    /// Its gain IS the SETTINGS music level.
     music_bus: Option<GainNode>,
+    /// The SETTINGS music level, `0.0..=1.0` (the music bus's gain; the SFX
+    /// are untouched). `Cell` because the settings UI holds `&self`.
+    music_level: Cell<f64>,
     /// The SIDECHAIN DUCK stage: the melodic lanes (and the echo / hall
     /// returns) enter the bus through this gain, drums bypass it. In a
     /// `Section` with `duck` set, every kick pulls it down by the song's
@@ -413,6 +417,7 @@ impl AudioEngine {
             enabled: Cell::new(true),
             rng: Cell::new(0x2545_F491),
             music_bus,
+            music_level: Cell::new(1.0),
             music_duck,
             last_duck: Cell::new(f64::NEG_INFINITY),
             music_pan,
@@ -476,6 +481,25 @@ impl AudioEngine {
     /// Whether sound is currently enabled (the SETTINGS checkbox state).
     pub fn is_enabled(&self) -> bool {
         self.enabled.get()
+    }
+
+    /// The SETTINGS music level, `0.0` (music off, SFX untouched) … `1.0`
+    /// (nominal): the gain of the music bus, applied at once.
+    pub fn set_music_level(&self, level: f64) {
+        let level = if level.is_finite() {
+            level.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        self.music_level.set(level);
+        if let Some(bus) = &self.music_bus {
+            let _ = bus.gain().set_value_at_time(level as f32, 0.0);
+        }
+    }
+
+    /// The current SETTINGS music level.
+    pub fn music_level(&self) -> f64 {
+        self.music_level.get()
     }
 
     /// How many offline pre-renders may run concurrently (see `update`).
