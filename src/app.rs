@@ -34,6 +34,8 @@ use crate::scenario::{ScenarioState, SURFACE_EXIT};
 use crate::systems::boss::any_boss_enraged;
 use crate::systems::*;
 
+mod game_events;
+mod game_input;
 mod game_loop;
 mod menus;
 mod perf;

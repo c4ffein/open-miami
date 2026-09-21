@@ -189,9 +189,10 @@
   `level.rs`, `camera.rs`, `props.rs` + `props/` (by FAMILY:
   `layers/{datacenter,outdoor,lobby}.rs` + `draw/…`), `drive.rs`,
   `ending.rs`, `sparks.rs`; `hud_ammo.rs` / `hud_msg.rs` are HUD STATE
-  machines. APP (wasm-only): `app.rs` + `app/{game_loop,world_render,menus,
-  viz,viz/*,url,perf}.rs`, `editor_ui.rs`, `input.rs`. AUDIO: `audio/`
-  (music is CODE: one song = one Rust file in `audio/songs/`, authoring API
+  machines. APP (wasm-only): `app.rs` + `app/{game_loop,game_input,
+  game_events,world_render,menus,viz,viz/*,url,perf}.rs` (`update_game` =
+  a spine of named phases: their ORDER is the behaviour), `editor_ui.rs`,
+  `input.rs`. AUDIO: `audio/` (music is CODE: one song = one Rust file in `audio/songs/`, authoring API
   `audio/compose.rs`, docs/MUSIC_CODE.md; the WebAudio engine =
   `audio/engine.rs` + `audio/engine/*`: it ships on wasm only but NEVER names
   `web_sys` directly — every Web Audio type goes through

@@ -221,6 +221,23 @@ while writing them were wrong expectations (`set_value_at_time(v, 0.0)` is
 the engine's static-value idiom; a make-up gain of 98 is legitimate; a
 pre-transient may lead `SFX_LEAD` by under a millisecond).
 
+## The open-work list of 2026-09, closed
+
+The "What's next" list written at the end of the characters refactor, item by
+item: (1) renderer-only pixel tests — found the unknown-POSTFX-kind mismatch
+and, through CI, the glyph-atlas bleed (both above); (2) the DRIVE mirror
+pinned by `drive::tests::the_js_mirror_matches`; (3) the renderer's
+self-contained subsystems as factories, 124 `FP` hashes identical after each
+move; (4) the audio seam (above); (5) `update_game`, 510 lines -> a ~110-line
+spine of named phases in `app/game_input.rs` / `app/game_events.rs`: a pure
+move (statement multiset: the only changes are the seams — two `gate`
+conditions reading the flag captured at the start of the frame, the early
+`return`s becoming `return true`), order kept, the perf span guards kept in
+the spine so `?perf` measures what it measured. Also from that session:
+`scenario.rs` and `systems/ai.rs` split into module folders, and
+`AISystem::run` cut into perceive / think / steer under a 30-run behavioural
+fingerprint (`tests/ai_fingerprint.rs`).
+
 ## Removed tooling (so nobody looks for it)
 
 - `build-wasm.sh` — replaced by `make build-wasm` (installs the wasm32 target

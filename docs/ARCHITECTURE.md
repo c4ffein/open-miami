@@ -88,7 +88,9 @@ their own `impl GameState` blocks:
 
 | Module | Holds |
 |---|---|
-| `game_loop` | `update_game`: input → `sim::GameSystems::step` → scenario / event / audio bridge → builds the `HudView` → transitions; the boss intro; the ending |
+| `game_loop` | `update_game`, the SPINE of an in-game frame — the ORDER of its phases is the behaviour, and the `?perf` span guards live there: camera → input → debug keys → `sim::GameSystems::step` → scenario + elevators → `render_world` → events → `render_hud` → extraction → restart; plus the boss intro and the ending |
+| `game_input` | the input-side phases: `update_camera` (it needs the mouse), `handle_player_input` (conversations, tutorial gates, holds, combat), `handle_debug_keys` |
+| `game_events` | the event-side phases: `bridge_events_to_scenario` (gate release, checkpoint snapshot), `play_event_sfx` (the per-weapon one-shots, capped per kind per frame), `play_transition_sfx` (death, mask crack, floor clear) |
 | `world_render` | the WRAPPER around `render::world::render_world`: the frame's two state changes + building the `WorldView` |
 | `menus` | level select, the modal chrome, SETTINGS / ABOUT / PAUSE |
 | `viz`, `viz/{effects,props_page,musics}` | the `?viz` toolbox |
@@ -112,13 +114,14 @@ ships.
 
 ## Known debt (honest list)
 
-- `update_game` (src/app/game_loop.rs) is still one long function, but it
-  no longer DRAWS: input -> the shared tick -> the event / audio bridge ->
-  building `WorldView` + `HudView` -> screen transitions. Both frames it
-  shows are pure render-layer functions (`render::world::render_world`,
-  `render::hud::render_hud`). What is left to split is orchestration
-  (input handling, the event-to-sound bridge) — app code by nature, only
-  reachable by Playwright.
+- `update_game` (src/app/game_loop.rs) is a ~110-line spine of named phases
+  (it was one 510-line function); both frames it shows are pure
+  render-layer functions (`render::world::render_world`,
+  `render::hud::render_hud`). The phases themselves (`app/game_input.rs`,
+  `app/game_events.rs`) are app code by nature — they read input and play
+  sounds — so they are only reachable by Playwright; what could be
+  host-tested was moved out long ago (the shared tick, the gate dispatch in
+  game.rs, the scenario).
 - `web/renderer.js`'s `initRenderer` BATCH CORE is one ~1550-line closure (it was ~2,100),
   and that is a DECISION, not debt to pay down blindly. The dependency graph
   was measured before deciding: ~30 mutable closure variables (`m` — which
@@ -193,11 +196,14 @@ how each move was proven bit-exact: [HISTORY.md](HISTORY.md)):
   FRAMED — renderer questions by the layering above. Never add character
   animation to JS.
 
-## What's next (open work, in the order I would take it)
+## What's next
 
-Everything the refactor set out to do is done; nothing below is urgent, and
-each item is optional. A new session can start from this list.
+NOTHING IS OPEN. The list this section carried is done (the record of each
+item — what was built, how it was proven, what it found: HISTORY.md): the
+renderer-only pixel tests, the DRIVE mirror pin, the renderer's subsystems as
+factories, host tests for the WebAudio engine, the `update_game` split.
 
-1. **Splitting `update_game`'s orchestration** (input handling, the
-   event-to-sound bridge) — app code by nature, reachable only by Playwright,
-   so the payoff is readability, not testability. Lowest priority.
+What is knowingly NOT covered (docs/TESTING.md, "Not covered"): how the audio
+SOUNDS and its async bake plumbing; `src/app/` beyond what the Playwright
+specs drive; the robot rig's rotation order is pinned in the browser only
+(`rig-parity.js`). None of it is planned work — add an item here when one is.
