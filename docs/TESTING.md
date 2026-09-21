@@ -56,7 +56,16 @@ voice / live one-shot is checked for the defects Web Audio reports by
 THROWING — which the engine swallows by design: exponential ramps to <= 0,
 unstopped oscillators, orphan nodes, events in the past, a sound longer than
 its bake length. Mutation-tested (5 recipe breaks, 5 caught). A new sound is
-covered the day it is added to `SFX_KINDS` / a song.
+covered the day it is added to `SFX_KINDS` / a song. The MUSIC path has its
+own graph tests (mutation-tested 10 / 10): the lane channels are wired in
+order (panner → drive → ducker → bus → lowpass → soft-clip, echo loop + hall
+returning into the ducker, no compressor on the music path), a song change
+re-points them (`apply_voices`), wide voices bake STEREO and a tie holds its
+peak, `compose`-built songs make the centre-pan law up, the live SKETCH of an
+unbaked note is bounded (one oscillator per partial), and the scheduler —
+driven a frame at a time against the mock clock through a whole play-through
+of every song — is never in the clock's past (humanize included) and ducks
+exactly on the kicks of ducked sections.
 
 **Refactoring the AI?** `tests/ai_fingerprint.rs` is an `#[ignore]`d tool, not
 a check: it hashes every enemy's state on every tick of every floor. Run it

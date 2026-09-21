@@ -11,6 +11,14 @@
 //! slices the sequencer walks, and each song file memoizes that build in a
 //! `OnceLock` so it happens exactly once.
 //!
+//! The builders cover the CLASSIC part of the format — four melodic lanes +
+//! one drum lane of kick / hat / snare, a [`Wave`] per voice, per-channel
+//! levels, the `.ducked()` pump. The v2 lanes and instruments (`HOLD` ties,
+//! velocity / chord lanes, KEYS + PERC, stereo [`Voice`]s, echo + hall
+//! sends) are so far authored as `const` section literals
+//! (`songs/sodium_lights.rs` is the tour) — both kinds build the same
+//! [`SongSpec`].
+//!
 //! The atoms:
 //! * [`Lane`] — a melodic pattern (scale degrees, [`REST`]s). Author one
 //!   with [`steps`] (`"0 . 3 . | 5 . 3 ."` — `.` rest, `|` cosmetic) or
@@ -28,7 +36,10 @@
 //!   comes back; give it an [`Intensity`] argument and it comes back
 //!   hotter).
 
-use super::songs::{Drum, Scale, Section, SongSpec, Wave, NUM_CHANNELS, REST};
+use super::songs::{
+    Drum, Echo, Scale, Section, Sidechain, SongSpec, Voice, Wave, ARP, BASS, DRUMS, LEAD,
+    NUM_CHANNELS, NUM_VOICES, PAD, REST,
+};
 
 // --- keys -------------------------------------------------------------------
 
@@ -331,28 +342,28 @@ impl Part {
 
 /// The bass part of a section.
 pub fn bass(lane: impl Into<Lane>) -> Part {
-    Part::melodic(0, lane.into())
+    Part::melodic(BASS, lane.into())
 }
 
 /// The lead/melody part of a section.
 pub fn lead(lane: impl Into<Lane>) -> Part {
-    Part::melodic(1, lane.into())
+    Part::melodic(LEAD, lane.into())
 }
 
 /// The pad part of a section (each note blooms into a slow triad).
 pub fn pad(lane: impl Into<Lane>) -> Part {
-    Part::melodic(2, lane.into())
+    Part::melodic(PAD, lane.into())
 }
 
 /// The arp part of a section (the fast high counter-melody).
 pub fn arp(lane: impl Into<Lane>) -> Part {
-    Part::melodic(3, lane.into())
+    Part::melodic(ARP, lane.into())
 }
 
 /// The percussion part of a section.
 pub fn drums(lane: impl Into<DrumLane>) -> Part {
     Part {
-        channel: 4,
+        channel: DRUMS,
         lane: Lane::default(),
         drum: lane.into(),
         vel: 1.0,
@@ -380,8 +391,9 @@ pub struct SectionSpec {
 
 impl SectionSpec {
     /// Enable the SIDECHAIN DUCK for this section: every kick step pumps
-    /// the melodic voices down (see `songs::duck_gain`) — the darksynth
-    /// "everything breathes with the kick" feel.
+    /// the melodic voices down through the song's [`Sidechain`] (see
+    /// [`DUCK_DEPTH`] / [`DUCK_RECOVERY`]) — the darksynth "everything
+    /// breathes with the kick" feel.
     pub fn ducked(mut self) -> SectionSpec {
         self.duck = true;
         self
@@ -409,7 +421,7 @@ pub fn section(label: &'static str, parts: impl IntoIterator<Item = Part>) -> Se
     };
     for part in parts {
         spec.vel[part.channel] *= part.vel;
-        if part.channel == 4 {
+        if part.channel == DRUMS {
             spec.drum = overlay_drums(std::mem::take(&mut spec.drum), part.drum);
         } else {
             let slot = &mut spec.lanes[part.channel];
@@ -463,6 +475,15 @@ fn overlay_drums(base: DrumLane, over: DrumLane) -> DrumLane {
 }
 
 // --- the song builder -------------------------------------------------------
+
+/// How far a `.ducked()` section's kicks pull the melodic lanes down (the
+/// [`Sidechain::depth`] every built song gets: a dip to 0.35).
+pub const DUCK_DEPTH: f64 = 0.65;
+
+/// Seconds a duck takes to recover (~95 %) — fast, well under a beat at
+/// combat tempi, so the pump breathes with the kick instead of smearing.
+/// The builder converts it to the song's tempo ([`Sidechain::release_beats`]).
+pub const DUCK_RECOVERY: f64 = 0.3;
 
 /// A whole song under construction. Start with [`song`], chain the
 /// settings, `.arrange([...])` the sections, `.build()` once (memoize the
@@ -527,6 +548,11 @@ impl SongBuilder {
         fn leak_lane(l: Lane) -> &'static [i32] {
             Box::leak(l.0.into_boxed_slice())
         }
+        // Plain centred voices (the KEYS lane is never written here).
+        let mut voices = [Voice::mono(Wave::Sine); NUM_VOICES];
+        for (lane, wave) in [BASS, LEAD, PAD, ARP].into_iter().zip(self.waves) {
+            voices[lane] = Voice::mono(wave);
+        }
         let sections: Vec<Section> = self
             .sections
             .into_iter()
@@ -539,8 +565,9 @@ impl SongBuilder {
                     pad: leak_lane(p),
                     arp: leak_lane(a),
                     drums: Box::leak(s.drum.0.into_boxed_slice()),
-                    vel: s.vel,
+                    level: s.vel,
                     duck: s.duck,
+                    ..Section::EMPTY
                 }
             })
             .collect();
@@ -550,12 +577,17 @@ impl SongBuilder {
             scale: self.key.scale,
             bpm: self.bpm,
             steps_per_beat: self.steps_per_beat,
-            bass_wave: self.waves[0],
-            lead_wave: self.waves[1],
-            pad_wave: self.waves[2],
-            arp_wave: self.waves[3],
+            voices,
             sections: Box::leak(sections.into_boxed_slice()),
             intensity: self.intensity,
+            swing: 0.0,
+            sidechain: Sidechain::new(DUCK_DEPTH, DUCK_RECOVERY * self.bpm / 60.0),
+            echo: Echo::DOTTED,
+            humanize: 0.0,
+            sweep: 1.0,
+            // Plain centred lanes: make the panners' centre law up exactly
+            // (see `SongSpec::melodic_gain`).
+            melodic_gain: std::f64::consts::SQRT_2,
         }
     }
 }
@@ -719,7 +751,11 @@ mod tests {
         assert_eq!(s.scale, MINOR);
         assert_eq!(s.bpm, 120.0);
         assert_eq!(s.steps_per_beat, 4);
-        assert_eq!(s.bass_wave, Wave::DrivenBass);
+        assert_eq!(s.voices[BASS], Voice::mono(Wave::DrivenBass));
+        assert_eq!(s.voices[ARP].wave, Wave::Square);
+        assert!(s.sidechain.active() && (s.sidechain.release_beats - 0.6).abs() < 1e-12);
+        assert_eq!(s.sections[0].level, [1.0; NUM_CHANNELS]);
+        assert_eq!(s.sections[0].keys, &[] as &[i32]);
         assert_eq!(s.sections.len(), 3);
         assert_eq!(s.sections[0].label, "verse");
         assert_eq!(s.sections[0].bass, &riff().0[..]);

@@ -17,8 +17,9 @@
 #[cfg(target_arch = "wasm32")]
 pub use web_sys::{
     AudioBuffer, AudioBufferSourceNode, AudioContext, AudioDestinationNode, AudioNode, AudioParam,
-    AudioScheduledSourceNode, BaseAudioContext, BiquadFilterNode, BiquadFilterType, GainNode,
-    OfflineAudioContext, OscillatorType, OverSampleType,
+    AudioScheduledSourceNode, BaseAudioContext, BiquadFilterNode, BiquadFilterType, DelayNode,
+    GainNode, OfflineAudioContext, OscillatorType, OverSampleType, StereoPannerNode,
+    WaveShaperNode,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -45,6 +46,7 @@ mod mock {
         Compressor,
         WaveShaper,
         Delay,
+        Panner,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -54,6 +56,9 @@ mod mock {
         ExpRamp,
         /// A value curve; `value` is its peak |v|, `end` = start + duration.
         Curve,
+        /// `setTargetAtTime`: an exponential approach to `value` from `time`
+        /// on (it never "ends": `end` = `time`).
+        Target,
         Cancel,
     }
 
@@ -87,6 +92,8 @@ mod mock {
         pub sample_rate: f32,
         /// `Some(frames)` for an `OfflineAudioContext`.
         pub offline_frames: Option<u32>,
+        /// Channels an `OfflineAudioContext` renders (0 for the live one).
+        pub offline_channels: u32,
         /// What `current_time()` answers (a test may move it).
         pub now: f64,
         pub nodes: Vec<NodeRec>,
@@ -133,10 +140,15 @@ mod mock {
         GRAPHS.with(|g| g.borrow_mut().clear());
     }
 
-    fn new_graph(sample_rate: f32, offline_frames: Option<u32>) -> SharedGraph {
+    fn new_graph(
+        sample_rate: f32,
+        offline_frames: Option<u32>,
+        offline_channels: u32,
+    ) -> SharedGraph {
         let g = Rc::new(RefCell::new(Graph {
             sample_rate,
             offline_frames,
+            offline_channels,
             ..Graph::default()
         }));
         // Node 0 is always the destination.
@@ -285,6 +297,17 @@ mod mock {
         ) -> Result<AudioParam, JsValue> {
             self.push(EventKind::ExpRamp, v, t, t)
         }
+        pub fn set_target_at_time(
+            &self,
+            target: f32,
+            t: f64,
+            time_constant: f64,
+        ) -> Result<AudioParam, JsValue> {
+            if time_constant.is_nan() || time_constant < 0.0 {
+                return Err(JsValue); // Web Audio throws RangeError
+            }
+            self.push(EventKind::Target, target, t, t)
+        }
         pub fn set_value_curve_at_time(
             &self,
             curve: &mut [f32],
@@ -342,6 +365,7 @@ mod mock {
     node!(DynamicsCompressorNode => AudioNode);
     node!(WaveShaperNode => AudioNode);
     node!(DelayNode => AudioNode);
+    node!(StereoPannerNode => AudioNode);
     node!(AudioScheduledSourceNode => AudioNode);
     node!(OscillatorNode => AudioScheduledSourceNode);
     node!(AudioBufferSourceNode => AudioScheduledSourceNode);
@@ -391,6 +415,11 @@ mod mock {
         }
         pub fn q(&self) -> AudioParam {
             self.0.param("Q")
+        }
+    }
+    impl StereoPannerNode {
+        pub fn pan(&self) -> AudioParam {
+            self.0.param("pan")
         }
     }
     impl DelayNode {
@@ -516,6 +545,9 @@ mod mock {
         pub fn create_convolver(&self) -> Result<ConvolverNode, JsValue> {
             Ok(ConvolverNode(self.node(NodeKind::Convolver)))
         }
+        pub fn create_stereo_panner(&self) -> Result<StereoPannerNode, JsValue> {
+            Ok(StereoPannerNode(self.node(NodeKind::Panner)))
+        }
         pub fn create_delay_with_max_delay_time(&self, _max: f64) -> Result<DelayNode, JsValue> {
             Ok(DelayNode(self.node(NodeKind::Delay)))
         }
@@ -564,7 +596,7 @@ mod mock {
         #[allow(clippy::new_ret_no_self)]
         pub fn new() -> Result<AudioContext, JsValue> {
             Ok(AudioContext(BaseAudioContext {
-                g: new_graph(MOCK_SAMPLE_RATE, None),
+                g: new_graph(MOCK_SAMPLE_RATE, None, 0),
             }))
         }
         pub fn resume(&self) -> Result<Promise, JsValue> {
@@ -584,7 +616,7 @@ mod mock {
                 return Err(JsValue);
             }
             Ok(OfflineAudioContext(BaseAudioContext {
-                g: new_graph(sample_rate, Some(frames)),
+                g: new_graph(sample_rate, Some(frames), channels),
             }))
         }
         /// The graph is built and recorded; there is nothing to render.

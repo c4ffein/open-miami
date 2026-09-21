@@ -7,7 +7,11 @@
 //!
 //! The music runs through a dedicated bus — every note flows into a shared
 //! lowpass [`web_sys::BiquadFilterNode`] whose cutoff is swept once per bar for
-//! that classic synthwave/darksynth filter motion.
+//! that classic synthwave/darksynth filter motion, then a safety soft-clip.
+//! Each MELODIC lane has its own persistent channel in front of it (see
+//! [`MusicFx`]): a `StereoPannerNode` (the voice's pan), a `WaveShaperNode`
+//! (its drive), sends into one tempo-synced echo and one hall reverb, and
+//! the side-chain ducker the kicks pump; the drums enter the bus directly.
 //!
 //! One-shot SFX go through their own bus, built to make synthesized weapon
 //! audio read as *recorded* weapon audio: every sound is a per-event voice
@@ -30,14 +34,17 @@
 //!
 //! The MUSIC notes get the same treatment (the tracker's oscillator+gain
 //! construction per note was the last measured stall source, 70–113 ms):
-//! a song's pitch set is finite pattern data, so every distinct voice ×
-//! pitch it can schedule is baked at its exact frequency into a short mono
-//! buffer by the identical note builders (see [`music_keys`] /
-//! `BakedMusic`), and `schedule_step` then fires one buffer source per note
-//! into the same live music bus — the per-bar lowpass sweep is untouched.
-//! The bake queue is prioritized: combat SFX first, then the current
-//! song's voices, then the rare SFX; a song switch re-enumerates and bakes
-//! in the background while unbaked notes fall back to live synthesis.
+//! a song's note set is finite pattern data, so every distinct voice ×
+//! pitch × tied length × voicing it can schedule is baked at its exact
+//! frequency into a short buffer (mono; stereo for a WIDE unison voice) by
+//! the note builders (see [`music_keys`] / `BakedMusic`), and
+//! `schedule_step` then fires one buffer source per note into the lane's
+//! live channel — pan, drive, sends, duck and the per-bar lowpass sweep all
+//! stay live. The bake queue is prioritized: combat SFX first, then the
+//! current song's voices, then the rare SFX; a song switch re-enumerates
+//! and bakes in the background while unbaked notes fall back to a LIGHT
+//! live sketch (one plain oscillator per partial — bounded cost, see
+//! `AudioEngine::sketch`).
 //!
 //! Robustness first: if the `AudioContext` (or any node) fails to build we
 //! silently degrade to silence. Nothing in here ever panics or unwraps a
@@ -52,13 +59,14 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use webaudio::{
     AudioBuffer, AudioContext, AudioDestinationNode, BaseAudioContext, BiquadFilterNode,
-    BiquadFilterType, GainNode, OfflineAudioContext, OscillatorType, OverSampleType,
+    BiquadFilterType, DelayNode, GainNode, OfflineAudioContext, OscillatorType, OverSampleType,
+    StereoPannerNode, WaveShaperNode,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use webaudio::{Closure, JsValue};
 
 use super::sfx::*;
-use super::songs::Drum::{Hat, Kick, Silent, Snare};
+use super::songs::Drum::{Clap, Crash, Hat, Kick, OpenHat, Rim, Silent, Snare, Tom};
 use super::songs::*;
 
 /// Look-ahead window (seconds) for the music scheduler: we queue notes this far
@@ -80,6 +88,13 @@ const IR_SECONDS: f64 = 1.1;
 
 /// Length of the gun / hit bus impulse response (seconds): RT ~1.5 s.
 const IR_REAL_SECONDS: f64 = 1.7;
+
+/// Length of the MUSIC hall's impulse response (seconds): RT60 ≈ 2.4 s.
+const IR_HALL_SECONDS: f64 = 2.6;
+
+/// The music echo line's maximum delay (seconds): what `Echo::steps` is
+/// clamped to at any tempo.
+const ECHO_MAX_SECONDS: f64 = 2.0;
 
 /// Overall gain of a resynthesised (SMS) metal hit: the model's loudest
 /// track (a 1.0 sine partial) lands at this peak; the sub noise band, whose
@@ -160,8 +175,9 @@ struct BakedSfx {
 }
 
 /// One music voice's bake slot: `None` until its offline render lands, then
-/// the finished mono buffer (song gain and envelope baked in — velocity/mix
-/// are per-song constants, so playback needs no gain node at all).
+/// the finished buffer (song gain and envelope baked in; mono, or stereo
+/// for a wide unison voice). Velocity is applied at play time, so a
+/// full-velocity note still needs no gain node at all.
 struct MusicSlot {
     key: MusicKey,
     buf: Option<AudioBuffer>,
@@ -175,7 +191,8 @@ struct MusicSlot {
 /// the async completion callbacks via `Rc`.
 struct BakedMusic {
     /// The finite voice set of the current song, in bake-priority order
-    /// (drums first — the densest lane — then bass, lead, arp, pad).
+    /// (drums first — the densest lanes — then the melodic lanes per
+    /// [`MELODIC`]).
     slots: RefCell<Vec<MusicSlot>>,
     /// Next slot index to kick.
     next: Cell<usize>,
@@ -186,6 +203,66 @@ struct BakedMusic {
     /// The in-flight renders' completion closures (same lifecycle as
     /// [`BakedSfx::pending`]).
     pending: RefCell<Vec<RenderCallback>>,
+}
+
+/// The music send effects: one tempo-synced echo line and one hall reverb,
+/// each fed by a per-lane send gain taken after the lane's drive (so a
+/// driven lead echoes driven) and returning into the ducker (echoes and
+/// tails pump with everything else). Built once; the echo's time /
+/// feedback / tone and every send level follow the song
+/// ([`AudioEngine::apply_voices`]).
+///
+/// ```text
+///  note ─► lane panner ─► drive ─┬────────────────────────────► ducker ─► bus ─► lowpass ─► soft-clip ─► out
+///                                ├─ echo send ─► delay ─► tone ─► return ──┤
+///                                │                 ▲           └─ feedback ─┘
+///                                └─ verb send ─► convolver (hall) ─► return ─┘
+///  drum ──────────────────────────────────────────────────────────────────► bus
+/// ```
+struct MusicFx {
+    /// Per-lane send gains into the echo.
+    echo_send: Vec<GainNode>,
+    /// The delay line and its feedback loop.
+    delay: DelayNode,
+    feedback: GainNode,
+    tone: BiquadFilterNode,
+    /// Per-lane send gains into the hall.
+    verb_send: Vec<GainNode>,
+}
+
+/// One enveloped oscillator note for [`AudioEngine::tone_env`].
+struct Tone {
+    /// Start and end pitch (a glide when they differ).
+    f0: f64,
+    f1: f64,
+    /// Seconds the `f0 → f1` glide takes; `0` = it spans the whole note.
+    glide: f64,
+    /// Absolute start time.
+    start: f64,
+    /// Seconds to peak.
+    attack: f64,
+    /// Seconds held at peak after the attack (the tied steps).
+    hold: f64,
+    /// Seconds of exponential decay after the hold.
+    dur: f64,
+    /// Peak amplitude.
+    peak: f64,
+    wave: OscillatorType,
+    vibrato: Option<Vibrato>,
+}
+
+/// One melodic-lane note as handed to [`AudioEngine::lane_tone`]: the
+/// partial's pitch (and the pitch it glides in from), its envelope times
+/// and its level.
+#[derive(Clone, Copy)]
+struct LaneNote {
+    f: f64,
+    from: Option<f64>,
+    start: f64,
+    attack: f64,
+    hold: f64,
+    dur: f64,
+    peak: f64,
 }
 
 /// The offline render target while a pre-render is being *built*: the voice
@@ -248,11 +325,24 @@ pub struct AudioEngine {
     rng: Cell<u32>,
     /// Input gain for the whole music mix — every music note connects here.
     music_bus: Option<GainNode>,
-    /// The SIDECHAIN DUCK stage: melodic voices enter the bus through this
-    /// gain, drums bypass it. In a `Section` with `duck` set, every kick
-    /// step snaps it to `DUCK_FLOOR` and ramps it back to 1 over
-    /// `DUCK_RECOVERY` (the exact pure curve of `songs::duck_gain`).
+    /// The SIDECHAIN DUCK stage: the melodic lanes (and the echo / hall
+    /// returns) enter the bus through this gain, drums bypass it. In a
+    /// `Section` with `duck` set, every kick pulls it down by the song's
+    /// `Sidechain::depth` and releases it exponentially (the pure curve of
+    /// `voice::duck_level`, see [`Self::duck`]).
     music_duck: Option<GainNode>,
+    /// When the ducker last bottomed out (audio clock) — where a
+    /// retriggering kick picks the release curve up from.
+    last_duck: Cell<f64>,
+    /// One `StereoPannerNode` per melodic lane (indexed like
+    /// `SongSpec::voices`): what the lane's notes connect to. Empty if they
+    /// could not be built (notes then enter the ducker / bus directly).
+    music_pan: Vec<StereoPannerNode>,
+    /// One drive `WaveShaperNode` per melodic lane, after its panner (`None`
+    /// curve = bypass). Empty if they could not be built.
+    music_drive: Vec<WaveShaperNode>,
+    /// The echo line + the hall and their per-lane sends ([`MusicFx`]).
+    music_fx: Option<MusicFx>,
     /// Lowpass filter on the music bus, cutoff swept once per bar (synthwave).
     music_filter: Option<BiquadFilterNode>,
     music_playing: bool,
@@ -262,7 +352,7 @@ pub struct AudioEngine {
     playhead: Playhead,
     /// The song currently driving the scheduler.
     song: SongSpec,
-    /// Per-channel mute flags (bass/lead/pad/arp/drums).
+    /// Per-channel mute flags (indexed like `CHANNEL_NAMES`).
     mute: [bool; NUM_CHANNELS],
     /// Per-channel solo flags. If any is set, only soloed channels sound.
     solo: [bool; NUM_CHANNELS],
@@ -305,6 +395,17 @@ impl AudioEngine {
             .as_ref()
             .zip(music_bus.as_ref())
             .and_then(|(c, bus)| Self::make_duck(c, bus));
+        // The lane channels feed the ducker (or the plain bus without one).
+        let lanes = ctx.as_ref().zip(music_duck.as_ref().or(music_bus.as_ref()));
+        let music_drive = lanes
+            .map(|(c, into)| Self::make_lane_drives(c, into))
+            .unwrap_or_default();
+        let music_pan = lanes
+            .map(|(c, into)| Self::make_lane_panners(c, into, &music_drive))
+            .unwrap_or_default();
+        let music_fx = lanes
+            .filter(|_| !music_pan.is_empty())
+            .and_then(|(c, into)| Self::make_music_fx(c, into, &music_pan, &music_drive));
         let engine = Self {
             ctx,
             noise,
@@ -313,6 +414,10 @@ impl AudioEngine {
             rng: Cell::new(0x2545_F491),
             music_bus,
             music_duck,
+            last_duck: Cell::new(f64::NEG_INFINITY),
+            music_pan,
+            music_drive,
+            music_fx,
             music_filter,
             music_playing: false,
             next_note_time: 0.0,
@@ -337,6 +442,7 @@ impl AudioEngine {
             render: RefCell::new(None),
             engine_idle: RefCell::new(None),
         };
+        engine.apply_voices();
         engine.rebuild_music_bake();
         engine
     }
@@ -447,15 +553,18 @@ impl AudioEngine {
         }
     }
 
-    /// The node MELODIC music voices connect to: the sidechain duck stage
-    /// of the music bus (kicks in a ducked section pump it), falling back
-    /// to the plain bus where the duck node could not be built. During an
-    /// offline pre-render: the offline destination — the duck, like the
-    /// bar filter sweep, is live-bus automation and is reapplied at play
-    /// time, so baked buffers stay duck-free.
-    fn melodic_out(&self) -> Option<webaudio::AudioNode> {
+    /// The node melodic lane `lane`'s notes connect to: its panner (then
+    /// its drive, its sends, the ducker, the bus) — falling back to the
+    /// ducker, then the plain bus, where those could not be built. During
+    /// an offline pre-render: the offline destination — pan, drive, sends,
+    /// the duck and the bar filter sweep are live-channel processing,
+    /// reapplied at play time, so baked buffers stay dry.
+    fn lane_out(&self, lane: usize) -> Option<webaudio::AudioNode> {
         if self.render.borrow().is_some() {
             return self.music_out();
+        }
+        if let Some(p) = self.music_pan.get(lane) {
+            return Some(AsRef::<webaudio::AudioNode>::as_ref(p).clone());
         }
         if let Some(duck) = &self.music_duck {
             return Some(AsRef::<webaudio::AudioNode>::as_ref(duck).clone());
@@ -509,13 +618,14 @@ impl AudioEngine {
 }
 
 /// The `web_sys` oscillator shape of a song voice's [`Wave`]. The preset
-/// waves are never dispatched here (`music_voice` builds their node graphs
-/// first), but map to their nearest raw shape as a total fallback.
+/// waves and the noise are never dispatched here (`lane_tone` builds their
+/// node graphs first), but map to their nearest raw shape as a total
+/// fallback — which is also what the live SKETCH of a preset plays.
 fn osc(wave: Wave) -> OscillatorType {
     match wave {
         Wave::Sine => OscillatorType::Sine,
         Wave::Square => OscillatorType::Square,
-        Wave::Sawtooth | Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad => {
+        Wave::Sawtooth | Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad | Wave::Noise => {
             OscillatorType::Sawtooth
         }
         Wave::Triangle => OscillatorType::Triangle,

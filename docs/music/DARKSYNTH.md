@@ -71,6 +71,14 @@ player walks faster without noticing.
 - [ ] Would it still slap with the lead muted? (It must.)
 
 ## Engine reality (see `docs/MUSIC_CODE.md`)
+
+> These are the limits of the `compose` BUILDERS the briefed tracks are
+> written with — no longer of the engine: the v2 format (`const` section
+> literals — ties, per-step velocity, chord lanes, an 8-piece kit, swing,
+> stereo / detuned voices with filter envelopes, vibrato and glide, echo +
+> hall sends, a tunable side-chain) lifts most of them. See "The format
+> (v2)" in `docs/MUSIC_CODE.md`; `sodium_lights.rs` is the tour.
+
 - The pump is `.ducked()` per section; its depth and recovery are
   constants — "subtle on intros" means: don't duck the intro.
 - Tritone stabs need a scale that contains the tritone (Locrian); in

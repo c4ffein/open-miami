@@ -11,8 +11,9 @@
 //! A song is *plain data*: a key (root frequency + scale), a tempo, a set
 //! of oscillator voices, and an ordered list of SECTIONS.
 //!
-//! Each [`Section`] is its own multi-bar block of five step-sequenced
-//! channels (bass, lead, pad, arp, drums). A [`SongSpec`] strings sections
+//! Each [`Section`] is its own multi-bar block of seven step-sequenced
+//! channels (bass, lead, pad, arp, keys + two percussion lanes). A
+//! [`SongSpec`] strings sections
 //! together into a real arrangement — intro / verse / refrain / bridge /
 //! variation — so a full play-through develops over time and the refrain
 //! *returns* instead of a single bar looping forever. Sections are just
@@ -22,38 +23,90 @@
 //! Melodic patterns are written as *scale degrees* (see [`degree_freq`]):
 //! `0` is the root, `1` the next scale note up, `7` an octave up (for a
 //! 7-note scale), negative degrees drop below the root. [`REST`] means
-//! silence for that step. This keeps a song readable and in-key no matter
-//! which root/scale it uses.
+//! silence for that step; [`HOLD`] TIES the previous note through the step
+//! (a note's length = 1 + the `HOLD`s that follow it: `0, HOLD, HOLD, HOLD`
+//! is one quarter-note root, `0, 0, 0, 0` is four retriggered sixteenths).
+//! This keeps a song readable and in-key no matter which root/scale it uses.
+//!
+//! Every lane has an optional parallel VELOCITY lane (`bass_vel` …
+//! `perc_vel`): one `0..=`[`MAX_VEL`] per step, looping like the notes (an
+//! empty lane = every note at full velocity, `0` = skip the note). Velocity
+//! scales the note's amplitude linearly — accents, ghost notes, a
+//! retriggered pump — on top of the section's per-channel `level`. The
+//! melodic lanes also have a CHORD lane (`*_chord`: one [`Chord`] voicing
+//! per step, read where a note starts).
 //!
 //! Lanes inside a section may differ in length: a short 16-step bass simply
 //! repeats under a longer 32-step lead. A section's length is its longest
 //! lane, so authoring a 2-bar section only means writing one lane at 32
 //! steps.
 //!
-//! The `pad` lane is special: each note blooms into a full triad (root +
-//! third + fifth taken from the scale) with a slow attack, for sustained
-//! chord beds.
+//! The `pad` lane is special: by default each note blooms into a full triad
+//! (root + third + fifth taken from the scale — [`Chord::default_for`]) with
+//! a slow attack, for sustained chord beds.
+//!
+//! The INSTRUMENTS (a [`Voice`] per melodic lane) and the song-level bus
+//! effects ([`Sidechain`], [`Echo`]) live in [`super::voice`], re-exported
+//! here.
 
 use std::sync::LazyLock;
 
+pub use super::voice::*;
+
 // The songs themselves: one Rust file per song (src/audio/songs/<name>.rs),
 // written with the `compose` authoring layer. Listed in `SONGS` below.
+pub mod blood_engine;
+pub mod blood_rush;
+pub mod chrome_veins;
 pub mod coast_home;
 pub mod crown_of_static;
+pub mod deep_static;
+pub mod descent;
+pub mod insert_coin;
+pub mod last_exit;
+pub mod mask_of_dread;
 pub mod neon_checksum;
+pub mod neon_lounge;
 pub mod service_corridor;
 pub mod signal_rot;
+pub mod sodium_lights;
+pub mod static_prayer;
 pub mod thermal_mass;
 pub mod walk_dont_run;
 
 /// Sentinel used inside a pattern to mean "rest" (no note this step).
 pub const REST: i32 = i32::MIN;
 
+/// Sentinel used inside a pattern to mean "tie": the previous note of the
+/// lane sustains through this step instead of a new one starting.
+pub const HOLD: i32 = i32::MIN + 1;
+/// Full velocity: the top of a velocity lane's `0..=MAX_VEL` scale (tracker
+/// style, one digit per step). An empty velocity lane plays everything here.
+pub const MAX_VEL: u8 = 9;
+
 /// Number of sequenced channels (rows in the tracker view).
-pub const NUM_CHANNELS: usize = 5;
+pub const NUM_CHANNELS: usize = 7;
+/// Channel (lane) indices, `0..NUM_CHANNELS`.
+pub const BASS: usize = 0;
+pub const LEAD: usize = 1;
+pub const PAD: usize = 2;
+pub const ARP: usize = 3;
+/// The fifth melodic lane: chord stabs, a second lead, a counter-line —
+/// whatever the four classic lanes leave no room for.
+pub const KEYS: usize = 4;
+pub const DRUMS: usize = 5;
+/// The second percussion lane: same kit as `DRUMS`, so a hat can ride over
+/// a kick, a clap can layer a snare, a crash can top a downbeat.
+pub const PERC: usize = 6;
+/// The melodic lanes, in bake-priority order (densest / most exposed first).
+pub const MELODIC: [usize; 5] = [BASS, LEAD, ARP, KEYS, PAD];
+/// How many melodic lanes there are (= `SongSpec::voices.len()`; a voice is
+/// indexed by its lane: `voices[BASS]` … `voices[KEYS]`).
+pub const NUM_VOICES: usize = MELODIC.len();
 
 /// Human-readable channel names, indexed 0..[`NUM_CHANNELS`].
-pub const CHANNEL_NAMES: [&str; NUM_CHANNELS] = ["BASS", "LEAD", "PAD", "ARP", "DRUMS"];
+pub const CHANNEL_NAMES: [&str; NUM_CHANNELS] =
+    ["BASS", "LEAD", "PAD", "ARP", "KEYS", "DRUMS", "PERC"];
 
 /// Scale = semitone offsets from the root, one octave's worth. Darker modes
 /// (flat 2nd, tritone) read as more menacing — we escalate them across floors.
@@ -72,75 +125,185 @@ pub const PHRYGIAN_DOMINANT: Scale = &[0, 1, 4, 5, 7, 8, 10];
 /// Locrian — flat 2nd *and* a diminished 5th (tritone); maximally unstable.
 pub const LOCRIAN: Scale = &[0, 1, 3, 5, 6, 8, 10];
 
-/// Oscillator shape — or synthesis PRESET — of a melodic voice. A plain
-/// enum so the song data is host-compilable; the wasm engine maps the four
-/// basic shapes to `web_sys::OscillatorType` and builds the presets from
-/// small node graphs (see the "music voices" section of `audio/engine.rs`).
-/// Presets bake per pitch exactly like the basic shapes, so they cost the
-/// same in the note-bake budget.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Wave {
-    Sine,
-    Square,
-    Sawtooth,
-    Triangle,
-    /// DARKSYNTH PRESET: 3–5 detuned sawtooths with a slight spread — the
-    /// wide, hissing supersaw lead/pad of every darksynth record.
-    Supersaw,
-    /// DARKSYNTH PRESET: a saw+square pair driven through a waveshaper-style
-    /// soft clip (`WaveShaperNode`) — a growling, overdriven bass.
-    DrivenBass,
-    /// DARKSYNTH PRESET: a slow-attack detuned saw pair through a fixed
-    /// lowpass — a dark, breathing chord bed.
-    DarkPad,
-}
-
-/// One step of the drum lane. Rendered from synthesized noise/tones only.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// One step of a percussion lane (`drums` / `perc`). Rendered from
+/// synthesized noise/tones only.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Drum {
     /// No percussion this step.
     Silent,
-    /// Pitched sine thump + a lick of low noise.
+    /// Pitched sine thump + a lick of low noise. Drives the side-chain.
     Kick,
-    /// Very short high-passed noise tick.
+    /// Very short high-passed noise tick (closed hat).
     Hat,
     /// Noise burst + a short body tone on the backbeat.
     Snare,
+    /// Three tight noise slaps and a short tail — the 808-style hand clap
+    /// that layers a snare or answers it.
+    Clap,
+    /// A longer, sizzling high-passed noise — the open hat on the off-beat.
+    OpenHat,
+    /// A pitched tom: sine dropping an octave with a knock on top.
+    Tom,
+    /// Rimshot / click: a tiny bright ping.
+    Rim,
+    /// A long bright wash — the crash on a downbeat.
+    Crash,
 }
-use Drum::{Hat, Kick, Silent, Snare};
+use Drum::{Kick, Silent};
+
+impl Drum {
+    /// Every sounding drum, in bake order (the four-on-the-floor core first).
+    pub const KIT: [Drum; 8] = [
+        Drum::Kick,
+        Drum::Hat,
+        Drum::Snare,
+        Drum::Clap,
+        Drum::OpenHat,
+        Drum::Tom,
+        Drum::Rim,
+        Drum::Crash,
+    ];
+}
 
 /// One block of an arrangement: a self-contained, multi-bar pattern across all
-/// five channels. Songs are built by ordering these (a refrain section can be
+/// seven channels. Songs are built by ordering these (a refrain section can be
 /// listed several times so the hook comes back). A section's playable length is
-/// the length of its longest lane; shorter lanes loop within it.
+/// the length of its longest note lane; shorter lanes loop within it.
+///
+/// Author a section literal with `..Section::EMPTY` so the lanes you don't
+/// write (the velocity and chord lanes, typically) default to empty — or
+/// build one with [`super::compose`].
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Section {
     /// Human-readable role (intro / verse / refrain / bridge / outro). Purely
     /// documentation + exposed via the tracker API; the scheduler ignores it.
     pub label: &'static str,
-    /// Bass lane, one scale-degree (or `REST`) per step.
+    /// Bass lane, one scale-degree (or `REST` / `HOLD`) per step.
     pub bass: &'static [i32],
-    /// Lead/melody lane, one scale-degree (or `REST`) per step.
+    /// Lead/melody lane, one scale-degree (or `REST` / `HOLD`) per step.
     pub lead: &'static [i32],
-    /// Pad/chord lane: each note blooms into a slow triad. `REST` sustains.
+    /// Pad/chord lane: each note blooms into a slow triad; `HOLD` sustains it.
     pub pad: &'static [i32],
     /// Arp lane — a faster, higher counter-melody.
     pub arp: &'static [i32],
+    /// Keys lane — stabs, a second lead, a counter-line.
+    pub keys: &'static [i32],
     /// Percussion lane, one `Drum` per step.
     pub drums: &'static [Drum],
-    /// Per-channel velocity (gain multipliers, 1.0 = nominal), indexed like
-    /// [`CHANNEL_NAMES`]. Applied at schedule time (a play-time gain, never
-    /// baked into the note buffers), so it costs nothing in the bake budget.
-    pub vel: [f32; NUM_CHANNELS],
-    /// SIDECHAIN DUCK flag: while this section plays, every kick step pumps
-    /// the melodic voices down along [`duck_gain`]'s fast-recovering curve
-    /// (the drums keep their own path and never duck themselves).
+    /// Second percussion lane (same kit) — for what has to hit together.
+    pub perc: &'static [Drum],
+    /// Velocity lanes (`0..=MAX_VEL` per step, looping; empty = all full).
+    pub bass_vel: &'static [u8],
+    pub lead_vel: &'static [u8],
+    pub pad_vel: &'static [u8],
+    pub arp_vel: &'static [u8],
+    pub keys_vel: &'static [u8],
+    pub drums_vel: &'static [u8],
+    pub perc_vel: &'static [u8],
+    /// Chord (voicing) lanes: one [`Chord`] per step, looping; empty = the
+    /// lane's default ([`Chord::default_for`]). Read where a note STARTS.
+    pub bass_chord: &'static [Chord],
+    pub lead_chord: &'static [Chord],
+    pub pad_chord: &'static [Chord],
+    pub arp_chord: &'static [Chord],
+    pub keys_chord: &'static [Chord],
+    /// Per-channel LEVEL (gain multipliers, 1.0 = nominal), indexed like
+    /// [`CHANNEL_NAMES`]; multiplies every step velocity of the channel.
+    /// Applied at schedule time (a play-time gain, never baked into the
+    /// note buffers), so it costs nothing in the bake budget.
+    pub level: [f32; NUM_CHANNELS],
+    /// SIDECHAIN DUCK flag: while this section plays, every kick pumps the
+    /// melodic lanes through the song's [`Sidechain`] (no effect when that
+    /// is [`Sidechain::OFF`]; the drums never duck themselves).
     pub duck: bool,
 }
 
+impl Section {
+    /// The all-empty section: the `..Section::EMPTY` base of every literal
+    /// (nominal levels; kicks pump whenever the song has a side-chain).
+    pub const EMPTY: Section = Section {
+        label: "",
+        bass: &[],
+        lead: &[],
+        pad: &[],
+        arp: &[],
+        keys: &[],
+        drums: &[],
+        perc: &[],
+        bass_vel: &[],
+        lead_vel: &[],
+        pad_vel: &[],
+        arp_vel: &[],
+        keys_vel: &[],
+        drums_vel: &[],
+        perc_vel: &[],
+        bass_chord: &[],
+        lead_chord: &[],
+        pad_chord: &[],
+        arp_chord: &[],
+        keys_chord: &[],
+        level: [1.0; NUM_CHANNELS],
+        duck: true,
+    };
+
+    /// The note lane of melodic channel `lane` ([`BASS`] … [`KEYS`]); empty
+    /// for the drums or an unknown index.
+    pub fn lane(&self, lane: usize) -> &'static [i32] {
+        match lane {
+            BASS => self.bass,
+            LEAD => self.lead,
+            PAD => self.pad,
+            ARP => self.arp,
+            KEYS => self.keys,
+            _ => &[],
+        }
+    }
+
+    /// The chord lane of melodic channel `lane`; empty for the drums.
+    pub fn chord_lane(&self, lane: usize) -> &'static [Chord] {
+        match lane {
+            BASS => self.bass_chord,
+            LEAD => self.lead_chord,
+            PAD => self.pad_chord,
+            ARP => self.arp_chord,
+            KEYS => self.keys_chord,
+            _ => &[],
+        }
+    }
+
+    /// The percussion lane of channel `lane` ([`DRUMS`] / [`PERC`]); empty
+    /// for a melodic channel.
+    pub fn drum_lane(&self, lane: usize) -> &'static [Drum] {
+        match lane {
+            DRUMS => self.drums,
+            PERC => self.perc,
+            _ => &[],
+        }
+    }
+
+    /// The velocity lane of channel `lane` (all seven).
+    pub fn vel_lane(&self, lane: usize) -> &'static [u8] {
+        match lane {
+            BASS => self.bass_vel,
+            LEAD => self.lead_vel,
+            PAD => self.pad_vel,
+            ARP => self.arp_vel,
+            KEYS => self.keys_vel,
+            DRUMS => self.drums_vel,
+            PERC => self.perc_vel,
+            _ => &[],
+        }
+    }
+
+    /// The level of channel `lane` (1.0 for an unknown index).
+    pub fn level_of(&self, lane: usize) -> f32 {
+        self.level.get(lane).copied().unwrap_or(1.0)
+    }
+}
+
 /// A whole song as copyable data. Author one as a Rust file in
-/// `src/audio/songs/` with the [`super::compose`] builders, list it in
-/// [`SONGS`], done (see `docs/MUSIC_CODE.md`).
+/// `src/audio/songs/` — with the [`super::compose`] builders or as `const`
+/// section literals —, list it in [`SONGS`], done (see `docs/MUSIC_CODE.md`).
 ///
 /// The key/tempo/voices live here; the *notes* live in the ordered `sections`.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -155,30 +318,57 @@ pub struct SongSpec {
     pub bpm: f64,
     /// Sequencer resolution: steps per beat (`4` = sixteenth notes).
     pub steps_per_beat: u32,
-    /// Oscillator shape for the bass voice.
-    pub bass_wave: Wave,
-    /// Oscillator shape for the lead voice.
-    pub lead_wave: Wave,
-    /// Oscillator shape for the pad voice.
-    pub pad_wave: Wave,
-    /// Oscillator shape for the arp voice.
-    pub arp_wave: Wave,
+    /// The five melodic instruments, indexed by lane ([`BASS`], [`LEAD`],
+    /// [`PAD`], [`ARP`], [`KEYS`]).
+    pub voices: [Voice; NUM_VOICES],
     /// The arrangement: an ordered list of sections played back to back, then
     /// looped as a whole. This is what makes a song long and developing.
     pub sections: &'static [Section],
     /// Overall punch/loudness feel (~0.5 lounge .. ~1.2 boss).
     pub intensity: f64,
+    /// Shuffle, `0.0` (straight sixteenths) … `1.0` (full triplet swing):
+    /// see [`swing_delay`].
+    pub swing: f64,
+    /// The kick-driven ducker on the melodic lanes ([`Sidechain::OFF`] = none),
+    /// armed per section by [`Section::duck`].
+    pub sidechain: Sidechain,
+    /// The shared echo line the voices' `echo` sends feed.
+    pub echo: Echo,
+    /// Timing HUMANIZE: every note except the kicks lands up to this many
+    /// seconds early or late (uniform; clamped to 20 ms). `0.0` = machine
+    /// tight; 3–6 ms loosens a groove without smearing it.
+    pub humanize: f64,
+    /// Depth of the bus lowpass's once-per-bar sweep, `1.0` (the classic
+    /// synthwave wah, closing to 420 Hz at the bar lines) … `0.0` (the bus
+    /// filter stays open — for songs whose voices carry their own filter
+    /// motion).
+    pub sweep: f64,
+    /// BAKE-time gain of the melodic lanes relative to the drums (`1.0` =
+    /// none). Every lane plays through an equal-power `StereoPannerNode`,
+    /// which puts a CENTRED lane 3 dB under the drums (they enter the bus
+    /// directly): `SQRT_2` makes that up exactly — what the `compose`
+    /// builder writes, so a plain centred lane is as loud as it was before
+    /// the lane graph existed; a song mixed WITH the panners in place
+    /// (the `const`-literal ones) says `1.0`.
+    pub melodic_gain: f64,
 }
 
 /// Number of songs in [`SONGS`].
-pub const SONG_COUNT: usize = 7;
+pub const SONG_COUNT: usize = 18;
 
-/// THE SOUNDTRACK — every track, built once on first use, in play order
-/// (the `?viz` tracker's list). Each entry is one Rust file in
-/// `src/audio/songs/` whose memoized `spec()` assembles its arrangement
-/// through the [`super::compose`] builders; the briefs are in
-/// `docs/music/TRACKS.md`. The game picks tracks by ROLE — [`title_song`],
-/// [`song_for_floor`], [`ending_song`] — never by index.
+/// How many of [`SONGS`] — the first ones — are the BRIEFED soundtrack
+/// (`docs/music/TRACKS.md`): the tracks the game plays by role and the role
+/// / length tests pin. The rest are tracker-listed songs without a role.
+pub const BRIEFED_SONGS: usize = 7;
+
+/// EVERY SONG — built once on first use, in the `?viz` tracker's order: the
+/// briefed soundtrack first (each one a Rust file in `src/audio/songs/`
+/// whose memoized `spec()` assembles its arrangement through the
+/// [`super::compose`] builders; briefs in `docs/music/TRACKS.md`), then the
+/// `const`-literal songs written against the full v2 instrument (stereo
+/// voices, ties, velocity / chord lanes, echo + hall sends). The game picks
+/// tracks by ROLE — [`title_song`], [`song_for_floor`], [`ending_song`] —
+/// never by index.
 pub static SONGS: LazyLock<[SongSpec; SONG_COUNT]> = LazyLock::new(|| {
     [
         neon_checksum::spec(),
@@ -188,6 +378,17 @@ pub static SONGS: LazyLock<[SongSpec; SONG_COUNT]> = LazyLock::new(|| {
         signal_rot::spec(),
         crown_of_static::spec(),
         coast_home::spec(),
+        insert_coin::spec(),
+        neon_lounge::spec(),
+        last_exit::spec(),
+        sodium_lights::spec(),
+        chrome_veins::spec(),
+        descent::spec(),
+        blood_rush::spec(),
+        deep_static::spec(),
+        blood_engine::spec(),
+        static_prayer::spec(),
+        mask_of_dread::spec(),
     ]
 });
 
@@ -215,34 +416,42 @@ pub fn song_for_floor(floor_id: usize) -> SongSpec {
     }
 }
 
-// --- the sidechain duck ------------------------------------------------------
+// --- reading the format ------------------------------------------------------
 
-/// How far the melodic voices dip at a kick in a ducked section (gain).
-pub const DUCK_FLOOR: f64 = 0.35;
-
-/// Seconds a duck takes to recover fully — fast, well under a beat at
-/// combat tempi, so the pump breathes with the kick instead of smearing.
-pub const DUCK_RECOVERY: f64 = 0.3;
-
-/// The pure sidechain envelope: melodic gain `dt` seconds after the most
-/// recent kick (retrigger semantics — a new kick snaps the gain back to
-/// [`DUCK_FLOOR`], then it recovers linearly over [`DUCK_RECOVERY`]).
-/// `dt < 0` (no kick yet / before the kick) is nominal gain. The engine's
-/// scheduler reproduces exactly this curve with one `setValueAtTime` +
-/// `linearRampToValueAtTime` pair per kick on the melodic duck node.
-pub fn duck_gain(dt: f64) -> f64 {
-    if dt < 0.0 {
-        return 1.0;
+/// The name of a known mode, for the tracker's info line (`"CUSTOM"` for
+/// any other set of offsets).
+pub fn scale_name(scale: Scale) -> &'static str {
+    match scale {
+        s if s == MINOR => "MINOR",
+        s if s == DORIAN => "DORIAN",
+        s if s == HARMONIC_MINOR => "HARMONIC MINOR",
+        s if s == PHRYGIAN => "PHRYGIAN",
+        s if s == PHRYGIAN_DOMINANT => "PHRYGIAN DOMINANT",
+        s if s == LOCRIAN => "LOCRIAN",
+        _ => "CUSTOM",
     }
-    (DUCK_FLOOR + (1.0 - DUCK_FLOOR) * (dt / DUCK_RECOVERY)).min(1.0)
 }
 
-/// Does `step` of `sec` fire a kick? (What retriggers the duck.)
+/// The nearest note name + octave of a frequency (`55.0` → `"A1"`,
+/// `73.42` → `"D2"`), scientific pitch, A4 = 440 Hz.
+pub fn note_name(hz: f64) -> String {
+    const NAMES: [&str; 12] = [
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
+    if hz <= 0.0 || !hz.is_finite() {
+        return "?".to_string();
+    }
+    // Semitones above C0 (16.352 Hz).
+    let n = (12.0 * (hz / 16.351_6).log2()).round() as i64;
+    let name = NAMES[n.rem_euclid(12) as usize];
+    format!("{}{}", name, n.div_euclid(12))
+}
+
+/// Does `step` of `sec` fire a kick on either percussion lane? (What
+/// retriggers the duck.)
 pub fn is_kick_step(sec: &Section, step: usize) -> bool {
-    drum_at(sec.drums, step) == Kick
+    drum_at(sec.drums, step) == Kick || drum_at(sec.perc, step) == Kick
 }
-
-// --- pure helpers ----------------------------------------------------------
 
 /// Resolve a scale-degree (root = 0, +1 = next scale note up, +scale.len() = an
 /// octave up, negatives drop below root) to a frequency in Hz, in-key.
@@ -257,15 +466,76 @@ pub fn degree_freq(root: f64, scale: Scale, degree: i32) -> f64 {
     root * 2f64.powf(semitones as f64 / 12.0)
 }
 
-/// Read a melodic lane at `step` (patterns loop). `None` = rest / empty lane.
-pub fn degree_at(pattern: &[i32], step: usize) -> Option<i32> {
+/// A note starting at some step of a melodic lane.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct NoteOn {
+    /// Scale degree.
+    pub degree: i32,
+    /// Length in steps: 1 + the `HOLD`s tied onto it.
+    pub len: u16,
+    /// The degree of the lane's previous note when it runs right into this
+    /// one (its tail ends where this starts, no rest between) and differs —
+    /// what a legato glide comes from. `None` after a rest, at the loop's
+    /// first note of an otherwise empty lane, or for a repeated pitch.
+    pub from: Option<i32>,
+}
+
+/// Read a melodic lane at `step` (patterns loop): `Some` only where a note
+/// STARTS — a `REST`, a `HOLD` (the tail of an earlier note) or an empty
+/// lane is `None`. The length counts the `HOLD`s that follow, wrapping
+/// around the looping lane, so a note tied across the lane's end sustains
+/// into its next repeat.
+pub fn note_at(pattern: &[i32], step: usize) -> Option<NoteOn> {
     if pattern.is_empty() {
         return None;
     }
-    match pattern[step % pattern.len()] {
-        REST => None,
-        d => Some(d),
+    let n = pattern.len();
+    let degree = pattern[step % n];
+    if degree == REST || degree == HOLD {
+        return None;
     }
+    let mut len = 1;
+    while len < n && pattern[(step + len) % n] == HOLD {
+        len += 1;
+    }
+    // Legato: walk back over the previous note's HOLDs to its start; a
+    // REST anywhere on the way (or nothing but HOLDs) means no glide.
+    let mut from = None;
+    for back in 1..n {
+        match pattern[(step + n - back) % n] {
+            HOLD => continue,
+            REST => break,
+            d => {
+                if d != degree {
+                    from = Some(d);
+                }
+                break;
+            }
+        }
+    }
+    Some(NoteOn {
+        degree,
+        len: len.min(u16::MAX as usize) as u16,
+        from,
+    })
+}
+
+/// Read a velocity lane at `step` (loops): `MAX_VEL` for an empty lane,
+/// otherwise the step's value clamped to `MAX_VEL`.
+pub fn vel_at(vels: &[u8], step: usize) -> u8 {
+    if vels.is_empty() {
+        return MAX_VEL;
+    }
+    vels[step % vels.len()].min(MAX_VEL)
+}
+
+/// Read a chord lane at `step` (loops): the lane's default voicing for an
+/// empty lane.
+pub fn chord_at(lane: usize, chords: &[Chord], step: usize) -> Chord {
+    if chords.is_empty() {
+        return Chord::default_for(lane);
+    }
+    chords[step % chords.len()]
 }
 
 /// Read the drum lane at `step` (loops). Empty lane == `Silent`.
@@ -276,15 +546,18 @@ pub fn drum_at(pattern: &[Drum], step: usize) -> Drum {
     pattern[step % pattern.len()]
 }
 
-/// The playable length of a section: its longest lane (shorter lanes loop
-/// inside it). Always at least 1 so the scheduler can never divide by zero.
+/// The playable length of a section: its longest note lane (shorter lanes
+/// loop inside it). Always at least 1 so the scheduler can never divide by
+/// zero. Velocity and chord lanes don't count — they only decorate notes.
 pub fn section_len(sec: &Section) -> usize {
     sec.bass
         .len()
         .max(sec.lead.len())
         .max(sec.pad.len())
         .max(sec.arp.len())
+        .max(sec.keys.len())
         .max(sec.drums.len())
+        .max(sec.perc.len())
         .max(1)
 }
 
@@ -300,28 +573,99 @@ pub fn bar_steps(song: &SongSpec) -> usize {
     (song.steps_per_beat.max(1) as usize) * 4
 }
 
-/// Shared cell sampler: does `channel` (0 bass, 1 lead, 2 pad, 3 arp, 4
-/// drums — see [`CHANNEL_NAMES`]) fire at `step` within `sec`?
-pub fn cell_active(sec: &Section, channel: usize, step: usize) -> bool {
-    match channel {
-        0 => degree_at(sec.bass, step).is_some(),
-        1 => degree_at(sec.lead, step).is_some(),
-        2 => degree_at(sec.pad, step).is_some(),
-        3 => degree_at(sec.arp, step).is_some(),
-        4 => !matches!(drum_at(sec.drums, step), Silent),
-        _ => false,
+/// A lane's built-in note shape: `(gate, level, attack)` — the decay tail
+/// in STEPS an untied note rings, its mix level, and its attack in seconds.
+/// (The pad level is per chord: its default triad lands each partial at
+/// 0.78/√3 = 0.45 after the 1/√n split.)
+pub fn lane_shape(lane: usize) -> (f64, f64, f64) {
+    match lane {
+        BASS => (1.9, 1.3, 0.005),
+        LEAD => (0.9, 1.0, 0.005),
+        PAD => (4.0, 0.78, 0.06),
+        KEYS => (1.2, 0.8, 0.005),
+        _ => (0.7, 0.7, 0.005),
+    }
+}
+
+/// The lane's shape with the song voice's [`Env`] override applied.
+pub fn voice_shape(song: &SongSpec, lane: usize) -> (f64, f64, f64) {
+    let (gate, level, attack) = lane_shape(lane);
+    match song.voices.get(lane).and_then(|v| v.env) {
+        Some(e) => (e.gate.max(0.05), level, e.attack.max(0.0)),
+        None => (gate, level, attack),
+    }
+}
+
+/// Seconds of signal one baked voice needs: a note's attack + its tied
+/// hold + the lane's decay tail (plus the builders' 30 ms stop margin), or
+/// the longest layer of a kit piece.
+pub fn key_seconds(song: &SongSpec, key: MusicKey) -> f64 {
+    match key {
+        MusicKey::Note { lane, len, .. } => {
+            let (gate, _, attack) = voice_shape(song, lane);
+            attack + step_dur(song) * (gate + f64::from(len.max(1) - 1)) + 0.03
+        }
+        MusicKey::Drum(d) => match d {
+            Drum::Kick => 0.21,  // 0.18 s tone + stop margin (noise is 0.05)
+            Drum::Hat => 0.06,   // 0.03 s noise tick + margin
+            Drum::Snare => 0.16, // 0.13 s noise + margin (tone is 0.10)
+            Drum::Clap => 0.20,
+            Drum::OpenHat => 0.31,
+            Drum::Tom => 0.31,
+            Drum::Rim => 0.06,
+            Drum::Crash => 1.0,
+            Drum::Silent => 0.03,
+        },
+    }
+}
+
+/// What a tracker cell shows for one channel at one step.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GridCell {
+    /// Nothing sounds (a rest, or an empty lane).
+    Off,
+    /// A note (or drum) starts here, at this velocity.
+    On(u8),
+    /// A note started earlier is tied through this step.
+    Hold,
+}
+
+/// Sample the tracker cell of `channel` (see [`CHANNEL_NAMES`]) at `step`
+/// within `sec`.
+pub fn cell_at(sec: &Section, channel: usize, step: usize) -> GridCell {
+    if channel == DRUMS || channel == PERC {
+        return match drum_at(sec.drum_lane(channel), step) {
+            Silent => GridCell::Off,
+            _ => GridCell::On(vel_at(sec.vel_lane(channel), step)),
+        };
+    }
+    let lane = sec.lane(channel);
+    if lane.is_empty() {
+        return GridCell::Off;
+    }
+    match lane[step % lane.len()] {
+        REST => GridCell::Off,
+        HOLD => {
+            // A HOLD only sustains if some note precedes it in the loop.
+            if lane.iter().any(|&d| d != REST && d != HOLD) {
+                GridCell::Hold
+            } else {
+                GridCell::Off
+            }
+        }
+        _ => GridCell::On(vel_at(sec.vel_lane(channel), step)),
     }
 }
 
 /// Compact density summary of a section: the fraction (0.0..=1.0) of all
-/// grid cells that carry a note/hit. A cheap way to shade each miniature by
-/// how busy/intense it is without drawing every cell.
+/// grid cells that carry a note/hit or a tie. A cheap way to shade each
+/// miniature by how busy/intense it is without drawing every cell.
 pub fn section_density(sec: &Section) -> f32 {
     let steps = section_len(sec);
     let mut active = 0usize;
     for step in 0..steps {
         for chan in 0..NUM_CHANNELS {
-            if cell_active(sec, chan, step) {
+            if cell_at(sec, chan, step) != GridCell::Off {
                 active += 1;
             }
         }
@@ -409,46 +753,34 @@ impl Playhead {
 
 // --- the bakeable voice set ---------------------------------------------------
 
-/// One pre-renderable MUSIC voice: a tracker channel role × the scale
-/// degree it plays (drums carry no pitch; a pad key bakes its whole triad
-/// into one buffer). The set of keys a song can ever schedule is FINITE —
+/// One pre-renderable MUSIC voice: what the engine bakes once per song and
+/// fires per scheduled note. Velocity is NOT part of the key (it is a
+/// play-time gain); pitch, LENGTH and voicing are (the envelope and the
+/// chord are baked in). The set of keys a song can ever schedule is FINITE —
 /// its lanes are static pattern data — so [`music_keys`] enumerates it
 /// exactly and each key is baked at its exact pitch (no `playback_rate`
 /// transposition: the timbre is untouched).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MusicKey {
-    /// Bass lane note at this scale degree.
-    Bass(i32),
-    /// Lead lane note at this scale degree.
-    Lead(i32),
-    /// Pad lane note: the full triad (root + third + fifth) in one buffer.
-    Pad(i32),
-    /// Arp lane note at this scale degree.
-    Arp(i32),
-    /// Drum lane kick.
-    Kick,
-    /// Drum lane hat.
-    Hat,
-    /// Drum lane snare.
-    Snare,
-}
-
-impl MusicKey {
-    /// The voice a drum step needs (`None` for a silent step).
-    pub fn of_drum(hit: Drum) -> Option<MusicKey> {
-        match hit {
-            Silent => None,
-            Kick => Some(MusicKey::Kick),
-            Hat => Some(MusicKey::Hat),
-            Snare => Some(MusicKey::Snare),
-        }
-    }
+    /// A melodic lane ([`MELODIC`]) note at this scale degree, this many
+    /// steps long (1 = untied), voiced as `chord`, gliding in from `from`
+    /// (only ever `Some` on a lane whose voice glides).
+    Note {
+        lane: usize,
+        degree: i32,
+        len: u16,
+        chord: Chord,
+        from: Option<i32>,
+    },
+    /// One kit piece (never `Silent`) — shared by both percussion lanes.
+    Drum(Drum),
 }
 
 /// Enumerate the exact, finite voice set `song` can ever schedule: the
-/// distinct scale degrees of each melodic lane across every section,
-/// plus the up-to-three drum voices — in bake-priority order (drums
-/// first, then bass, lead, arp, pad). Typically 30–45 keys per song.
+/// distinct (degree, length, voicing) triples of each melodic lane across
+/// every section, plus the kit pieces its percussion lanes use — in
+/// bake-priority order (drums first — the densest lanes — then the melodic
+/// lanes per [`MELODIC`]). Typically 15–60 keys per song.
 pub fn music_keys(song: &SongSpec) -> Vec<MusicKey> {
     fn add(keys: &mut Vec<MusicKey>, k: MusicKey) {
         if !keys.contains(&k) {
@@ -456,25 +788,28 @@ pub fn music_keys(song: &SongSpec) -> Vec<MusicKey> {
         }
     }
     let mut keys = Vec::new();
-    for sec in song.sections {
-        for &d in sec.drums {
-            if let Some(k) = MusicKey::of_drum(d) {
-                add(&mut keys, k);
-            }
+    // Drums in kit order (kick first), only the pieces the song uses.
+    for drum in Drum::KIT {
+        let used = song
+            .sections
+            .iter()
+            .any(|sec| sec.drums.contains(&drum) || sec.perc.contains(&drum));
+        if used {
+            add(&mut keys, MusicKey::Drum(drum));
         }
     }
-    type Lane = (fn(&Section) -> &'static [i32], fn(i32) -> MusicKey);
-    const LANES: [Lane; 4] = [
-        (|s| s.bass, MusicKey::Bass),
-        (|s| s.lead, MusicKey::Lead),
-        (|s| s.arp, MusicKey::Arp),
-        (|s| s.pad, MusicKey::Pad),
-    ];
-    for (pattern, mk) in LANES {
+    for lane in MELODIC {
         for sec in song.sections {
-            for &d in pattern(sec) {
-                if d != REST {
-                    add(&mut keys, mk(d));
+            let pattern = sec.lane(lane);
+            if pattern.is_empty() {
+                continue;
+            }
+            // Over the SECTION's steps, not the lane's: a lane looping under
+            // a chord lane of another length meets other voicings on its
+            // later passes, and those are keys too.
+            for step in 0..section_len(sec) {
+                if let Some(n) = note_at(pattern, step) {
+                    add(&mut keys, note_key(song, sec, lane, step, &n));
                 }
             }
         }
@@ -482,21 +817,67 @@ pub fn music_keys(song: &SongSpec) -> Vec<MusicKey> {
     keys
 }
 
+/// The bake key of the note `n` starting at `step` of `lane` in `sec`: its
+/// voicing from the chord lane, its glide origin only if the lane's voice
+/// glides (so a non-gliding lane never multiplies its keys by context).
+pub fn note_key(song: &SongSpec, sec: &Section, lane: usize, step: usize, n: &NoteOn) -> MusicKey {
+    let glides = song.voices.get(lane).is_some_and(|v| v.glides());
+    MusicKey::Note {
+        lane,
+        degree: n.degree,
+        len: n.len,
+        chord: chord_at(lane, sec.chord_lane(lane), step),
+        from: if glides { n.from } else { None },
+    }
+}
+
+// --- shared patterns ----------------------------------------------------------
+
+/// A shared PERC ride for the driving songs' refrains: closed hats on the
+/// off sixteenths (between the drum lane's own even-step hats — never
+/// doubling them) and an open hat pushing into the next bar.
+pub const PERC_RIDE: &[Drum] = &[
+    Drum::Silent,
+    Drum::Hat,
+    Drum::Silent,
+    Drum::Hat,
+    Drum::Silent,
+    Drum::Hat,
+    Drum::Silent,
+    Drum::Hat,
+    Drum::Silent,
+    Drum::Hat,
+    Drum::Silent,
+    Drum::Hat,
+    Drum::Silent,
+    Drum::Hat,
+    Drum::Silent,
+    Drum::OpenHat,
+];
+/// The velocities of [`PERC_RIDE`]: ghosted hats, the open hat a touch up.
+pub const PERC_RIDE_VEL: &[u8] = &[0, 4, 0, 3, 0, 4, 0, 3, 0, 4, 0, 3, 0, 4, 0, 5];
+
 #[cfg(test)]
 mod tests {
+    use super::Drum::{Clap, Crash, Hat, OpenHat, Rim, Snare, Tom};
     use super::*;
+
+    /// The briefed soundtrack (the tracks the game plays by role).
+    fn briefed() -> &'static [SongSpec] {
+        &SONGS[..BRIEFED_SONGS]
+    }
 
     /// Every note any song can ever schedule must map to an enumerated
     /// [`MusicKey`], and the per-song voice set must stay small enough that
-    /// baking each exact pitch (no `playback_rate` transposition) is cheap.
-    /// Run with `--nocapture` to see the per-song counts.
+    /// baking each exact pitch × length × voicing (no `playback_rate`
+    /// transposition) is cheap. Run with `--nocapture` for the counts.
     #[test]
     fn music_voice_sets_are_small_and_complete() {
         for song in SONGS.iter() {
             let keys = music_keys(song);
             assert!(!keys.is_empty(), "{}: empty voice set", song.name);
             assert!(
-                keys.len() <= 64,
+                keys.len() <= 96,
                 "{}: {} voices — too many to bake each exact pitch",
                 song.name,
                 keys.len()
@@ -505,42 +886,63 @@ mod tests {
             for (i, k) in keys.iter().enumerate() {
                 assert!(!keys[..i].contains(k), "{}: duplicate {:?}", song.name, k);
             }
-            // Completeness: every schedulable note has a key.
+            // Completeness: every note the SCHEDULER can ask for (it reads
+            // at the section's step, lanes looping under it) has a key.
             for sec in song.sections {
-                for &d in sec.bass {
-                    assert!(d == REST || keys.contains(&MusicKey::Bass(d)));
+                for lane in MELODIC {
+                    let p = sec.lane(lane);
+                    for step in 0..section_len(sec) {
+                        if let Some(n) = note_at(p, step) {
+                            let key = note_key(song, sec, lane, step, &n);
+                            assert!(keys.contains(&key), "{}: missing {:?}", song.name, key);
+                        }
+                    }
                 }
-                for &d in sec.lead {
-                    assert!(d == REST || keys.contains(&MusicKey::Lead(d)));
-                }
-                for &d in sec.pad {
-                    assert!(d == REST || keys.contains(&MusicKey::Pad(d)));
-                }
-                for &d in sec.arp {
-                    assert!(d == REST || keys.contains(&MusicKey::Arp(d)));
-                }
-                for &dr in sec.drums {
-                    if let Some(key) = MusicKey::of_drum(dr) {
-                        assert!(keys.contains(&key));
+                for &dr in sec.drums.iter().chain(sec.perc) {
+                    if dr != Silent {
+                        assert!(
+                            keys.contains(&MusicKey::Drum(dr)),
+                            "{}: {:?}",
+                            song.name,
+                            dr
+                        );
                     }
                 }
             }
-            let drums = keys
-                .iter()
-                .filter(|k| matches!(k, MusicKey::Kick | MusicKey::Hat | MusicKey::Snare))
-                .count();
             let count = |f: fn(&MusicKey) -> bool| keys.iter().filter(|k| f(k)).count();
             println!(
-                "{:14} {:2} voices (drums {} bass {:2} lead {:2} arp {:2} pad {:2})",
+                "{:16} {:2} voices (drums {} bass {:2} lead {:2} arp {:2} keys {:2} pad {:2})",
                 song.name,
                 keys.len(),
-                drums,
-                count(|k| matches!(k, MusicKey::Bass(_))),
-                count(|k| matches!(k, MusicKey::Lead(_))),
-                count(|k| matches!(k, MusicKey::Arp(_))),
-                count(|k| matches!(k, MusicKey::Pad(_))),
+                count(|k| matches!(k, MusicKey::Drum(_))),
+                count(|k| matches!(k, MusicKey::Note { lane: BASS, .. })),
+                count(|k| matches!(k, MusicKey::Note { lane: LEAD, .. })),
+                count(|k| matches!(k, MusicKey::Note { lane: ARP, .. })),
+                count(|k| matches!(k, MusicKey::Note { lane: KEYS, .. })),
+                count(|k| matches!(k, MusicKey::Note { lane: PAD, .. })),
             );
         }
+    }
+
+    /// A lane looping under a chord lane of another length meets other
+    /// voicings on its later passes: those are keys too (the scheduler reads
+    /// both at the SECTION's step).
+    #[test]
+    fn looping_lanes_meet_every_chord_lane_step() {
+        const SEC: Section = Section {
+            lead: &[0, REST],
+            lead_chord: &[Chord::Single, Chord::Single, Chord::Power, Chord::Single],
+            drums: &[Silent; 4],
+            ..Section::EMPTY
+        };
+        let song = SongSpec {
+            sections: &[SEC],
+            ..SONGS[0]
+        };
+        let keys = music_keys(&song);
+        let n = note_at(SEC.lead, 2).unwrap();
+        assert!(keys.contains(&note_key(&song, &SEC, LEAD, 2, &n)));
+        assert_eq!(keys.len(), 2, "{keys:?}");
     }
 
     /// Every section of every song must be whole bars long (its longest lane a
@@ -573,9 +975,9 @@ mod tests {
     }
 
     /// The soundtrack's ROLES: the title, the ending and every floor id
-    /// map to the briefed tracks (`docs/music/TRACKS.md`), every track has
-    /// a role (nothing is listed for the tracker that the game never plays)
-    /// and the ending is the calmest track in the list.
+    /// map to the briefed tracks (`docs/music/TRACKS.md`), every briefed
+    /// track has a role (the songs listed after them are tracker-only) and
+    /// the ending is the calmest of the briefed tracks.
     #[test]
     fn soundtrack_roles_follow_the_briefs() {
         assert_eq!(title_song().name, "Neon Checksum");
@@ -594,13 +996,13 @@ mod tests {
         for id in [13, 14, 99] {
             assert_eq!(floor_track(id), "Crown of Static", "floor {id}");
         }
-        for song in SONGS.iter() {
+        for song in briefed() {
             let has_role = song.name == title_song().name
                 || song.name == ending_song().name
                 || (0..32).any(|id| song_for_floor(id).name == song.name);
             assert!(has_role, "{} has no role in the game", song.name);
         }
-        let calmest = SONGS
+        let calmest = briefed()
             .iter()
             .min_by(|a, b| a.intensity.total_cmp(&b.intensity))
             .unwrap();
@@ -613,13 +1015,13 @@ mod tests {
         steps as f64 * step_dur(song)
     }
 
-    /// Every track runs the length its brief asks for — the soundtrack
-    /// range is 1:30 to 5:00, and each track's own target (±20 s) is pinned
-    /// so a rewrite cannot quietly shrink one back to a 30-second loop.
-    /// Run with `--nocapture` for the per-track lengths.
+    /// Every briefed track runs the length its brief asks for — the
+    /// soundtrack range is 1:30 to 5:00, and each track's own target (±20 s)
+    /// is pinned so a rewrite cannot quietly shrink one back to a 30-second
+    /// loop. Run with `--nocapture` for every song's length.
     #[test]
     fn tracks_run_the_briefed_length() {
-        const TARGET_SECS: [(&str, f64); SONG_COUNT] = [
+        const TARGET_SECS: [(&str, f64); BRIEFED_SONGS] = [
             ("Neon Checksum", 150.0),
             ("Walk Don't Run", 120.0),
             ("Service Corridor", 180.0),
@@ -629,20 +1031,23 @@ mod tests {
             ("Coast Home", 150.0),
         ];
         for (name, target) in TARGET_SECS {
-            let song = SONGS
+            let song = briefed()
                 .iter()
                 .find(|s| s.name == name)
-                .unwrap_or_else(|| panic!("{name} not in SONGS"));
+                .unwrap_or_else(|| panic!("{name} not in the briefed SONGS"));
             let secs = song_secs(song);
-            println!(
-                "{name:16} {:5.1} s ({:2} sections)",
-                secs,
-                song.sections.len()
-            );
             assert!((90.0..=300.0).contains(&secs), "{name}: {secs:.1} s");
             assert!(
                 (secs - target).abs() <= 20.0,
                 "{name}: {secs:.1} s, brief says ~{target} s"
+            );
+        }
+        for song in SONGS.iter() {
+            println!(
+                "{:16} {:5.1} s ({:2} sections)",
+                song.name,
+                song_secs(song),
+                song.sections.len()
             );
         }
     }
@@ -652,10 +1057,8 @@ mod tests {
     /// ones never do — the duck is a genre marker, not a default.
     #[test]
     fn the_duck_follows_the_genre() {
-        let ducked = |name: &str| {
-            let song = SONGS.iter().find(|s| s.name == name).unwrap();
-            song.sections.iter().filter(|s| s.duck).count()
-        };
+        let find = |name: &str| *SONGS.iter().find(|s| s.name == name).unwrap();
+        let ducked = |name: &str| find(name).sections.iter().filter(|s| s.duck).count();
         for name in [
             "Service Corridor",
             "Thermal Mass",
@@ -663,10 +1066,10 @@ mod tests {
             "Crown of Static",
         ] {
             assert!(ducked(name) > 0, "{name} never pumps");
+            assert!(find(name).sidechain.active(), "{name}: no side-chain");
         }
         for name in ["Service Corridor", "Thermal Mass"] {
-            let song = SONGS.iter().find(|s| s.name == name).unwrap();
-            for sec in song.sections {
+            for sec in find(name).sections {
                 let kicked = sec.drums.contains(&Kick);
                 assert!(
                     !kicked || sec.duck,
@@ -683,7 +1086,9 @@ mod tests {
     /// Every floor's song is one of the listed songs (the `?viz` tracker can
     /// show whatever is playing), song names are unique (the engine detects
     /// a song switch by name) and every song is playable data: positive
-    /// tempo / root, a non-empty scale, every note in-key resolvable.
+    /// tempo / root, a non-empty scale, every note in-key resolvable, every
+    /// song-level and voice setting inside the range the engine assumes, no
+    /// `HOLD` that has nothing to hold, velocities within range.
     #[test]
     fn songs_are_well_formed_and_floor_mapping_is_listed() {
         for floor in 0..32 {
@@ -691,22 +1096,79 @@ mod tests {
             assert!(SONGS.iter().any(|x| x.name == s.name), "floor {floor}");
         }
         for (i, song) in SONGS.iter().enumerate() {
+            let name = song.name;
             assert!(
-                !SONGS[..i].iter().any(|x| x.name == song.name),
-                "duplicate song name {}",
-                song.name
+                !SONGS[..i].iter().any(|x| x.name == name),
+                "duplicate song name {name}"
             );
             assert!(song.bpm > 0.0 && song.root > 0.0 && song.steps_per_beat >= 1);
             assert!(!song.scale.is_empty());
             assert!(step_dur(song) > 0.0 && step_dur(song) < 1.0);
+            assert!((0.0..=1.0).contains(&song.swing), "{name}: swing");
+            assert!((0.0..=1.0).contains(&song.sidechain.depth), "{name}: duck");
+            assert!(song.sidechain.release_beats > 0.0, "{name}: duck release");
+            assert!(
+                song.echo.steps > 0.0 && song.echo.tone > 0.0,
+                "{name}: echo"
+            );
+            assert!((0.0..0.95).contains(&song.echo.feedback), "{name}: echo fb");
+            assert!((0.0..=1.0).contains(&song.sweep), "{name}: sweep");
+            assert!((0.0..=0.02).contains(&song.humanize), "{name}: humanize");
+            assert!(
+                (0.25..=4.0).contains(&song.melodic_gain),
+                "{name}: melodic gain"
+            );
+            for v in song.voices {
+                assert!((-1.0..=1.0).contains(&v.pan), "{name}: pan");
+                assert!((0.0..=1.0).contains(&v.width), "{name}: width");
+                assert!(v.detune >= 0.0, "{name}: detune");
+                assert!((1..=7).contains(&v.unison), "{name}: unison");
+                assert!((0.0..=1.0).contains(&v.drive), "{name}: drive");
+                assert!((0.0..=1.0).contains(&v.echo), "{name}: echo send");
+                assert!((0.0..=1.0).contains(&v.reverb), "{name}: reverb send");
+                assert!((0.0..=1.0).contains(&v.sub), "{name}: sub");
+                assert!(v.glide >= 0.0, "{name}: glide");
+                if let Some(e) = v.env {
+                    assert!(e.attack >= 0.0 && e.gate > 0.0, "{name}: env");
+                }
+                if let Some(f) = v.filter {
+                    assert!(f.cutoff >= 20.0 && f.peak >= f.cutoff, "{name}: filter");
+                    assert!(f.attack >= 0.0 && f.decay >= 0.0 && f.q > 0.0, "{name}");
+                }
+                if let Some(vb) = v.vibrato {
+                    assert!(
+                        vb.rate > 0.0 && vb.depth >= 0.0 && vb.delay >= 0.0,
+                        "{name}"
+                    );
+                }
+            }
             for sec in song.sections {
-                for lane in [sec.bass, sec.lead, sec.pad, sec.arp] {
-                    for &d in lane {
-                        if d != REST {
-                            let f = degree_freq(song.root, song.scale, d);
-                            assert!(f.is_finite() && f > 0.0 && f < 20_000.0);
+                for lane in MELODIC {
+                    let p = sec.lane(lane);
+                    for &d in p {
+                        if d != REST && d != HOLD {
+                            for &interval in Chord::Add9.degrees() {
+                                let f = degree_freq(song.root, song.scale, d + interval);
+                                assert!(f.is_finite() && f > 0.0 && f < 20_000.0);
+                            }
                         }
                     }
+                    // An all-REST lane is fine (it pads the section's
+                    // length); a HOLD with no note anywhere to hold is a typo.
+                    if p.contains(&HOLD) {
+                        assert!(
+                            p.iter().any(|&d| d != REST && d != HOLD),
+                            "{name} / {}: lane {} ties nothing",
+                            sec.label,
+                            CHANNEL_NAMES[lane]
+                        );
+                    }
+                }
+                for ch in 0..NUM_CHANNELS {
+                    for &v in sec.vel_lane(ch) {
+                        assert!(v <= MAX_VEL, "{name} / {}: velocity {v}", sec.label);
+                    }
+                    assert!(sec.level_of(ch) >= 0.0 && sec.level_of(ch).is_finite());
                 }
                 let density = section_density(sec);
                 assert!((0.0..=1.0).contains(&density));
@@ -728,29 +1190,242 @@ mod tests {
         assert_eq!(degree_freq(55.0, &[], 3), 55.0);
     }
 
-    /// Lanes loop, empty lanes read as silence.
+    /// A note's length is 1 + the HOLDs tied onto it (wrapping around the
+    /// looping lane); a HOLD or a REST is not a note start.
+    #[test]
+    fn ties_extend_the_note_they_follow() {
+        let on = |degree, len, from| Some(NoteOn { degree, len, from });
+        let lane = [0, HOLD, HOLD, HOLD, 3, REST, HOLD, 5];
+        // The lane loops, so the 0 runs straight on from the 5 at its end.
+        assert_eq!(note_at(&lane, 0), on(0, 4, Some(5)));
+        assert_eq!(note_at(&lane, 1), None, "a HOLD is not a note start");
+        // 3 starts right where the held 0 ends: legato from 0.
+        assert_eq!(note_at(&lane, 4), on(3, 1, Some(0)));
+        assert_eq!(note_at(&lane, 5), None);
+        assert_eq!(note_at(&lane, 6), None, "a HOLD after a REST is silent");
+        // Counting wraps around the lane but stops at the next note start
+        // (step 0 here), so the last note is one step long.
+        assert_eq!(note_at(&lane, 7), on(5, 1, None));
+        // Wrapping tie: a note at the end sustains into the lane's repeat —
+        // and it runs straight on from the 2 before it (legato).
+        let wrap = [HOLD, HOLD, 2, 4];
+        assert_eq!(note_at(&wrap, 3), on(4, 3, Some(2)));
+        // Steps beyond the lane length loop.
+        assert_eq!(note_at(&wrap, 7), note_at(&wrap, 3));
+        assert_eq!(note_at(&[], 0), None);
+        // An all-HOLD lane never sounds (and never loops forever counting).
+        assert_eq!(note_at(&[HOLD, HOLD], 0), None);
+    }
+
+    /// A glide origin needs two DIFFERENT notes that touch, and it only
+    /// enters the bake key on a gliding voice.
+    #[test]
+    fn legato_origin_needs_touching_different_notes() {
+        let touching = [0, 3, 3, REST, 5, HOLD, 7];
+        let from = |step| note_at(&touching, step).and_then(|n| n.from);
+        assert_eq!(from(1), Some(0));
+        assert_eq!(from(2), None, "same pitch");
+        assert_eq!(from(4), None, "after a rest");
+        assert_eq!(from(6), Some(5), "after a tie");
+        const SEC: Section = Section {
+            lead: &[0, 3, 0, 3],
+            ..Section::EMPTY
+        };
+        let mut voices = [Voice::mono(Wave::Square); NUM_VOICES];
+        let plain = SongSpec {
+            sections: &[SEC],
+            voices,
+            ..SONGS[0]
+        };
+        assert_eq!(music_keys(&plain).len(), 2);
+        voices[LEAD] = voices[LEAD].with_glide(0.1);
+        let gliding = SongSpec { voices, ..plain };
+        // 0←3 and 3←0 (each is reached from the other around the loop).
+        assert_eq!(music_keys(&gliding).len(), 2);
+        assert!(music_keys(&gliding)
+            .iter()
+            .all(|k| matches!(k, MusicKey::Note { from: Some(_), .. })));
+        // A PRESET never glides: its origin stays out of the key.
+        voices[LEAD] = Voice::mono(Wave::Supersaw).with_glide(0.1);
+        let preset = SongSpec { voices, ..plain };
+        assert!(music_keys(&preset)
+            .iter()
+            .all(|k| matches!(k, MusicKey::Note { from: None, .. })));
+    }
+
+    /// Lanes loop, empty lanes read as silence / full velocity / the lane's
+    /// default voicing; a section is as long as its longest NOTE lane.
     #[test]
     fn lanes_loop_and_empty_lanes_are_silent() {
-        assert_eq!(degree_at(&[0, REST, 3], 4), None);
-        assert_eq!(degree_at(&[0, REST, 3], 5), Some(3));
-        assert_eq!(degree_at(&[], 5), None);
+        assert_eq!(note_at(&[0, REST, 3], 4), None);
+        assert_eq!(note_at(&[0, REST, 3], 5).map(|n| n.degree), Some(3));
         assert_eq!(drum_at(&[Kick, Silent], 2), Kick);
         assert_eq!(drum_at(&[], 9), Silent);
+        assert_eq!(vel_at(&[], 12), MAX_VEL);
+        assert_eq!(vel_at(&[3, 6, 8, 9], 0), 3);
+        assert_eq!(vel_at(&[3, 6, 8, 9], 7), 9);
+        assert_eq!(vel_at(&[200], 0), MAX_VEL, "clamped");
+        assert_eq!(chord_at(PAD, &[], 5), Chord::Triad);
+        assert_eq!(chord_at(LEAD, &[], 5), Chord::Single);
+        assert_eq!(
+            chord_at(LEAD, &[Chord::Power, Chord::Octave], 3),
+            Chord::Octave
+        );
+        assert_eq!(section_len(&Section::EMPTY), 1);
         let sec = Section {
             label: "t",
             bass: &[0],
-            lead: &[],
             pad: &[REST; 32],
-            arp: &[],
             drums: &[Kick],
-            vel: [1.0; NUM_CHANNELS],
-            duck: false,
+            bass_vel: &[9; 64],
+            ..Section::EMPTY
         };
-        assert_eq!(section_len(&sec), 32);
-        assert!(cell_active(&sec, 0, 31));
-        assert!(!cell_active(&sec, 2, 3));
-        assert!(cell_active(&sec, 4, 7));
-        assert!(!cell_active(&sec, 5, 0));
+        assert_eq!(section_len(&sec), 32, "velocity lanes don't count");
+        assert_eq!(cell_at(&sec, BASS, 31), GridCell::On(MAX_VEL));
+        assert_eq!(cell_at(&sec, PAD, 3), GridCell::Off);
+        assert_eq!(cell_at(&sec, DRUMS, 7), GridCell::On(MAX_VEL));
+        assert_eq!(cell_at(&sec, NUM_CHANNELS, 0), GridCell::Off);
+    }
+
+    #[test]
+    fn tracker_cells_reflect_notes_ties_and_velocity() {
+        let sec = Section {
+            lead: &[7, HOLD, REST, 9],
+            lead_vel: &[9, 9, 9, 4],
+            drums: &[Kick, Silent],
+            drums_vel: &[6],
+            ..Section::EMPTY
+        };
+        assert_eq!(cell_at(&sec, LEAD, 0), GridCell::On(9));
+        assert_eq!(cell_at(&sec, LEAD, 1), GridCell::Hold);
+        assert_eq!(cell_at(&sec, LEAD, 2), GridCell::Off);
+        assert_eq!(cell_at(&sec, LEAD, 3), GridCell::On(4));
+        assert_eq!(cell_at(&sec, BASS, 0), GridCell::Off, "empty lane");
+        assert_eq!(cell_at(&sec, DRUMS, 0), GridCell::On(6));
+        assert_eq!(cell_at(&sec, DRUMS, 1), GridCell::Off);
+        assert_eq!(cell_at(&sec, PERC, 0), GridCell::Off, "empty perc lane");
+        let orphan = Section {
+            arp: &[HOLD, HOLD],
+            ..Section::EMPTY
+        };
+        assert_eq!(cell_at(&orphan, ARP, 1), GridCell::Off);
+    }
+
+    /// A chord lane changes the bake key; voicings are spelled lowest-first
+    /// at or above the written note, and stay in key.
+    #[test]
+    fn chords_enter_the_key_and_stay_in_key() {
+        for c in [
+            Chord::Single,
+            Chord::Octave,
+            Chord::Power,
+            Chord::Triad,
+            Chord::Sus2,
+            Chord::Sus4,
+            Chord::Seventh,
+            Chord::Add9,
+            Chord::Inv1,
+            Chord::Inv2,
+            Chord::Open,
+        ] {
+            let d = c.degrees();
+            assert!(!d.is_empty());
+            assert!(d.windows(2).all(|w| w[0] < w[1]), "{c:?} not ascending");
+            assert!(d[0] >= 0, "{c:?} below the root");
+        }
+        // A Triad in A minor on the root is A C E (0, 3, 7 semitones).
+        let f: Vec<f64> = Chord::Triad
+            .degrees()
+            .iter()
+            .map(|&d| degree_freq(55.0, MINOR, d))
+            .collect();
+        assert!((f[1] / f[0] - 2f64.powf(3.0 / 12.0)).abs() < 1e-9);
+        assert!((f[2] / f[0] - 2f64.powf(7.0 / 12.0)).abs() < 1e-9);
+        const SEC: Section = Section {
+            lead: &[0, 0],
+            lead_chord: &[Chord::Single, Chord::Power],
+            ..Section::EMPTY
+        };
+        let keys = music_keys(&SongSpec {
+            sections: &[SEC],
+            ..SONGS[0]
+        });
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn the_kit_lists_every_sounding_drum_once() {
+        assert!(!Drum::KIT.contains(&Silent));
+        for (i, d) in Drum::KIT.iter().enumerate() {
+            assert!(!Drum::KIT[..i].contains(d), "{d:?} twice");
+        }
+        // A song using every piece on either lane enumerates all of them.
+        const SEC: Section = Section {
+            drums: &[Kick, Hat, Snare, Clap],
+            perc: &[OpenHat, Tom, Rim, Crash],
+            ..Section::EMPTY
+        };
+        let song = SongSpec {
+            sections: &[SEC],
+            ..SONGS[0]
+        };
+        let keys = music_keys(&song);
+        for d in Drum::KIT {
+            assert!(keys.contains(&MusicKey::Drum(d)), "{d:?}");
+        }
+        assert_eq!(cell_at(&SEC, PERC, 3), GridCell::On(MAX_VEL));
+        assert_eq!(section_len(&SEC), 4);
+        // The kick probe reads BOTH percussion lanes, with their looping.
+        assert!(is_kick_step(&SEC, 0) && is_kick_step(&SEC, 4));
+        assert!(!is_kick_step(&SEC, 1));
+        const PERC_KICK: Section = Section {
+            drums: &[Hat, Hat],
+            perc: &[Silent, Kick],
+            ..Section::EMPTY
+        };
+        assert!(is_kick_step(&PERC_KICK, 1) && !is_kick_step(&PERC_KICK, 0));
+    }
+
+    /// A baked voice is long enough for its note: attack + the tied steps +
+    /// the lane's tail; an envelope override is baked in full.
+    #[test]
+    fn bake_lengths_cover_the_note() {
+        let song = SONGS[0];
+        let sd = step_dur(&song);
+        let note = |lane, len| MusicKey::Note {
+            lane,
+            degree: 0,
+            len,
+            chord: Chord::Single,
+            from: None,
+        };
+        // A held note bakes its 7 extra steps on top of the untied length.
+        let (one, held) = (note(LEAD, 1), note(LEAD, 8));
+        assert!((key_seconds(&song, held) - key_seconds(&song, one) - 7.0 * sd).abs() < 1e-9);
+        let mut voices = song.voices;
+        voices[KEYS] = Voice::mono(Wave::Noise).with_env(2.5, 1.0);
+        let riser = SongSpec { voices, ..song };
+        assert!(key_seconds(&riser, note(KEYS, 1)) > 2.5 + sd);
+        assert_eq!(voice_shape(&riser, KEYS).0, 1.0);
+        assert_eq!(voice_shape(&riser, LEAD), lane_shape(LEAD));
+        // Every kit piece is baked at least as long as its layers.
+        for d in Drum::KIT {
+            assert!(key_seconds(&song, MusicKey::Drum(d)) >= 0.05, "{d:?}");
+        }
+    }
+
+    #[test]
+    fn info_line_helpers() {
+        assert_eq!(scale_name(MINOR), "MINOR");
+        assert_eq!(scale_name(LOCRIAN), "LOCRIAN");
+        assert_eq!(scale_name(&[0, 5]), "CUSTOM");
+        assert_eq!(note_name(55.0), "A1");
+        assert_eq!(note_name(73.42), "D2");
+        assert_eq!(note_name(440.0), "A4");
+        assert_eq!(note_name(32.70), "C1");
+        assert_eq!(note_name(0.0), "?");
+        assert_eq!(MELODIC.len(), NUM_VOICES);
+        assert_eq!(CHANNEL_NAMES[KEYS], "KEYS");
     }
 
     /// The playhead walks every section's full length, crosses into the next
@@ -784,38 +1459,5 @@ mod tests {
         assert_eq!(ph.step, 3);
         assert_eq!(ph.sounding_step(&song, 2), 1);
         assert_eq!(ph.sounding_step(&song, 4), ph.loop_len(&song) - 1);
-    }
-
-    /// The sidechain envelope is a pure, fast-recovering curve: nominal
-    /// before a kick, floored at the kick, monotonically back to nominal
-    /// within [`DUCK_RECOVERY`] — and the kick-step probe reads the drum
-    /// lane with its looping semantics.
-    #[test]
-    fn duck_curve_dips_and_recovers() {
-        assert_eq!(duck_gain(-0.001), 1.0);
-        assert_eq!(duck_gain(0.0), DUCK_FLOOR);
-        assert_eq!(duck_gain(DUCK_RECOVERY), 1.0);
-        assert_eq!(duck_gain(10.0), 1.0);
-        let mid = duck_gain(DUCK_RECOVERY / 2.0);
-        assert!((mid - (DUCK_FLOOR + (1.0 - DUCK_FLOOR) * 0.5)).abs() < 1e-12);
-        let mut last = 0.0;
-        for i in 0..=100 {
-            let g = duck_gain(DUCK_RECOVERY * i as f64 / 100.0);
-            assert!(g >= last && (DUCK_FLOOR..=1.0).contains(&g));
-            last = g;
-        }
-        let sec = Section {
-            label: "t",
-            bass: &[],
-            lead: &[],
-            pad: &[],
-            arp: &[],
-            drums: &[Kick, Silent, Hat, Snare],
-            vel: [1.0; NUM_CHANNELS],
-            duck: true,
-        };
-        assert!(is_kick_step(&sec, 0));
-        assert!(!is_kick_step(&sec, 1) && !is_kick_step(&sec, 2) && !is_kick_step(&sec, 3));
-        assert!(is_kick_step(&sec, 4), "kick probe follows lane looping");
     }
 }

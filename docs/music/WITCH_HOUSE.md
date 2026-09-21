@@ -62,6 +62,14 @@ rules of the tower no longer apply.
 - [ ] Does it feel like the *soundtrack itself* is corrupted?
 
 ## Engine reality (see `docs/MUSIC_CODE.md`)
+
+> These are the limits of the `compose` BUILDERS the briefed tracks are
+> written with — no longer of the engine: the v2 format (`const` section
+> literals — ties, per-step velocity, chord lanes, an 8-piece kit, swing,
+> stereo / detuned voices with filter envelopes, vibrato and glide, echo +
+> hall sends, a tunable side-chain) lifts most of them. See "The format
+> (v2)" in `docs/MUSIC_CODE.md`; `sodium_lights.rs` is the tour.
+
 - No detune / LFO / lowpass-closing per section: "decay" is arrangement —
   `sparsify` the cell, drop the kick, lower the velocity.
 - Detune beating is approximated by the b2 held against the root; the

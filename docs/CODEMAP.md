@@ -29,28 +29,42 @@ Moved verbatim out of `CLAUDE.md`; keep it current when files move.
   as functions called again with `Intensity` args; songs can share
   material — the ending quotes `neon_checksum::motif()`); `build()`
   produces the `SongSpec` structures the sequencer plays (`SONGS` is a
-  LazyLock in songs.rs). No JSON, no generator — `docs/MUSIC_CODE.md`
-  documents the API AND the engine's limits for composers (fixed note
-  lengths per channel, 3 drums, straight 16ths, no reverb on the music
-  bus, per-song intensity, per-section-channel velocity); genre guides
-  (each with an "Engine reality" section) + track briefs in
+  LazyLock in songs.rs). AFTER the 7 briefed tracks `SONGS` lists 11
+  TRACKER-ONLY songs (no role yet; 27–80 s loops) written as `const`
+  section literals against the full FORMAT v2 — 7 channels (`BASS LEAD PAD
+  ARP KEYS` + `DRUMS PERC`, an 8-piece kit), `HOLD` ties, per-step
+  velocity + chord lanes, a `Voice` per lane (pan, unison stack + width,
+  filter envelope, vibrato, env, drive, echo / hall sends, sub, glide,
+  `Wave::Noise`), song-level `swing` / `humanize` / `Sidechain` / `Echo` /
+  `sweep` — which the `compose` builders only cover the classic part of
+  so far. No JSON, no generator — `docs/MUSIC_CODE.md` documents the
+  format, the API AND what the builders can / cannot express; genre
+  guides (each with an "Engine reality" section) + track briefs in
   `docs/music/`. Voice presets incl. darksynth's `Wave::{Supersaw,
-  DrivenBass, DarkPad}` and a host-tested SIDECHAIN DUCK (`Section::duck`:
-  melodic bus gain dips to 0.35 on each kick, 0.3 s linear recovery;
-  drums bypass; baked buffers stay duck-free — it's bus automation). Bake
-  budget: each song's `music_keys` voice set stays ≤ 64 (test-pinned; the
-  tracks use 15–34). The audio module tree: `src/audio.rs` (root) →
-  `audio/songs.rs` (song types, `Wave`, in-key pitch math, the pure
-  `Playhead` sequencer + `music_keys`, the role pickers; host-tested),
-  `audio/compose.rs`, `audio/songs/*.rs`, `audio/sfx.rs` (SFX catalogue +
+  DrivenBass, DarkPad}` and a host-tested SIDECHAIN DUCK (`Section::duck`
+  arms the song's `Sidechain`: the melodic lanes dip by `depth` in 4 ms
+  on each kick and release exponentially — `voice::duck_level`; drums
+  bypass; baked buffers stay dry — pan, drive, sends, duck and sweep are
+  live LANE CHANNELS, re-pointed per song by `apply_voices`). Bake
+  budget: each song's `music_keys` voice set (pitch × tied length ×
+  voicing) stays ≤ 96 (test-pinned; the briefed tracks use 15–34, the v2
+  songs up to 53). The audio module tree: `src/audio.rs` (root) →
+  `audio/songs.rs` (the song FORMAT, in-key pitch math, `note_at` / ties,
+  the pure `Playhead` sequencer + `music_keys`, tracker cells, the role
+  pickers; host-tested), `audio/voice.rs` (the INSTRUMENT types: `Wave`,
+  `Chord`, `Voice`, `Sidechain`, `Echo`, the pure duck / swing curves;
+  re-exported by songs.rs), `audio/compose.rs`, `audio/songs/*.rs`,
+  `audio/sfx.rs` (SFX catalogue +
   bake specs, host-tested), `audio/engine.rs` (the WebAudio
   `AudioEngine`, wasm-only: the struct, consts, lifecycle + small helpers)
   + `audio/engine/{sfx_play,bake,voices,music,bus,sms_tables}.rs` — one
   `impl AudioEngine` block per concern (the `play_*` / `synth_*` recipes;
   the offline pre-render queue; the SFX building blocks + tone / noise
-  primitives; the tracker transport + look-ahead scheduler + note voices;
-  the persistent music / SFX buses + impulse responses; the generated SMS
-  resynthesis tables)
+  primitives incl. the music notes' held envelope / filter envelope; the
+  tracker transport + look-ahead scheduler (swing, humanize, velocity,
+  the ducker) + `apply_voices` + note voices + the live SKETCH + the kit;
+  the persistent music bus, lane channels (panner, drive, echo + hall) and
+  SFX buses + impulse responses; the generated SMS resynthesis tables)
 - Cold-open engine bits (floor 0): `src/systems/passive.rs` — passive civilians (`"type": "passive"` spawns → `AIState::Passive`, brief in `AI.passive: PassiveAI`; the AI system delegates to `passive::update_passive`; `alert_passives` / any damage flips them hostile; un-alerted passives are BYSTANDERS, not rogues: `scenario::count_rogues` / `game::count_alive_enemies` skip them, so the HUD count and `kills` ignore them and `all_dead` — which also needs at least one kill — cannot fire on an un-alerted crowd); scenario actions `alert` / `hold` / `look_at` (`scenario.rs` `AlertTarget` / `HoldDef` / `LookAtDef`; `ScenarioState::hold_active/hold_caption/look_at`; `app/game_loop.rs` `update_game` skips player input + `stop_player` while held, `render_hold_caption`, `Camera::set_cinematic`); `FloorDef.surface` (`src/level.rs` renders checker|asphalt|marble|concrete|grating); `ElevatorKind` lift|door|gate on entry/exits (`render/comms.rs` `draw_doorway` / `draw_gateway`); `"to": "surface"` → `scenario::SURFACE_EXIT` (floor id 0 is real now)
 - `src/props.rs` + `src/props/` (split BY FAMILY — `props.rs` keeps `PROP_NAMES` (which `tools/gen_props.py` parses), the families, the layer / pixel types, settings + snapping and the tests; `props/layers.rs` = `PROP_LAYERS`, joined at compile time by a `const fn` from `props/layers/{datacenter,outdoor,lobby}.rs`; `props/draw.rs` = the shared palette + primitives, the `draw_prop_ex` driver and the `draw_prop_layer` dispatcher, with the props themselves in `props/draw/{datacenter,outdoor,lobby}.rs` — a NEW prop = a name in `PROP_NAMES`, a table entry + a draw fn in its family's two files, a dispatcher arm): the PROP library, 60 props in three FAMILIES (`PROP_FAMILIES` = contiguous id ranges: DATACENTER 0–23 the server-floor set, OUTDOOR 24–41 the gate / parking lot for the planned floor 00 — cars, charge pad, main gate with its swing arm, guard booth, bollards, planter, lamp post, road decals, drone pad, scooter rack, drain, holo billboard, dumpster —, LOBBY 42–59 the welcome hall — reception desk, turnstiles, scanner arch, benches, plant, lobby holo, directory totem, vending, coffee corner, charge lockers, floor logo, call panel, velvet rope, extinguisher, credit kiosk, holo clock, welcome mat; `family_range` / `prop_family`; new props are APPENDED, ids are persisted in props/props.json) drawn imperatively from primitives as LAYERS (`PROP_LAYERS`: `LayerDef { name, pivot, bounds, rot: LayerRot::{None, Static(deg), Spin{hz}, Sway{deg,hz}, Anim(fn)}, pixel: PixelMode::{Before, After} }`; `draw_prop_layer(g, kind, layer, t)` draws one layer in its own frame; `draw_prop_ex(g, kind, center, size, t, px, &PropDrawOpts{visible, modes})` is the driver — per layer `translate(pivot)` then, with `px >= 2` (design units of the 100-box), a pixel group per layer either BEFORE its rotation (rotate, then group: the pixel image turns as a whole) or AFTER (group in the parent frame, rotate inside: re-rasterized on the parent grid); `px <= 1` = plain drawing, identical to the pre-layer look; `draw_prop` = `draw_prop_ex` with the saved settings — what `render/floor_props.rs` calls for a floor's placed props)
 - `props/props.json` = the SAVED per-prop `px` + per-layer before/after (format: `docs/PROPS_FORMAT.md`), written by the `?viz` PROPS page SAVE (`PUT /props/props.json`, serve.py, same token as levels) and compiled by `make gen-props` into `src/props_data.rs` (`PROP_SETTINGS`; GENERATED — never hand-edit); `make check-props` (in `make verify`) validates + checks it is current. `tools/gen_props.py` reads `PROP_NAMES` from props.rs for the order / kind ids (`snake_case` of the display name); layer names are checked by a props.rs unit test

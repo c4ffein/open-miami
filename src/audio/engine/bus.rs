@@ -1,12 +1,14 @@
-//! The persistent graph: music bus + sidechain duck, the SFX bus (compressor,
-//! soft-clip, convolver room) and its synthesized impulse responses / noise.
+//! The persistent graph: music bus + limiter, sidechain duck, the per-lane
+//! channels (panner, drive, echo + hall sends), the SFX bus (compressor,
+//! soft-clip, convolver room) and the synthesized impulse responses / noise.
 
 use super::*;
 
 impl AudioEngine {
     /// Build the persistent music bus: a gain node feeding a lowpass biquad
-    /// (whose cutoff we sweep per bar) into the destination. Returns
-    /// `(None, None)` if any node fails to build.
+    /// (whose cutoff we sweep per bar) into a safety soft-clip and the
+    /// destination. Returns `(None, None)` if the gain / filter fail to
+    /// build; without the clipper the filter feeds the destination.
     pub(super) fn make_music_bus(
         ctx: &AudioContext,
     ) -> (Option<GainNode>, Option<BiquadFilterNode>) {
@@ -20,19 +22,179 @@ impl AudioEngine {
         let _ = filt.q().set_value_at_time(3.0, 0.0);
         let _ = gain.gain().set_value_at_time(1.0, 0.0);
         let _ = gain.connect_with_audio_node(&filt);
+        // A safety limiter on the way out: stacked unison chords, drive and
+        // the echo / hall returns can sum well past a single voice. It is the
+        // SFX bus's static soft-clip, NOT a `DynamicsCompressorNode`: that
+        // node applies an automatic make-up gain (measured: ×1.9 with a
+        // −12 dB / 8:1 limiter — the whole soundtrack 6 dB hotter against the
+        // SFX), this curve is exactly a wire under its knee (0.7; the music
+        // peaks around 0.15) and rounds off whatever reaches it.
+        let filt_node: webaudio::AudioNode = AsRef::<webaudio::AudioNode>::as_ref(&filt).clone();
+        if let Some(clip) = Self::soft_clipper(ctx, &filt_node, 0.7) {
+            let _ = clip.connect_with_audio_node(&ctx.destination());
+            return (Some(gain), Some(filt));
+        }
         let _ = filt.connect_with_audio_node(&ctx.destination());
         (Some(gain), Some(filt))
     }
 
     /// Build the SIDECHAIN DUCK stage: one gain node feeding the music bus.
-    /// Melodic voices enter through it; `schedule_step` automates it in
-    /// ducked sections. `None` (melodics fall back to the plain bus) if the
-    /// node cannot be built or wired.
+    /// The melodic lanes (and the echo / hall returns) enter through it;
+    /// `AudioEngine::duck` automates it in ducked sections. `None` (the
+    /// lanes fall back to the plain bus) if the node cannot be built or wired.
     pub(super) fn make_duck(ctx: &AudioContext, bus: &GainNode) -> Option<GainNode> {
         let duck = ctx.create_gain().ok()?;
         let _ = duck.gain().set_value_at_time(1.0, 0.0);
         duck.connect_with_audio_node(bus).ok()?;
         Some(duck)
+    }
+
+    /// One soft-clip `WaveShaperNode` per melodic lane, each into `into`
+    /// (the ducker, or the music bus). Curves are set per song by
+    /// [`Self::apply_voices`] (`None` = bypass); all or none.
+    pub(super) fn make_lane_drives(ctx: &AudioContext, into: &GainNode) -> Vec<WaveShaperNode> {
+        let mut shapers = Vec::with_capacity(NUM_VOICES);
+        for _ in 0..NUM_VOICES {
+            let w = match ctx.create_wave_shaper() {
+                Ok(w) => w,
+                Err(_) => return Vec::new(),
+            };
+            w.set_oversample(OverSampleType::N2x);
+            if w.connect_with_audio_node(into).is_err() {
+                return Vec::new();
+            }
+            shapers.push(w);
+        }
+        shapers
+    }
+
+    /// One `StereoPannerNode` per melodic lane, each into its lane's drive
+    /// shaper (or straight into `into` — the ducker, or the music bus
+    /// itself — when the shapers couldn't be built). All or none: a
+    /// partial set would silently mis-route a lane.
+    pub(super) fn make_lane_panners(
+        ctx: &AudioContext,
+        into: &GainNode,
+        drives: &[WaveShaperNode],
+    ) -> Vec<StereoPannerNode> {
+        let mut panners = Vec::with_capacity(NUM_VOICES);
+        for lane in 0..NUM_VOICES {
+            let p = match ctx.create_stereo_panner() {
+                Ok(p) => p,
+                Err(_) => return Vec::new(),
+            };
+            let ok = match drives.get(lane) {
+                Some(d) => p.connect_with_audio_node(d).is_ok(),
+                None => p.connect_with_audio_node(into).is_ok(),
+            };
+            if !ok {
+                return Vec::new();
+            }
+            panners.push(p);
+        }
+        panners
+    }
+
+    /// The echo line and the hall, with a send gain per lane tapped after
+    /// its drive shaper (or its panner when there are none), both returning
+    /// into `into` (the ducker / bus). `None` if any node fails: dry.
+    pub(super) fn make_music_fx(
+        ctx: &AudioContext,
+        into: &GainNode,
+        panners: &[StereoPannerNode],
+        drives: &[WaveShaperNode],
+    ) -> Option<MusicFx> {
+        let taps: Vec<webaudio::AudioNode> = (0..panners.len())
+            .map(|lane| match drives.get(lane) {
+                Some(d) => AsRef::<webaudio::AudioNode>::as_ref(d).clone(),
+                None => AsRef::<webaudio::AudioNode>::as_ref(&panners[lane]).clone(),
+            })
+            .collect();
+        // Echo: sends → delay → tone → (return, feedback → delay).
+        let delay = ctx
+            .create_delay_with_max_delay_time(ECHO_MAX_SECONDS)
+            .ok()?;
+        let tone = ctx.create_biquad_filter().ok()?;
+        tone.set_type(BiquadFilterType::Lowpass);
+        let _ = tone.frequency().set_value_at_time(3200.0, 0.0);
+        let feedback = ctx.create_gain().ok()?;
+        let _ = feedback.gain().set_value_at_time(0.35, 0.0);
+        let echo_return = ctx.create_gain().ok()?;
+        let _ = echo_return.gain().set_value_at_time(0.8, 0.0);
+        delay.connect_with_audio_node(&tone).ok()?;
+        tone.connect_with_audio_node(&feedback).ok()?;
+        feedback.connect_with_audio_node(&delay).ok()?;
+        tone.connect_with_audio_node(&echo_return).ok()?;
+        echo_return.connect_with_audio_node(into).ok()?;
+        // Hall: sends → convolver → return.
+        let conv = ctx.create_convolver().ok()?;
+        conv.set_normalize(true);
+        conv.set_buffer(Some(&Self::make_impulse_hall(ctx)?));
+        let verb_return = ctx.create_gain().ok()?;
+        let _ = verb_return.gain().set_value_at_time(1.4, 0.0);
+        conv.connect_with_audio_node(&verb_return).ok()?;
+        verb_return.connect_with_audio_node(into).ok()?;
+        let mut echo_send = Vec::with_capacity(taps.len());
+        let mut verb_send = Vec::with_capacity(taps.len());
+        for tap in &taps {
+            let e = ctx.create_gain().ok()?;
+            let _ = e.gain().set_value_at_time(0.0, 0.0);
+            tap.connect_with_audio_node(&e).ok()?;
+            e.connect_with_audio_node(&delay).ok()?;
+            echo_send.push(e);
+            let r = ctx.create_gain().ok()?;
+            let _ = r.gain().set_value_at_time(0.0, 0.0);
+            tap.connect_with_audio_node(&r).ok()?;
+            r.connect_with_audio_node(&conv).ok()?;
+            verb_send.push(r);
+        }
+        Some(MusicFx {
+            echo_send,
+            delay,
+            feedback,
+            tone,
+            verb_send,
+        })
+    }
+
+    /// The music hall impulse response: `IR_HALL_SECONDS` of stereo noise
+    /// under a slow exponential decay (RT60 ≈ 2.4 s), a 14 ms pre-delay, a
+    /// smooth (non-sparse) onset and a lowpass sliding from ~5 kHz to
+    /// ~900 Hz over the tail — a big dark room, not the SFX bus's concrete
+    /// one.
+    pub(super) fn make_impulse_hall(ctx: &AudioContext) -> Option<AudioBuffer> {
+        let sr = ctx.sample_rate();
+        let len = (sr as f64 * IR_HALL_SECONDS) as u32;
+        if len == 0 {
+            return None;
+        }
+        let buf = ctx.create_buffer(2, len, sr).ok()?;
+        let predelay = (sr as f64 * 0.014) as usize;
+        let tau = 0.35f64;
+        let mut data = vec![0f32; len as usize];
+        for ch in 0..2u32 {
+            let mut state: u32 = 0x3C6E_F372 ^ (ch.wrapping_mul(0x1B87_3593) + 7);
+            let mut lp = 0f32;
+            for (i, x) in data.iter_mut().enumerate() {
+                if i < predelay {
+                    *x = 0.0;
+                    continue;
+                }
+                let t = (i - predelay) as f64 / sr as f64;
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                let white = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                // A 30 ms build-up keeps the onset from reading as a slap.
+                let env = (-t / tau).exp() * (t / 0.03).min(1.0);
+                let fc = 5000.0 * (-t / 0.8).exp() + 900.0;
+                let a = (-2.0 * std::f64::consts::PI * fc / sr as f64).exp() as f32;
+                lp = a * lp + (1.0 - a) * white;
+                *x = lp * env as f32;
+            }
+            buf.copy_to_channel(&data, ch as i32).ok()?;
+        }
+        Some(buf)
     }
 
     /// Build ~0.5s of white noise into an `AudioBuffer` we can reuse forever.

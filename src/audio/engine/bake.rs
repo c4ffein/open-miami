@@ -211,8 +211,9 @@ impl AudioEngine {
 
     /// Build the offline render of music voice slot `i`: same recipe as
     /// [`Self::render_variant`] — redirect the note builders into a fresh
-    /// mono `OfflineAudioContext` (live sample rate, [`Self::music_key_len`]
-    /// seconds), run the note's LIVE synthesis code unchanged at t = 0, then
+    /// `OfflineAudioContext` (live sample rate, [`Self::music_key_len`]
+    /// seconds, stereo for a wide voice — [`Self::music_key_channels`]), run
+    /// the note's FULL synthesis at t = 0 and nominal gain, then
     /// start the async render; its completion callback stores the
     /// `AudioBuffer` into the slot (unless the song changed meanwhile — the
     /// [`BakedMusic::gen`] guard) and decrements [`Self::renders_in_flight`].
@@ -228,7 +229,9 @@ impl AudioEngine {
         let sr = live.sample_rate();
         let frames = ((sr as f64) * self.music_key_len(key)).ceil().max(1.0) as u32;
         let off = match OfflineAudioContext::new_with_number_of_channels_and_length_and_sample_rate(
-            1, frames, sr,
+            self.music_key_channels(key),
+            frames,
+            sr,
         ) {
             Ok(o) => o,
             Err(_) => return false,
@@ -238,7 +241,7 @@ impl AudioEngine {
             ctx: AsRef::<BaseAudioContext>::as_ref(&off).clone(),
             sink,
         });
-        self.synth_music_note(key, 0.0);
+        self.synth_music_note(key, 0.0, 1.0, true);
         *self.render.borrow_mut() = None;
         let promise = match off.start_rendering() {
             Ok(p) => p,

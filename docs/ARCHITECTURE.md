@@ -198,8 +198,23 @@ how each move was proven bit-exact: [HISTORY.md](HISTORY.md)):
 
 ## What's next
 
-NOTHING IS OPEN. The list this section carried is done (the record of each
-item — what was built, how it was proven, what it found: HISTORY.md): the
+OPEN — the music engine v2 port (step 1 is in: the format, the engine, the
+eleven v2 songs as tracker-only `const` literals; record: HISTORY.md):
+
+1. `compose` v2 AUTHORING: ties (`_` in `steps`), per-step velocity and
+   chord lanes, `keys(..)` / `perc(..)` parts, the big kit in `hits`,
+   `.voices(..)` / `.swing(..)` / `.sidechain(..)` / `.echo(..)` on the
+   song builder — so a v2 song can be written as composable functions, and
+   the briefed tracks can use the instrument (`docs/MUSIC_CODE.md` lists
+   what the builders cannot express yet).
+2. A PRODUCT DECISION, not code: which songs the game PLAYS. The roles
+   still name the seven briefed tracks; the v2 songs are 27–80 s loops with
+   no role. Options: give v2 songs roles, extend them to briefed lengths,
+   or re-voice the briefed tracks with v2 instruments.
+3. The SETTINGS "MUSIC" level row (a bus gain + `om.music`), and the `?viz`
+   sound toggle (a saved SOUND OFF silences `?viz` with no hint).
+
+Done before that (HISTORY.md): the
 renderer-only pixel tests, the DRIVE mirror pin, the renderer's subsystems as
 factories, host tests for the WebAudio engine, the `update_game` split.
 

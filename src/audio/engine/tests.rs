@@ -185,6 +185,384 @@ fn every_song_bakes_every_note_voice_and_each_fits_its_length() {
     }
 }
 
+/// The song named `name` (the tracker's list).
+fn song_named(name: &str) -> SongSpec {
+    *SONGS
+        .iter()
+        .find(|s| s.name == name)
+        .unwrap_or_else(|| panic!("{name} is not in SONGS"))
+}
+
+/// The id of a persistent node in the live graph.
+fn id(node: &impl AsRef<webaudio::AudioNode>) -> usize {
+    node.as_ref().id
+}
+
+/// The per-lane channels exist and are wired in order — panner → drive →
+/// ducker → bus → lowpass → soft-clip → out, with the echo (a feedback loop)
+/// and the hall tapped after the drive and returning into the ducker; the
+/// drums' entry (the bus) is past the ducker.
+#[test]
+fn the_lane_channels_are_wired_in_order() {
+    reset_graphs();
+    let engine = AudioEngine::new();
+    let live = std::rc::Rc::clone(&graphs()[0]);
+    let g = live.borrow();
+    assert_eq!(engine.music_pan.len(), NUM_VOICES);
+    assert_eq!(engine.music_drive.len(), NUM_VOICES);
+    assert_eq!(g.count(NodeKind::Panner), NUM_VOICES);
+    assert_eq!(g.count(NodeKind::Delay), 1);
+    assert!(
+        g.count(NodeKind::Convolver) >= 3,
+        "two SFX rooms + the hall"
+    );
+    let fx = engine
+        .music_fx
+        .as_ref()
+        .expect("the echo + hall were built");
+    let (duck, bus) = (
+        id(engine.music_duck.as_ref().unwrap()),
+        id(engine.music_bus.as_ref().unwrap()),
+    );
+    let filt = id(engine.music_filter.as_ref().unwrap());
+    assert!(g.edges.contains(&(duck, bus)) && g.edges.contains(&(bus, filt)));
+    // The lowpass leaves through the safety soft-clip (a static curve: no
+    // compressor — and so no automatic make-up gain — on the music path).
+    let next = |n: usize| -> Vec<usize> {
+        let to = g.edges.iter().filter(|e| e.0 == n).map(|e| e.1);
+        to.collect()
+    };
+    let pre = next(filt);
+    assert_eq!(pre.len(), 1);
+    let clip = next(pre[0]);
+    assert_eq!(clip.len(), 1);
+    assert_eq!(g.nodes[clip[0]].kind, NodeKind::WaveShaper);
+    assert_eq!(next(clip[0]), vec![0]);
+    let music_path = [duck, bus, filt, pre[0], clip[0]];
+    assert!(music_path
+        .iter()
+        .all(|&n| g.nodes[n].kind != NodeKind::Compressor));
+    let pre_gain = g.events.iter().find(|e| e.node == pre[0]).unwrap().value;
+    let curve = AudioEngine::softclip_curve(0.7, 4096);
+    // Unity under the knee: a 0.3 input leaves as 0.3.
+    let at = |x: f32| curve[((x * pre_gain + 1.0) / 2.0 * 4095.0).round() as usize];
+    assert!((at(0.3) - 0.3).abs() < 1e-3, "{}", at(0.3));
+    assert!(!g.reaches(bus, duck), "the drums' entry is past the ducker");
+    for lane in 0..NUM_VOICES {
+        let (pan, drive) = (id(&engine.music_pan[lane]), id(&engine.music_drive[lane]));
+        assert!(
+            g.edges.contains(&(pan, drive)),
+            "lane {lane}: panner → drive"
+        );
+        assert!(
+            g.edges.contains(&(drive, duck)),
+            "lane {lane}: drive → ducker"
+        );
+        let (echo, verb) = (id(&fx.echo_send[lane]), id(&fx.verb_send[lane]));
+        assert!(g.edges.contains(&(drive, echo)) && g.edges.contains(&(drive, verb)));
+        assert!(g.edges.contains(&(echo, id(&fx.delay))));
+    }
+    // The echo repeats: delay → tone → feedback → delay; and it returns.
+    let (delay, tone, fb) = (id(&fx.delay), id(&fx.tone), id(&fx.feedback));
+    assert!(g.edges.contains(&(delay, tone)) && g.edges.contains(&(tone, fb)));
+    assert!(g.edges.contains(&(fb, delay)));
+    assert!(g.reaches(tone, duck));
+}
+
+/// A song change re-points the lane channels: pans, sends, the echo line.
+#[test]
+fn a_song_change_applies_its_voices_to_the_lanes() {
+    reset_graphs();
+    let mut engine = AudioEngine::new();
+    let song = song_named("Sodium Lights");
+    engine.set_song(song);
+    let fx = engine.music_fx.as_ref().unwrap();
+    for lane in 0..NUM_VOICES {
+        let v = song.voices[lane];
+        assert_eq!(
+            engine.music_pan[lane].pan().value(),
+            v.pan as f32,
+            "pan {lane}"
+        );
+        assert_eq!(
+            fx.echo_send[lane].gain().value(),
+            v.echo as f32,
+            "echo {lane}"
+        );
+        assert_eq!(
+            fx.verb_send[lane].gain().value(),
+            v.reverb as f32,
+            "hall {lane}"
+        );
+    }
+    assert!(
+        song.voices.iter().any(|v| v.pan != 0.0) && song.voices.iter().any(|v| v.reverb > 0.0),
+        "the test song must exercise the lanes"
+    );
+    let secs = (song.echo.steps * step_dur(&song)) as f32;
+    assert_eq!(fx.delay.delay_time().value(), secs);
+    assert_eq!(fx.feedback.gain().value(), song.echo.feedback as f32);
+    // Back to a plain built song: everything centred and dry again.
+    engine.set_song(song_named("Walk Don't Run"));
+    let fx = engine.music_fx.as_ref().unwrap();
+    for lane in 0..NUM_VOICES {
+        assert_eq!(engine.music_pan[lane].pan().value(), 0.0);
+        assert_eq!(fx.verb_send[lane].gain().value(), 0.0);
+    }
+    // The drive curve is finite, odd and monotonic, whatever the drive.
+    for drive in [0.05, 0.5, 1.0] {
+        let c = AudioEngine::drive_curve(drive, 2048);
+        assert!(c.iter().all(|v| v.is_finite()));
+        assert!(
+            c.windows(2).all(|w| w[0] <= w[1]),
+            "drive {drive}: not monotonic"
+        );
+        assert!((c[0] + c[2047]).abs() < 1e-6, "drive {drive}: not odd");
+    }
+}
+
+/// A WIDE unison voice bakes to a stereo buffer (its stack is spread inside
+/// it), everything else to mono; a tied note HOLDS its peak for the tied
+/// steps before the pluck.
+#[test]
+fn wide_voices_bake_stereo_and_ties_hold_the_peak() {
+    reset_graphs();
+    let mut engine = AudioEngine::new();
+    let song = song_named("Sodium Lights");
+    engine.set_song(song);
+    let (mut wide, mut mono, mut held) = (0, 0, 0);
+    for (i, key) in music_keys(&song).iter().enumerate() {
+        let g = offline_graph(|| {
+            engine.render_music_slot(i);
+        });
+        let g = g.borrow();
+        let is_wide = matches!(key, MusicKey::Note { lane, .. } if song.voices[*lane].is_wide());
+        assert_eq!(g.offline_channels, if is_wide { 2 } else { 1 }, "{key:?}");
+        if is_wide {
+            wide += 1;
+            assert!(g.count(NodeKind::Panner) >= 2, "{key:?}: no spread");
+        } else {
+            mono += 1;
+            assert_eq!(g.count(NodeKind::Panner), 0, "{key:?}: a mono bake pans");
+        }
+        if let MusicKey::Note { len, lane, .. } = *key {
+            if len > 1 && !song.voices[lane].wave.is_preset() {
+                held += 1;
+                let (_, _, attack) = voice_shape(&song, lane);
+                let at = attack + step_dur(&song) * f64::from(len - 1);
+                let holds = g.events.iter().any(|e| {
+                    e.param == "gain" && e.kind == EventKind::Set && (e.time - at).abs() < 1e-9
+                });
+                assert!(holds, "{key:?}: no peak hold at {at:.3} s");
+            }
+        }
+    }
+    assert!(wide > 0 && mono > 0 && held > 0, "{wide} {mono} {held}");
+}
+
+/// The bake-time level of a melodic note: a `compose`-built song makes the
+/// lane panners' centre law up (√2 — a plain centred lane is exactly as
+/// loud as before the lane graph existed), a `const`-literal song mixed
+/// with the panners in place does not.
+#[test]
+fn built_songs_make_up_the_centre_pan_law() {
+    for (name, make_up) in [
+        ("Walk Don't Run", std::f64::consts::SQRT_2),
+        ("Neon Lounge", 1.0),
+    ] {
+        reset_graphs();
+        let mut engine = AudioEngine::new();
+        let song = song_named(name);
+        assert_eq!(song.melodic_gain, make_up, "{name}");
+        engine.set_song(song);
+        let keys = music_keys(&song);
+        let i = keys
+            .iter()
+            .position(|k| {
+                matches!(
+                    k,
+                    MusicKey::Note {
+                        lane: BASS,
+                        chord: Chord::Single,
+                        ..
+                    }
+                ) && song.voices[BASS].oscillators() == 1
+                    && !song.voices[BASS].wave.is_preset()
+            })
+            .unwrap_or_else(|| panic!("{name}: no plain bass note"));
+        let g = offline_graph(|| {
+            engine.render_music_slot(i);
+        });
+        let g = g.borrow();
+        let peak = g
+            .events
+            .iter()
+            .filter(|e| e.param == "gain" && e.kind == EventKind::ExpRamp)
+            .map(|e| e.value)
+            .fold(0.0, f32::max);
+        let expect = (MUSIC_GAIN * song.intensity * lane_shape(BASS).1 * make_up) as f32;
+        assert!(
+            (peak - expect).abs() < 1e-6,
+            "{name}: peak {peak}, expected {expect}"
+        );
+    }
+}
+
+/// Nothing is baked natively, so every scheduled note takes the LIVE path —
+/// the sketch: ahead of the clock, and bounded (one plain oscillator per
+/// partial: no stack, no per-note filter, no panner) however rich the voice.
+#[test]
+fn the_live_sketch_is_bounded_and_ahead_of_the_clock() {
+    for song in SONGS.iter() {
+        reset_graphs();
+        let mut engine = AudioEngine::new();
+        engine.set_song(*song);
+        let live = std::rc::Rc::clone(&graphs()[0]);
+        live.borrow_mut().now = 7.25;
+        for key in music_keys(song) {
+            let (nodes, events) = (live.borrow().nodes.len(), live.borrow().events.len());
+            engine.music_note(key, 7.30, 0.5);
+            let g = live.borrow();
+            let built = &g.nodes[nodes..];
+            if let MusicKey::Note { chord, lane, .. } = key {
+                let partials = chord.degrees().len();
+                let oscs = built
+                    .iter()
+                    .filter(|n| n.kind == NodeKind::Oscillator)
+                    .count();
+                let noise = song.voices[lane].wave == Wave::Noise;
+                assert_eq!(
+                    oscs,
+                    if noise { 0 } else { partials },
+                    "{} {key:?}",
+                    song.name
+                );
+                assert!(
+                    built.len() <= 2 * partials,
+                    "{} {key:?}: {} nodes",
+                    song.name,
+                    built.len()
+                );
+                assert!(built.iter().all(|n| !matches!(
+                    n.kind,
+                    NodeKind::Biquad | NodeKind::Panner | NodeKind::WaveShaper
+                )));
+            }
+            for n in built {
+                if let Some((when, _)) = n.start {
+                    assert!(when >= 7.30, "{} {key:?}: starts at {when}", song.name);
+                }
+            }
+            for e in &g.events[events..] {
+                assert!(
+                    e.time >= 7.30 && e.value.is_finite(),
+                    "{} {key:?}: {e:?}",
+                    song.name
+                );
+            }
+            for i in nodes..g.nodes.len() {
+                assert!(
+                    g.reaches(i, 0),
+                    "{} {key:?}: node #{i} is orphaned",
+                    song.name
+                );
+            }
+        }
+    }
+}
+
+/// The scheduler, driven against the mock clock: every song schedules
+/// notes, never in the past (humanize included); kicks pump the ducker —
+/// down in 4 ms, an exponential release — exactly in the sections that
+/// duck, and never in a song without a ducked section.
+#[test]
+fn the_scheduler_is_ahead_of_the_clock_and_ducks_by_section() {
+    for song in SONGS.iter() {
+        reset_graphs();
+        let mut engine = AudioEngine::new();
+        engine.set_song(*song);
+        let live = std::rc::Rc::clone(&graphs()[0]);
+        let duck = id(engine.music_duck.as_ref().unwrap());
+        let (nodes, events) = (live.borrow().nodes.len(), live.borrow().events.len());
+        live.borrow_mut().now = 3.0;
+        engine.start_music();
+        let total: usize = song.sections.iter().map(section_len).sum();
+        let (mut now, mut kicks) = (3.0, 0);
+        // One play-through, a frame (16 ms) at a time.
+        let frames = (total as f64 * step_dur(song) / 0.016) as usize + 16;
+        let mut ph = engine.playhead;
+        for _ in 0..frames {
+            engine.update(0.0);
+            while ph != engine.playhead {
+                let sec = &song.sections[ph.section];
+                kicks += usize::from(sec.duck && is_kick_step(sec, ph.step));
+                ph.advance(song);
+            }
+            now += 0.016;
+            live.borrow_mut().now = now;
+        }
+        let g = live.borrow();
+        let started: Vec<f64> = g.nodes[nodes..]
+            .iter()
+            .filter_map(|n| n.start.map(|s| s.0))
+            .collect();
+        assert!(
+            started.len() > 50,
+            "{}: {} sources in a play-through",
+            song.name,
+            started.len()
+        );
+        assert!(
+            started.iter().all(|&t| t >= 3.0),
+            "{}: a source in the past",
+            song.name
+        );
+        let mut targets = 0;
+        for e in &g.events[events..] {
+            let is_static = e.kind == EventKind::Set && e.time == 0.0;
+            assert!(
+                is_static || e.time >= 3.0,
+                "{}: {e:?} in the past",
+                song.name
+            );
+            assert!(e.value.is_finite(), "{}: {e:?}", song.name);
+            if e.node == duck {
+                let depth = song.sidechain.depth as f32;
+                match e.kind {
+                    EventKind::Target => {
+                        targets += 1;
+                        assert_eq!(e.value, 1.0);
+                    }
+                    EventKind::LinearRamp => assert!((e.value - (1.0 - depth)).abs() < 1e-6),
+                    EventKind::Set => assert!((1.0 - depth - 1e-6..=1.0).contains(&e.value)),
+                    _ => panic!("{}: {e:?} on the ducker", song.name),
+                }
+            }
+        }
+        let expect = if song.sidechain.active() { kicks } else { 0 };
+        assert_eq!(
+            targets, expect,
+            "{}: ducks vs kicks in ducked sections",
+            song.name
+        );
+    }
+    assert!(!song_named("Walk Don't Run").sections.iter().any(|s| s.duck));
+    // Humanize moves a note both ways, but never into the clock's past.
+    reset_graphs();
+    let mut engine = AudioEngine::new();
+    let loose = *SONGS
+        .iter()
+        .find(|s| s.humanize > 0.0)
+        .expect("a humanized song");
+    engine.set_song(loose);
+    graphs()[0].borrow_mut().now = 5.0;
+    let at: Vec<f64> = (0..200).map(|_| engine.humanized(5.001)).collect();
+    assert!(at
+        .iter()
+        .all(|&t| t >= 5.0 && t <= 5.001 + loose.humanize + 1e-12));
+    assert!(at.iter().any(|&t| t > 5.001) && at.iter().any(|&t| t < 5.001));
+}
+
 /// Live one-shots (nothing is baked natively) are scheduled AHEAD of the audio
 /// clock — never in the past — and build the same kind of graph as the bake.
 #[test]
@@ -238,6 +616,11 @@ fn the_engine_is_deterministic() {
         engine.play_attack_shotgun();
         engine.play_hit_gun();
         engine.render_variant(SfxKind::EnemyDown);
+        let mut engine = engine;
+        engine.set_song(song_named("Blood Engine"));
+        engine.render_music_slot(0);
+        engine.start_music();
+        engine.update(0.0);
         graphs()
             .iter()
             .map(|g| {

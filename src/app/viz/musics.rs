@@ -1,6 +1,7 @@
 //! The MUSICS tab: TRACKER (songs + the live step-sequencer) and SOUNDS.
 
 use super::*;
+use crate::audio::GridCell;
 
 impl GameState {
     /// MUSICS tab: two sub-pages — the TRACKER (songs + the live
@@ -34,9 +35,10 @@ impl GameState {
     /// the live audio engine. A SECTIONS strip of clickable miniatures (one
     /// per arrangement section, shaded by note density, current section
     /// highlighted) sits above the PATTERN grid of the currently-playing
-    /// section (five channels; filled cells are notes; playhead column;
-    /// click a column to seek; M/S mute/solo per row). Song-select buttons
-    /// above.
+    /// section (seven channels; filled cells are notes shaded by velocity,
+    /// half-height bars are ties; playhead column; click a column to seek;
+    /// M/S mute/solo per row). Song-select buttons + the song's settings
+    /// line above, the lanes' instrument summaries below.
     pub(crate) fn draw_viz_tracker(&mut self, graphics: &Graphics, mouse: Vec2, click: bool) {
         let coral = Color::from_rgba(217, 119, 87, 255);
         graphics.draw_text(
@@ -50,23 +52,42 @@ impl GameState {
         graphics.draw_text("SONGS", Vec2::new(40.0, 162.0), 16.0, coral);
         let cur_name = self.audio.current_song().name;
         let songs = &*crate::audio::SONGS;
+        // As many song buttons a row as the window fits (the list is long).
+        let cols = (((graphics.width() - 80.0) / 168.0) as usize).clamp(4, 9);
         for (i, song) in songs.iter().enumerate() {
-            let x = 40.0 + (i % 4) as f32 * 168.0;
-            let y = 172.0 + (i / 4) as f32 * 46.0;
+            let x = 40.0 + (i % cols) as f32 * 168.0;
+            let y = 172.0 + (i / cols) as f32 * 40.0;
             let active = song.name == cur_name && self.audio.is_playing();
-            if viz_button(graphics, mouse, x, y, 158.0, 40.0, song.name, active) && click {
+            if viz_button(graphics, mouse, x, y, 158.0, 34.0, song.name, active) && click {
                 self.audio.resume();
                 self.audio.play_song(i);
             }
         }
-        let song_rows = songs.len().div_ceil(4) as f32;
-        let mut y = 172.0 + song_rows * 46.0 + 4.0;
-        if viz_button(graphics, mouse, 40.0, y, 158.0, 40.0, "STOP", false) && click {
+        let song_rows = songs.len().div_ceil(cols) as f32;
+        let mut y = 172.0 + song_rows * 40.0 + 4.0;
+        if viz_button(graphics, mouse, 40.0, y, 158.0, 34.0, "STOP", false) && click {
             self.audio.stop_music();
+        }
+        // The song's global settings, next to STOP.
+        {
+            let song = self.audio.current_song();
+            let info = format!(
+                "{} · {} {} · {:.0} BPM · SWING {:.0}% · DUCK {:.0}% · ECHO {:.1} STEPS · SWEEP {:.0}% · HUMAN {:.0} MS",
+                song.name,
+                crate::audio::note_name(song.root),
+                crate::audio::scale_name(song.scale),
+                song.bpm,
+                song.swing * 100.0,
+                song.sidechain.depth * 100.0,
+                song.echo.steps,
+                song.sweep * 100.0,
+                song.humanize * 1000.0,
+            );
+            graphics.draw_text(&info, Vec2::new(216.0, y + 23.0), 16.0, Color::GRAY);
         }
 
         // --- section miniatures (the arrangement mini-map) ---------------
-        y += 54.0;
+        y += 50.0;
         graphics.draw_text("SECTIONS", Vec2::new(40.0, y), 16.0, coral);
         let strip_top = y + 8.0;
         let n_sections = self.audio.section_count().max(1);
@@ -98,21 +119,31 @@ impl GameState {
             let rh_m = (mh - 6.0) / crate::audio::NUM_CHANNELS as f32;
             for r in 0..crate::audio::NUM_CHANNELS {
                 for s in 0..s_len {
-                    if self.audio.section_cell(sec, r, s) {
-                        graphics.draw_rectangle(
-                            Vec2::new(
-                                mx + 3.0 + s as f32 * cw_m,
-                                strip_top + 3.0 + r as f32 * rh_m,
-                            ),
-                            cw_m.max(1.0),
-                            rh_m.max(1.0),
-                            if is_cur {
-                                Color::new(1.0, 0.75, 0.6, 0.95)
-                            } else {
-                                Color::new(0.62, 0.5, 0.72, 0.9)
-                            },
-                        );
-                    }
+                    // Ties draw as a thinner continuation of the note.
+                    let tie = match self.audio.section_cell(sec, r, s) {
+                        GridCell::Off => continue,
+                        GridCell::On(_) => false,
+                        GridCell::Hold => true,
+                    };
+                    let h = if tie {
+                        (rh_m * 0.5).max(1.0)
+                    } else {
+                        rh_m.max(1.0)
+                    };
+                    let c = if is_cur {
+                        Color::new(1.0, 0.75, 0.6, if tie { 0.6 } else { 0.95 })
+                    } else {
+                        Color::new(0.62, 0.5, 0.72, if tie { 0.55 } else { 0.9 })
+                    };
+                    graphics.draw_rectangle(
+                        Vec2::new(
+                            mx + 3.0 + s as f32 * cw_m,
+                            strip_top + 3.0 + r as f32 * rh_m + (rh_m.max(1.0) - h) * 0.5,
+                        ),
+                        cw_m.max(1.0),
+                        h,
+                        c,
+                    );
                 }
             }
             let border = if is_cur {
@@ -154,9 +185,11 @@ impl GameState {
             Color::from_rgba(80, 200, 240, 255), // lead
             Color::from_rgba(150, 90, 210, 255), // pad
             Color::from_rgba(224, 80, 170, 255), // arp
+            Color::from_rgba(90, 220, 160, 255), // keys
             Color::from_rgba(230, 200, 60, 255), // drums
+            Color::from_rgba(240, 150, 50, 255), // perc
         ];
-        let rh = 26.0f32;
+        let rh = 22.0f32;
         let cw = gw / steps as f32;
 
         // Playhead column highlight (drawn behind the cells).
@@ -206,13 +239,27 @@ impl GameState {
                     Color::new(0.10, 0.09, 0.13, 1.0)
                 };
                 graphics.draw_rectangle(Vec2::new(cx + 1.0, ry + 2.0), cw - 2.0, rh - 4.0, bg);
-                if self.audio.channel_active(r, s) {
-                    let c = if muted {
-                        Color::new(col.r * 0.4, col.g * 0.4, col.b * 0.4, 1.0)
-                    } else {
-                        col
-                    };
-                    let inset = if playing && s == cur_step { 2.0 } else { 4.0 };
+                // A note fills the cell (brightness = velocity); a tie
+                // continues it as a half-height bar joined to the note.
+                let (vel, tie) = match self.audio.channel_cell(r, s) {
+                    GridCell::Off => continue,
+                    GridCell::On(v) => (v, false),
+                    GridCell::Hold => (crate::audio::MAX_VEL, true),
+                };
+                let dim = if muted { 0.4 } else { 1.0 };
+                let lum = dim * (0.45 + 0.55 * vel as f32 / crate::audio::MAX_VEL as f32);
+                let c = Color::new(col.r * lum, col.g * lum, col.b * lum, 1.0);
+                let inset = if playing && s == cur_step { 2.0 } else { 4.0 };
+                if tie {
+                    // From the previous cell's note edge to this cell's.
+                    let h = (rh - inset * 2.0) * 0.5;
+                    graphics.draw_rectangle(
+                        Vec2::new(cx - inset, ry + inset + h * 0.5),
+                        cw.max(2.0),
+                        h,
+                        c,
+                    );
+                } else {
                     graphics.draw_rectangle(
                         Vec2::new(cx + inset, ry + inset),
                         (cw - inset * 2.0).max(2.0),
@@ -240,6 +287,18 @@ impl GameState {
         {
             let s = ((mouse.x - gx) / cw) as usize;
             self.audio.seek(s.min(steps - 1));
+        }
+
+        // --- the song's instruments, one line per melodic lane ------------
+        let sy = grid_bottom + 20.0;
+        graphics.draw_text("VOICES", Vec2::new(40.0, sy), 16.0, coral);
+        let song = self.audio.current_song();
+        for (i, &lane) in crate::audio::MELODIC.iter().enumerate() {
+            let ly = sy + 16.0 + i as f32 * 16.0;
+            let col = chan_col[lane.min(chan_col.len() - 1)];
+            graphics.draw_text(names[lane], Vec2::new(40.0, ly), 14.0, col);
+            let summary = crate::audio::voice_summary(&song.voices[lane]);
+            graphics.draw_text(&summary, Vec2::new(118.0, ly), 14.0, Color::GRAY);
         }
     }
 

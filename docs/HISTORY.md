@@ -286,3 +286,50 @@ fingerprint (`tests/ai_fingerprint.rs`).
   which says "too slow", instead of as pixel failures, which said "broken".
   Also from that day: a new one-shot, the DRY-FIRE click (`SfxKind::DryFire`,
   `GameEvent::DryFire` had been emitted silently since the ammo rework).
+- **The music engine v2 (2026-09): ported from a PR that could not merge.**
+  A parallel session had grown the PRE-SPLIT `src/audio.rs` (4,785 lines,
+  wasm-only, untested) into a much richer instrument — ties, velocity and
+  chord lanes, a KEYS and a second percussion lane, an 8-piece kit, stereo
+  `Voice`s (unison stacks, per-note filter envelopes, vibrato, drive, sub,
+  glide, noise), a tempo-synced echo and a hall, a tunable side-chain, swing
+  and humanize — plus eleven songs written for it, on a base 30 commits
+  behind (PR #31 of the work fork: conflicts in every file it touched, a
+  song format competing with `compose.rs`). The music was audibly better, so
+  the IDEAS were ported into this architecture instead: the format as a
+  superset of `songs.rs` (`audio/voice.rs` = the instrument types), the
+  engine behind the `webaudio` seam with graph tests (mutation-tested
+  10 / 10), the eleven songs as `const`-literal files, the seven briefed
+  tracks and `compose` kept. PROVEN IN THE BROWSER by recording every
+  `OfflineAudioContext` graph (node kinds, connections, every automation
+  call) of a song's bakes in both builds: Sodium Lights 49 / 51 and Blood
+  Engine 46 / 53 bake recipes IDENTICAL to the PR's, the rest differing
+  only where intended (drum tones keep main's envelope, 5 ms shorter; a
+  filter envelope that outlives its note is CUT at the note's end at the
+  cutoff it has reached — same curve, nothing scheduled past the bake);
+  the lanes' live statics identical. For main's own tracks against the
+  unmodified engine: every melodic bake the SAME GRAPH with peaks × √2 (see
+  below), raw-wave decays ending 5 ms later (the attack now adds to the
+  note), drums identical; measured output level identical (Service
+  Corridor mean RMS 0.0123 → 0.0122, Coast Home 0.0029 → 0.0028).
+  Three FINDINGS on the way, all fixed in the port:
+  - the PR's music "limiter" was a `DynamicsCompressorNode` (−12 dB, 8:1).
+    Its comment said "well under threshold it is a wire"; it is not — the
+    node applies an automatic MAKE-UP gain, measured ×1.9 (the same song:
+    mean RMS 0.0240 in the PR build, 0.0126 through a transparent bus).
+    Everything the PR played was ~6 dB hotter against the SFX, which is part
+    of why it sounded better. The port uses the SFX bus's static soft-clip
+    (exactly unity under its knee); the level is one constant, `MUSIC_GAIN`;
+  - an equal-power `StereoPannerNode` puts a CENTRED mono lane 3 dB down,
+    and the drums do not go through one: the PR silently changed every
+    existing song's melody / drum balance. `SongSpec::melodic_gain` makes it
+    explicit (√2 from the `compose` builder, 1.0 for the songs mixed with
+    the panners in place);
+  - the bake-key enumeration walked each lane's own length, but the
+    scheduler reads the chord lane at the SECTION's step: a lane looping
+    under a chord lane of another length asked for keys that were never
+    baked (they would have played as the live sketch forever). Enumerated
+    over the section now (`looping_lanes_meet_every_chord_lane_step`).
+  Also found while serving the PR for a listen: a saved SOUND OFF
+  (`om.sound`) silences `?viz` → MUSICS with no hint at all — it cost an
+  hour of "the music does not work" (open-work list).
+

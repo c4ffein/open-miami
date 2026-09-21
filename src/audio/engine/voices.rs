@@ -1,5 +1,6 @@
 //! SFX building blocks (ricochet, shot, pump, wham, click, …) and the voice /
-//! tone / noise primitives every sound is made of.
+//! tone / noise primitives every sound is made of (incl. the music notes'
+//! held envelope, filter envelope and stack panner).
 
 use super::*;
 
@@ -813,6 +814,176 @@ impl AudioEngine {
         let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
         let _ = sched.start_with_when(start);
         let _ = sched.stop_with_when(start + dur + 0.02);
+    }
+
+    /// The general enveloped oscillator of a MUSIC note: rises to `peak`
+    /// over `attack`, SUSTAINS there for `hold` seconds (the tied steps),
+    /// then decays (exponentially) to near-silence over `dur`. A pitch glide
+    /// `f0 → f1` takes `glide` seconds (the whole note when 0); a
+    /// [`Vibrato`] adds an LFO on the pitch, fading in after its delay.
+    pub(super) fn tone_env(&self, out: &webaudio::AudioNode, tone: &Tone) {
+        let ctx = match self.bctx() {
+            Some(c) => c,
+            None => return,
+        };
+        let (osc, gain) = match (ctx.create_oscillator(), ctx.create_gain()) {
+            (Ok(o), Ok(g)) => (o, g),
+            _ => return,
+        };
+        let Tone {
+            f0,
+            f1,
+            glide,
+            start,
+            attack,
+            hold,
+            dur,
+            peak,
+            wave,
+            vibrato,
+        } = *tone;
+        // Attack, then the hold, then the decay: the whole note.
+        let attack = attack.max(0.0);
+        let total = attack + hold + dur;
+        osc.set_type(wave);
+        let freq = osc.frequency();
+        let _ = freq.set_value_at_time(f0 as f32, start);
+        if (f1 - f0).abs() > 0.01 {
+            let span = if glide > 0.0 { glide.min(total) } else { total };
+            let _ = freq.exponential_ramp_to_value_at_time(f1.max(1.0) as f32, start + span);
+        }
+        let g = gain.gain();
+        let peak = peak.max(0.0002) as f32;
+        let _ = g.set_value_at_time(0.0001, start);
+        let _ = g.exponential_ramp_to_value_at_time(peak, start + attack);
+        if hold > 0.0 {
+            let _ = g.set_value_at_time(peak, start + attack + hold);
+        }
+        let _ = g.exponential_ramp_to_value_at_time(0.0001, start + total);
+        let _ = osc.connect_with_audio_node(&gain);
+        let _ = gain.connect_with_audio_node(out);
+        let sched: &webaudio::AudioScheduledSourceNode = osc.as_ref();
+        let _ = sched.start_with_when(start);
+        let _ = sched.stop_with_when(start + total + 0.02);
+        if let Some(v) = vibrato.filter(|v| v.depth > 0.0 && v.rate > 0.0) {
+            // LFO → depth gain → the oscillator's frequency param. Depth in
+            // cents converts to Hz around the note's pitch.
+            if let (Ok(lfo), Ok(amount)) = (ctx.create_oscillator(), ctx.create_gain()) {
+                lfo.set_type(OscillatorType::Sine);
+                let _ = lfo.frequency().set_value_at_time(v.rate as f32, start);
+                let hz = f1 * (2f64.powf(v.depth / 1200.0) - 1.0);
+                let a = amount.gain();
+                let _ = a.set_value_at_time(0.0, start);
+                // The fade-in is cut at the note's end (at the level it has
+                // reached there), so nothing is scheduled past the bake.
+                let delay = v.delay.max(0.001);
+                let reach = delay.min(total);
+                let _ = a.linear_ramp_to_value_at_time((hz * reach / delay) as f32, start + reach);
+                let _ = lfo.connect_with_audio_node(&amount);
+                let _ = amount.connect_with_audio_param(&freq);
+                let ls: &webaudio::AudioScheduledSourceNode = lfo.as_ref();
+                let _ = ls.start_with_when(start);
+                let _ = ls.stop_with_when(start + total + 0.02);
+            }
+        }
+    }
+
+    /// A noise "note" ([`Wave::Noise`]): the shared noise buffer under the
+    /// same attack / hold / decay envelope a tone gets, into `out`.
+    pub(super) fn noise_env_out(
+        &self,
+        out: &webaudio::AudioNode,
+        start: f64,
+        attack: f64,
+        hold: f64,
+        dur: f64,
+        peak: f64,
+    ) {
+        let (ctx, buf) = match (self.bctx(), &self.noise) {
+            (Some(c), Some(b)) => (c, b),
+            _ => return,
+        };
+        let (src, gain) = match (ctx.create_buffer_source(), ctx.create_gain()) {
+            (Ok(s), Ok(g)) => (s, g),
+            _ => return,
+        };
+        src.set_buffer(Some(buf));
+        src.set_loop(true);
+        // Attack, then the hold, then the decay: the whole note.
+        let attack = attack.max(0.001);
+        let total = attack + hold + dur;
+        let g = gain.gain();
+        let peak = peak.max(0.0002) as f32;
+        let _ = g.set_value_at_time(0.0001, start);
+        let _ = g.exponential_ramp_to_value_at_time(peak, start + attack);
+        if hold > 0.0 {
+            let _ = g.set_value_at_time(peak, start + attack + hold);
+        }
+        let _ = g.exponential_ramp_to_value_at_time(0.0001, start + total);
+        let _ = src.connect_with_audio_node(&gain);
+        let _ = gain.connect_with_audio_node(out);
+        let sched: &webaudio::AudioScheduledSourceNode = src.as_ref();
+        let offset = self.rand() * (NOISE_SECONDS - 0.05);
+        let _ = src.start_with_when_and_grain_offset(start, offset);
+        let _ = sched.stop_with_when(start + total + 0.02);
+    }
+
+    /// A per-note lowpass with its [`Filter`] envelope automated from
+    /// `start`, connected into `out`; `None` when it can't be built (the
+    /// note then plays unfiltered). The envelope is CUT at `end` (the
+    /// note's own end) at the cutoff it has reached there — same curve, but
+    /// nothing is scheduled past the bake's length.
+    pub(super) fn note_filter(
+        &self,
+        out: &webaudio::AudioNode,
+        start: f64,
+        end: f64,
+        flt: &Filter,
+    ) -> Option<webaudio::AudioNode> {
+        let ctx = self.bctx()?;
+        let node = ctx.create_biquad_filter().ok()?;
+        node.set_type(BiquadFilterType::Lowpass);
+        let _ = node
+            .q()
+            .set_value_at_time(flt.q.clamp(0.1, 30.0) as f32, start);
+        let lo = flt.cutoff.clamp(20.0, 18000.0);
+        let hi = flt.peak.clamp(20.0, 18000.0).max(lo);
+        // An exponential ramp `a → b` over `span`, cut at `end`.
+        let ramp = |a: f64, b: f64, from: f64, span: f64| -> (f64, f64) {
+            let reach = span.min((end - from).max(0.001));
+            (a * (b / a).powf(reach / span), from + reach)
+        };
+        let f = node.frequency();
+        let opened = if flt.attack > 0.0 {
+            let _ = f.set_value_at_time(lo as f32, start);
+            let (v, at) = ramp(lo, hi, start, flt.attack);
+            let _ = f.exponential_ramp_to_value_at_time(v as f32, at);
+            (at - start >= flt.attack).then_some(at)
+        } else {
+            let _ = f.set_value_at_time(hi as f32, start);
+            Some(start)
+        };
+        if let Some(opened) = opened.filter(|&at| flt.decay > 0.0 && at < end) {
+            let (v, at) = ramp(hi, lo, opened, flt.decay);
+            let _ = f.exponential_ramp_to_value_at_time(v as f32, at);
+        }
+        node.connect_with_audio_node(out).ok()?;
+        Some(AsRef::<webaudio::AudioNode>::as_ref(&node).clone())
+    }
+
+    /// A throwaway `StereoPannerNode` at `pan` into `out` (one oscillator
+    /// of a wide unison stack); `None` when it can't be built — the caller
+    /// then plays that oscillator straight into `out`.
+    pub(super) fn side_panner(
+        &self,
+        out: &webaudio::AudioNode,
+        pan: f64,
+    ) -> Option<webaudio::AudioNode> {
+        let ctx = self.bctx()?;
+        let p = ctx.create_stereo_panner().ok()?;
+        let _ = p.pan().set_value_at_time(pan.clamp(-1.0, 1.0) as f32, 0.0);
+        p.connect_with_audio_node(out).ok()?;
+        Some(AsRef::<webaudio::AudioNode>::as_ref(&p).clone())
     }
 
     /// SFX noise burst — into the SFX bus.
