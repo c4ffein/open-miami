@@ -971,6 +971,49 @@ impl AudioEngine {
         Some(AsRef::<webaudio::AudioNode>::as_ref(&node).clone())
     }
 
+    /// The WOBBLE ([`Wobble`]) of one node-built partial: a resonant
+    /// lowpass into `out` whose cutoff an LFO swings around the midpoint of
+    /// `cutoff`..`peak` once per `steps` steps (a sine from the midpoint,
+    /// opening first, like the computed voices' — linear in Hz here, the
+    /// biquad's frequency param being what the LFO adds to). `None` when
+    /// it can't be built: the partial plays unwobbled.
+    pub(super) fn wobble_filter(
+        &self,
+        out: &webaudio::AudioNode,
+        start: f64,
+        end: f64,
+        w: &Wobble,
+        step_dur: f64,
+    ) -> Option<webaudio::AudioNode> {
+        let ctx = self.bctx()?;
+        let node = ctx.create_biquad_filter().ok()?;
+        node.set_type(BiquadFilterType::Lowpass);
+        let lo = w.cutoff.clamp(20.0, 18000.0);
+        let hi = w.peak.clamp(20.0, 18000.0).max(lo);
+        let _ = node
+            .q()
+            .set_value_at_time(w.q.clamp(0.1, 30.0) as f32, start);
+        let _ = node
+            .frequency()
+            .set_value_at_time(((lo + hi) * 0.5) as f32, start);
+        let (lfo, depth) = (ctx.create_oscillator().ok()?, ctx.create_gain().ok()?);
+        lfo.set_type(OscillatorType::Sine);
+        let period = (w.steps * step_dur).max(0.01);
+        let _ = lfo
+            .frequency()
+            .set_value_at_time((1.0 / period) as f32, start);
+        let _ = depth
+            .gain()
+            .set_value_at_time(((hi - lo) * 0.5) as f32, start);
+        lfo.connect_with_audio_node(&depth).ok()?;
+        depth.connect_with_audio_param(&node.frequency()).ok()?;
+        let ls: &webaudio::AudioScheduledSourceNode = lfo.as_ref();
+        let _ = ls.start_with_when(start);
+        let _ = ls.stop_with_when(end + 0.02);
+        node.connect_with_audio_node(out).ok()?;
+        Some(AsRef::<webaudio::AudioNode>::as_ref(&node).clone())
+    }
+
     /// A throwaway `StereoPannerNode` at `pan` into `out` (one oscillator
     /// of a wide unison stack); `None` when it can't be built — the caller
     /// then plays that oscillator straight into `out`.

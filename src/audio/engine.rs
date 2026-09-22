@@ -99,6 +99,10 @@ const IR_HALL_SECONDS: f64 = 2.6;
 /// clamped to at any tempo.
 const ECHO_MAX_SECONDS: f64 = 2.0;
 
+/// The lanes' live lowpass at rest (Hz): open — a wire — until a section
+/// `Ramp::cutoff` moves it.
+const LANE_LP_OPEN_HZ: f32 = 20_000.0;
+
 /// Overall gain of a resynthesised (SMS) metal hit: the model's loudest
 /// track (a 1.0 sine partial) lands at this peak; the sub noise band, whose
 /// RMS is normalised to its curve, peaks ~3× higher and is what the voice's
@@ -216,10 +220,10 @@ struct BakedMusic {
 /// ([`AudioEngine::apply_voices`]).
 ///
 /// ```text
-///  note ─► lane panner ─► drive ─┬────────────────────────────► ducker ─► bus ─► lowpass ─► soft-clip ─► out
-///                                ├─ echo send ─► delay ─► tone ─► return ──┤
-///                                │                 ▲           └─ feedback ─┘
-///                                └─ verb send ─► convolver (hall) ─► return ─┘
+///  note ─► panner ─► drive ─► lowpass ─► level ─┬──────────────────────► ducker ─► bus ─► lowpass ─► soft-clip ─► out
+///                                              ├─ echo send ─► delay ─► tone ─► return ──┤
+///                                              │                 ▲           └─ feedback ─┘
+///                                              └─ verb send ─► convolver (hall) ─► return ─┘
 ///  drum ──────────────────────────────────────────────────────────────────► bus
 /// ```
 struct MusicFx {
@@ -348,6 +352,12 @@ pub struct AudioEngine {
     /// One drive `WaveShaperNode` per melodic lane, after its panner (`None`
     /// curve = bypass). Empty if they could not be built.
     music_drive: Vec<WaveShaperNode>,
+    /// One live lowpass per melodic lane, after its drive: open (20 kHz)
+    /// unless a section `Ramp::cutoff` moves it. Empty if not built.
+    music_lp: Vec<BiquadFilterNode>,
+    /// One live level gain per melodic lane, after its lowpass — what the
+    /// echo / hall sends tap and `Ramp::level` moves. Empty if not built.
+    music_level_node: Vec<GainNode>,
     /// The echo line + the hall and their per-lane sends ([`MusicFx`]).
     music_fx: Option<MusicFx>,
     /// Lowpass filter on the music bus, cutoff swept once per bar (synthwave).
@@ -407,12 +417,28 @@ impl AudioEngine {
         let music_drive = lanes
             .map(|(c, into)| Self::make_lane_drives(c, into))
             .unwrap_or_default();
+        let (music_lp, music_level_node) = lanes
+            .map(|(c, into)| Self::make_lane_tails(c, into, &music_drive))
+            .unwrap_or_default();
         let music_pan = lanes
             .map(|(c, into)| Self::make_lane_panners(c, into, &music_drive))
             .unwrap_or_default();
+        // The sends tap the END of each lane's chain: level, lowpass, drive
+        // or the panner — whichever is the last node that got built.
+        let taps: Vec<webaudio::AudioNode> = (0..music_pan.len())
+            .map(|lane| {
+                if let Some(g) = music_level_node.get(lane) {
+                    AsRef::<webaudio::AudioNode>::as_ref(g).clone()
+                } else if let Some(d) = music_drive.get(lane) {
+                    AsRef::<webaudio::AudioNode>::as_ref(d).clone()
+                } else {
+                    AsRef::<webaudio::AudioNode>::as_ref(&music_pan[lane]).clone()
+                }
+            })
+            .collect();
         let music_fx = lanes
             .filter(|_| !music_pan.is_empty())
-            .and_then(|(c, into)| Self::make_music_fx(c, into, &music_pan, &music_drive));
+            .and_then(|(c, into)| Self::make_music_fx(c, into, &taps));
         let engine = Self {
             ctx,
             noise,
@@ -425,6 +451,8 @@ impl AudioEngine {
             last_duck: Cell::new(f64::NEG_INFINITY),
             music_pan,
             music_drive,
+            music_lp,
+            music_level_node,
             music_fx,
             music_filter,
             music_playing: false,
@@ -657,8 +685,9 @@ fn osc(wave: Wave) -> OscillatorType {
         | Wave::DrivenBass
         | Wave::DarkPad
         | Wave::Noise
-        | Wave::Violin => OscillatorType::Sawtooth,
-        Wave::Triangle | Wave::Guitar | Wave::BassGuitar => OscillatorType::Triangle,
+        | Wave::Violin
+        | Wave::Reese => OscillatorType::Sawtooth,
+        Wave::Triangle | Wave::Guitar | Wave::BassGuitar | Wave::Fm => OscillatorType::Triangle,
     }
 }
 

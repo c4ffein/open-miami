@@ -372,4 +372,22 @@ fingerprint (`tests/ai_fingerprint.rs`).
   `melodic_gain` 1.0 (brushed kit, spiky plucks): lifted to 1.3 and
   intensity 0.9. Long tasks on a page load that bakes it: 5 / 533 ms
   against 4 / 462 ms for a node-baked song (headless Chromium).
+- **Modifiers + the wobble (2026-09).** `Voice::bend` (a pitch bend into
+  every note), `Voice::wobble` (a tempo-synced resonant lowpass LFO,
+  baked per note), `Wave::Reese` / `Wave::Fm` (computed), and section
+  `Ramp`s: every lane's live chain grew a lowpass and a level node (pan →
+  drive → lowpass → level → ducker, the sends tapped at the end) that
+  `schedule_section` automates from `from` to `to` across a section and
+  resets otherwise — slow movement without a bake. `static_teeth.rs` (the
+  dubstep demo) uses all of it: measured mean RMS 0.03–0.05 through the
+  drop (Sodium Lights' chorus: 0.025), 5 long tasks / 558 ms on a page
+  load that bakes it (Salt Road: 5 / 533). Mutation-tested 6 / 6 after
+  three MISSES worth recording: the ramp test only checked that ramps
+  happened, not WHEN (a scheduler ramping one step late passed — it now
+  pins each section's first step); it only read the FIRST ramped section
+  (a level ramp wired to the echo send passed — it now walks every
+  section and every ramp kind the song uses); and the wobble test never
+  looked at the LFO's depth (a wobble of depth 0 passed). The format
+  change (three new fields) re-pinned the Sodium Lights fingerprint — same
+  notes.
 

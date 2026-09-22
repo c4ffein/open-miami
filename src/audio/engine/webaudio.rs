@@ -231,6 +231,12 @@ mod mock {
             self.g.borrow_mut().edges.push((self.id, to.id));
             Ok(to.clone())
         }
+        /// `disconnect()`: every outgoing connection of this node is dropped.
+        pub fn disconnect(&self) -> Result<(), JsValue> {
+            let id = self.id;
+            self.g.borrow_mut().edges.retain(|e| e.0 != id);
+            Ok(())
+        }
         /// A modulation edge (an LFO into a frequency, …): recorded as an
         /// event-less connection `from -> the param's node`.
         pub fn connect_with_audio_param(&self, to: &AudioParam) -> Result<(), JsValue> {

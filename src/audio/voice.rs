@@ -43,6 +43,14 @@ pub enum Wave {
     /// COMPUTED: a bowed string — a violin / viola line. Onsets swell (60 ms
     /// at least); give it `with_vibrato` and `with_glide`.
     Violin,
+    /// COMPUTED: the REESE bass — two saws a few cents apart, their beating
+    /// folded through a soft clip: the phasing growl under every dubstep /
+    /// DnB drop. Put a [`Wobble`] on it.
+    Reese,
+    /// COMPUTED: two-operator FM — a sine carrier modulated at its own
+    /// pitch by an index that decays over the note: a metallic growl that
+    /// softens into a tone. Stabs, growls, bells at low index.
+    Fm,
 }
 
 impl Wave {
@@ -57,7 +65,10 @@ impl Wave {
     /// Audio nodes: no unison stack (mono), but the [`Voice`]'s filter
     /// envelope, vibrato, glide, sub and chords all apply.
     pub const fn is_computed(self) -> bool {
-        matches!(self, Wave::Guitar | Wave::BassGuitar | Wave::Violin)
+        matches!(
+            self,
+            Wave::Guitar | Wave::BassGuitar | Wave::Violin | Wave::Reese | Wave::Fm
+        )
     }
 }
 
@@ -154,6 +165,90 @@ pub struct Vibrato {
     pub delay: f64,
 }
 
+/// A per-note PITCH BEND: every note starts `semitones` away from its
+/// pitch (negative = from below) and arrives over `seconds` (the whole note
+/// when 0) — the "yoy" of a synth lead, the dive of a laser, the scoop of
+/// a bass. Baked into the note; a legato glide (`Voice::glide`) takes
+/// precedence where it applies.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Bend {
+    pub semitones: f64,
+    pub seconds: f64,
+}
+
+/// The WOBBLE: a tempo-synced LFO on a resonant lowpass, retriggered by
+/// every note. The cutoff swings between `cutoff` and `peak` Hz once every
+/// `steps` sequencer steps (`4.0` = a beat, `2.0` = an eighth, `1.0` = a
+/// sixteenth: the faster the wobble, the more the drop grinds), starting
+/// CLOSED at the note's start; `q` is the resonance. Baked, so the LFO's
+/// phase is per note — how a wobble bass is played.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Wobble {
+    pub steps: f64,
+    pub cutoff: f64,
+    pub peak: f64,
+    pub q: f64,
+}
+
+/// A live lane parameter a [`Ramp`] can move over a section.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum RampParam {
+    /// The lane's live lowpass cutoff, Hz (open = 20 kHz).
+    Cutoff,
+    /// The lane's echo send, `0..1`.
+    Echo,
+    /// The lane's hall send, `0..1`.
+    Reverb,
+    /// The lane's stereo position, `-1..1`.
+    Pan,
+    /// The lane's live level, `0..1`.
+    Level,
+}
+
+/// A start → end movement of one lane's live channel across ONE SECTION:
+/// a filter opening over sixteen bars, a send rising into the drop, a pan
+/// drifting. Automation on the live nodes — costs nothing to bake and
+/// works on every voice. Where a section has no ramp for a parameter, the
+/// voice's static value is restored at the section's start.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Ramp {
+    pub lane: usize,
+    pub param: RampParam,
+    pub from: f64,
+    pub to: f64,
+}
+
+impl Ramp {
+    pub const fn new(lane: usize, param: RampParam, from: f64, to: f64) -> Ramp {
+        Ramp {
+            lane,
+            param,
+            from,
+            to,
+        }
+    }
+    /// The lane's live lowpass, `from` → `to` Hz (exponential).
+    pub const fn cutoff(lane: usize, from: f64, to: f64) -> Ramp {
+        Ramp::new(lane, RampParam::Cutoff, from, to)
+    }
+    /// The lane's echo send.
+    pub const fn echo(lane: usize, from: f64, to: f64) -> Ramp {
+        Ramp::new(lane, RampParam::Echo, from, to)
+    }
+    /// The lane's hall send.
+    pub const fn reverb(lane: usize, from: f64, to: f64) -> Ramp {
+        Ramp::new(lane, RampParam::Reverb, from, to)
+    }
+    /// The lane's stereo position.
+    pub const fn pan(lane: usize, from: f64, to: f64) -> Ramp {
+        Ramp::new(lane, RampParam::Pan, from, to)
+    }
+    /// The lane's live level (a fade in / out that no accent lane can do).
+    pub const fn level(lane: usize, from: f64, to: f64) -> Ramp {
+        Ramp::new(lane, RampParam::Level, from, to)
+    }
+}
+
 /// One melodic instrument of a song: what a lane's notes are synthesized
 /// with. Cheap on purpose — a voice is baked once per note it plays. Build
 /// one with [`Voice::mono`] / [`Voice::panned`] / [`Voice::wide`] /
@@ -197,6 +292,11 @@ pub struct Voice {
     /// lane's previous note ends (legato — no rest between) GLIDES into
     /// its pitch from the previous one over this long. `0.0` = no glide.
     pub glide: f64,
+    /// A pitch bend into every note (`None` = none). See [`Bend`].
+    pub bend: Option<Bend>,
+    /// A tempo-synced filter LFO on every note (`None` = none). See
+    /// [`Wobble`].
+    pub wobble: Option<Wobble>,
 }
 
 impl Voice {
@@ -216,6 +316,8 @@ impl Voice {
             reverb: 0.0,
             sub: 0.0,
             glide: 0.0,
+            bend: None,
+            wobble: None,
         }
     }
 
@@ -310,6 +412,29 @@ impl Voice {
     /// With legato portamento over `glide` seconds (see [`Voice::glide`]).
     pub const fn with_glide(self, glide: f64) -> Self {
         Self { glide, ..self }
+    }
+
+    /// With a pitch bend into every note: from `semitones` away, arriving
+    /// over `seconds` (see [`Bend`]).
+    pub const fn with_bend(self, semitones: f64, seconds: f64) -> Self {
+        Self {
+            bend: Some(Bend { semitones, seconds }),
+            ..self
+        }
+    }
+
+    /// With a WOBBLE: a resonant lowpass swinging `cutoff` → `peak` Hz once
+    /// every `steps` steps, retriggered per note (see [`Wobble`]).
+    pub const fn with_wobble(self, steps: f64, cutoff: f64, peak: f64, q: f64) -> Self {
+        Self {
+            wobble: Some(Wobble {
+                steps,
+                cutoff,
+                peak,
+                q,
+            }),
+            ..self
+        }
     }
 
     /// How many oscillators a note of this voice actually runs: the stack
@@ -444,6 +569,8 @@ pub fn voice_summary(v: &Voice) -> String {
         Wave::Guitar => "GUITAR",
         Wave::BassGuitar => "BASS GTR",
         Wave::Violin => "VIOLIN",
+        Wave::Reese => "REESE",
+        Wave::Fm => "FM",
     };
     let mut parts = Vec::new();
     let n = v.oscillators();
@@ -468,6 +595,12 @@ pub fn voice_summary(v: &Voice) -> String {
     }
     if let Some(vb) = v.vibrato.filter(|_| !v.wave.is_preset()) {
         parts.push(format!("VIB {:.0}C", vb.depth));
+    }
+    if let Some(b) = v.bend.filter(|_| !v.wave.is_preset()) {
+        parts.push(format!("BEND {:+.0}ST", b.semitones));
+    }
+    if let Some(w) = v.wobble.filter(|_| !v.wave.is_preset()) {
+        parts.push(format!("WOB 1/{:.0}", w.steps.max(0.1)));
     }
     if let Some(e) = v.env {
         parts.push(format!("GATE {:.1}", e.gate));
@@ -563,5 +696,17 @@ mod tests {
             voice_summary(&Voice::mono(Wave::DrivenBass).with_sub(0.35)),
             "DRIVEN BASS · SUB 35%"
         );
+        let w = Voice::mono(Wave::Reese)
+            .with_wobble(2.0, 120.0, 2400.0, 6.0)
+            .with_bend(-12.0, 0.1);
+        assert_eq!(voice_summary(&w), "REESE · BEND -12ST · WOB 1/2");
+        assert!(w.wave.is_computed() && Wave::Fm.is_computed());
+        // A ramp names its lane, parameter and ends.
+        let r = Ramp::cutoff(1, 200.0, 8000.0);
+        assert_eq!(
+            (r.lane, r.param, r.from, r.to),
+            (1, RampParam::Cutoff, 200.0, 8000.0)
+        );
+        assert_eq!(Ramp::level(0, 1.0, 0.0).param, RampParam::Level);
     }
 }

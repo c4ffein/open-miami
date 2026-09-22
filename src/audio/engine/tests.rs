@@ -285,9 +285,10 @@ fn id(node: &impl AsRef<webaudio::AudioNode>) -> usize {
 }
 
 /// The per-lane channels exist and are wired in order — panner → drive →
-/// ducker → bus → lowpass → soft-clip → out, with the echo (a feedback loop)
-/// and the hall tapped after the drive and returning into the ducker; the
-/// drums' entry (the bus) is past the ducker.
+/// lane lowpass → lane level → ducker → bus → lowpass → soft-clip → out,
+/// with the echo (a feedback loop) and the hall tapped at the lane's END
+/// (the level) and returning into the ducker; the drums' entry (the bus)
+/// is past the ducker.
 #[test]
 fn the_lane_channels_are_wired_in_order() {
     reset_graphs();
@@ -334,18 +335,39 @@ fn the_lane_channels_are_wired_in_order() {
     let at = |x: f32| curve[((x * pre_gain + 1.0) / 2.0 * 4095.0).round() as usize];
     assert!((at(0.3) - 0.3).abs() < 1e-3, "{}", at(0.3));
     assert!(!g.reaches(bus, duck), "the drums' entry is past the ducker");
+    assert_eq!(engine.music_lp.len(), NUM_VOICES);
+    assert_eq!(engine.music_level_node.len(), NUM_VOICES);
     for lane in 0..NUM_VOICES {
         let (pan, drive) = (id(&engine.music_pan[lane]), id(&engine.music_drive[lane]));
+        let (lp, level) = (
+            id(&engine.music_lp[lane]),
+            id(&engine.music_level_node[lane]),
+        );
         assert!(
             g.edges.contains(&(pan, drive)),
             "lane {lane}: panner → drive"
         );
         assert!(
-            g.edges.contains(&(drive, duck)),
-            "lane {lane}: drive → ducker"
+            g.edges.contains(&(drive, lp)),
+            "lane {lane}: drive → lowpass"
         );
+        assert!(
+            !g.edges.contains(&(drive, duck)),
+            "lane {lane}: the drive still feeds the ducker"
+        );
+        assert!(
+            g.edges.contains(&(lp, level)),
+            "lane {lane}: lowpass → level"
+        );
+        assert!(
+            g.edges.contains(&(level, duck)),
+            "lane {lane}: level → ducker"
+        );
+        assert_eq!(g.nodes[lp].type_name.as_deref(), Some("Lowpass"));
+        assert_eq!(engine.music_lp[lane].frequency().value(), LANE_LP_OPEN_HZ);
+        assert_eq!(engine.music_level_node[lane].gain().value(), 1.0);
         let (echo, verb) = (id(&fx.echo_send[lane]), id(&fx.verb_send[lane]));
-        assert!(g.edges.contains(&(drive, echo)) && g.edges.contains(&(drive, verb)));
+        assert!(g.edges.contains(&(level, echo)) && g.edges.contains(&(level, verb)));
         assert!(g.edges.contains(&(echo, id(&fx.delay))));
     }
     // The echo repeats: delay → tone → feedback → delay; and it returns.
@@ -405,6 +427,214 @@ fn a_song_change_applies_its_voices_to_the_lanes() {
         );
         assert!((c[0] + c[2047]).abs() < 1e-6, "drive {drive}: not odd");
     }
+}
+
+/// At a section's start the lanes' live channels are set to their voice's
+/// values and the section's ramps are scheduled across its length; a
+/// section without a ramp for a parameter restores the rest value.
+#[test]
+fn section_ramps_drive_the_live_lane_channels() {
+    reset_graphs();
+    let mut engine = AudioEngine::new();
+    let song = song_named("Static Teeth");
+    engine.set_song(song);
+    // Every section — the ones with ramps (every kind of ramp the song
+    // uses) and the ones without.
+    let kinds: std::collections::HashSet<RampParam> = song
+        .sections
+        .iter()
+        .flat_map(|s| s.ramps)
+        .map(|r| r.param)
+        .collect();
+    assert!(kinds.len() >= 3, "the test song uses {kinds:?}");
+    assert!(song.sections.iter().any(|s| s.ramps.is_empty()));
+    let live = std::rc::Rc::clone(&graphs()[0]);
+    let step = step_dur(&song);
+    for (section, t) in (0..song.sections.len()).map(|i| (i, 10.0 * (i + 1) as f64)) {
+        engine.jump_to_section(section);
+        let events = live.borrow().events.len();
+        engine.schedule_section(t, step);
+        let g = live.borrow();
+        let sec = &song.sections[section];
+        let secs = section_len(sec) as f64 * step;
+        let new = &g.events[events..];
+        assert!(new.iter().all(|e| e.time >= t && e.time <= t + secs + 1e-9));
+        for r in sec.ramps {
+            let fx = engine.music_fx.as_ref().unwrap();
+            let node = match r.param {
+                RampParam::Cutoff => id(&engine.music_lp[r.lane]),
+                RampParam::Level => id(&engine.music_level_node[r.lane]),
+                RampParam::Pan => id(&engine.music_pan[r.lane]),
+                RampParam::Echo => id(&fx.echo_send[r.lane]),
+                RampParam::Reverb => id(&fx.verb_send[r.lane]),
+            };
+            let mine: Vec<&webaudio::ParamEvent> = new.iter().filter(|e| e.node == node).collect();
+            let starts = mine.iter().any(|e| {
+                e.kind == EventKind::Set && (e.value - r.from as f32).abs() < 1e-6 && e.time == t
+            });
+            assert!(
+                starts,
+                "{:?} lane {}: no start at {}",
+                r.param, r.lane, r.from
+            );
+            let end = mine
+                .iter()
+                .find(|e| matches!(e.kind, EventKind::LinearRamp | EventKind::ExpRamp))
+                .unwrap_or_else(|| panic!("{:?} lane {}: no ramp", r.param, r.lane));
+            assert!((end.value - r.to as f32).abs() < 1e-6);
+            assert!((end.time - (t + secs)).abs() < 1e-9);
+            assert_eq!(end.kind == EventKind::ExpRamp, r.param == RampParam::Cutoff);
+        }
+        if sec.ramps.is_empty() {
+            // Every lane's lowpass back open, level back to 1, pan / sends
+            // back to the voice's: only `Set`s (after the cancel), at `t`.
+            assert!(new
+                .iter()
+                .all(|e| matches!(e.kind, EventKind::Set | EventKind::Cancel) && e.time == t));
+            for lane in 0..NUM_VOICES {
+                let lp = id(&engine.music_lp[lane]);
+                assert!(new
+                    .iter()
+                    .any(|e| e.node == lp && e.value == LANE_LP_OPEN_HZ));
+                let pan = id(&engine.music_pan[lane]);
+                let rest = song.voices[lane].pan as f32;
+                assert!(new.iter().any(|e| e.node == pan && e.value == rest));
+            }
+        }
+    }
+    // The scheduler calls it at every section start (a `Cancel` per lane
+    // parameter each time), and the song's cutoff ramps land on the lane.
+    reset_graphs();
+    let mut engine = AudioEngine::new();
+    engine.set_song(song);
+    let live = std::rc::Rc::clone(&graphs()[0]);
+    live.borrow_mut().now = 1.0;
+    engine.start_music();
+    let total: usize = song.sections.iter().map(section_len).sum();
+    let frames = (total as f64 * step / 0.016) as usize + 16;
+    let mut now = 1.0;
+    for _ in 0..frames {
+        engine.update(0.0);
+        now += 0.016;
+        live.borrow_mut().now = now;
+    }
+    let g = live.borrow();
+    let cancels = g
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::Cancel)
+        .count();
+    assert!(
+        cancels >= song.sections.len() * NUM_VOICES,
+        "{cancels} cancels"
+    );
+    // … and exactly AT each section's first step: `start_music` puts step 0
+    // at now + 0.1, every section then starts where the previous one ends.
+    let mut at = 1.0 + 0.1;
+    for sec in song.sections {
+        for r in sec.ramps.iter().filter(|r| r.param == RampParam::Cutoff) {
+            let lp = id(&engine.music_lp[r.lane]);
+            let starts = g
+                .events
+                .iter()
+                .any(|e| e.node == lp && e.kind == EventKind::Set && (e.time - at).abs() < 1e-6);
+            assert!(
+                starts,
+                "'{}': its cutoff ramp does not start at {at:.3} s",
+                sec.label
+            );
+            assert!(g
+                .events
+                .iter()
+                .any(|e| e.node == lp && e.kind == EventKind::ExpRamp));
+        }
+        at += section_len(sec) as f64 * step;
+    }
+}
+
+/// A node-built voice's BEND starts every note off pitch and ramps to it;
+/// its WOBBLE is a lowpass with an LFO on its frequency, at the tempo.
+#[test]
+fn bend_and_wobble_reach_the_node_voices() {
+    reset_graphs();
+    let mut engine = AudioEngine::new();
+    let mut song = song_named("Sodium Lights");
+    let mut voices = song.voices;
+    voices[LEAD] = Voice::mono(Wave::Square)
+        .with_bend(-12.0, 0.25)
+        .with_wobble(2.0, 200.0, 2000.0, 4.0);
+    song.voices = voices;
+    engine.set_song(song);
+    let keys = music_keys(&song);
+    let i = keys
+        .iter()
+        .position(|k| {
+            matches!(
+                k,
+                MusicKey::Note {
+                    lane: LEAD,
+                    chord: Chord::Single,
+                    from: None,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    let MusicKey::Note { degree, .. } = keys[i] else {
+        unreachable!()
+    };
+    let f = degree_freq(song.root, song.scale, degree) as f32;
+    let g = offline_graph(|| {
+        engine.render_music_slot(i);
+    });
+    let g = g.borrow();
+    let oscs: Vec<usize> = (0..g.nodes.len())
+        .filter(|&n| g.nodes[n].kind == NodeKind::Oscillator)
+        .collect();
+    // Two oscillators: the note and the wobble's LFO.
+    assert_eq!(oscs.len(), 2);
+    let freq_events = |n: usize| -> Vec<&webaudio::ParamEvent> {
+        g.events
+            .iter()
+            .filter(|e| e.node == n && e.param == "frequency")
+            .collect()
+    };
+    let note = oscs
+        .iter()
+        .copied()
+        .find(|&n| {
+            freq_events(n)
+                .iter()
+                .any(|e| (e.value - f / 2.0).abs() < 0.01)
+        })
+        .expect("the note starts an octave down");
+    let ev = freq_events(note);
+    assert_eq!(ev[0].kind, EventKind::Set);
+    let arrive = ev.iter().find(|e| e.kind == EventKind::ExpRamp).unwrap();
+    assert!((arrive.value - f).abs() < 0.01 && (arrive.time - 0.25).abs() < 1e-9);
+    let lfo = oscs.iter().copied().find(|&n| n != note).unwrap();
+    let period = 2.0 * step_dur(&song);
+    let rate = (1.0 / period) as f32;
+    assert!(freq_events(lfo)
+        .iter()
+        .any(|e| (e.value - rate).abs() < 1e-4));
+    // The LFO drives a lowpass's frequency; the lowpass sits at the midpoint.
+    let (_, target, param) = g.mod_edges.iter().find(|m| g.reaches(lfo, m.0)).unwrap();
+    assert_eq!(*param, "frequency");
+    assert_eq!(g.nodes[*target].type_name.as_deref(), Some("Lowpass"));
+    let mid = g
+        .events
+        .iter()
+        .any(|e| e.node == *target && e.param == "frequency" && e.value == 1100.0);
+    assert!(mid);
+    // … swung by half the range: the LFO's depth gain is 900 Hz.
+    let (depth, _, _) = g.mod_edges.iter().find(|m| m.1 == *target).unwrap();
+    assert!(g
+        .events
+        .iter()
+        .any(|e| e.node == *depth && e.param == "gain" && e.value == 900.0));
+    let len = g.offline_frames.unwrap() as f64 / g.sample_rate as f64;
+    check_voice("bent + wobbled square", &g, 0.0, Some(len));
 }
 
 /// A WIDE unison voice bakes to a stereo buffer (its stack is spread inside

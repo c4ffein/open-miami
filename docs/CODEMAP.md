@@ -56,10 +56,14 @@ Moved verbatim out of `CLAUDE.md`; keep it current when files move.
   pickers; host-tested), `audio/voice.rs` (the INSTRUMENT types: `Wave`,
   `Chord`, `Voice`, `Sidechain`, `Echo`, the pure duck / swing curves;
   re-exported by songs.rs), `audio/dsp.rs` (the COMPUTED voices —
-  `Wave::{Guitar, BassGuitar, Violin}`: Karplus–Strong strings and a
-  polyBLEP bowed string rendered sample by sample, `render_note(voice,
-  partials, shape, sr) -> Vec<f32>`; pure, host-tested for pitch / decay /
-  level / speed; `salt_road.rs` is the showcase), `audio/compose.rs`,
+  `Wave::{Guitar, BassGuitar, Violin, Reese, Fm}`: Karplus–Strong strings,
+  a polyBLEP bowed string, the Reese pair, 2-op FM, rendered sample by
+  sample with the per-note `Bend` and the tempo-synced `Wobble`,
+  `render_note(voice, partials, shape, step, sr) -> Vec<f32>`; pure,
+  host-tested for pitch / decay / level / speed; `salt_road.rs` is the
+  strings' showcase, `static_teeth.rs` the modifiers' — `with_bend`,
+  `with_wobble`, section `Ramp`s on the live lane channels: the lane's
+  lowpass + level nodes, `schedule_section`), `audio/compose.rs`,
   `audio/songs/*.rs`,
   `audio/sfx.rs` (SFX catalogue +
   bake specs, host-tested), `audio/engine.rs` (the WebAudio

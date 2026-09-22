@@ -41,8 +41,8 @@
 //!   hotter).
 
 use super::songs::{
-    Chord, Drum, Echo, Scale, Section, Sidechain, SongSpec, Voice, Wave, ARP, BASS, DRUMS, HOLD,
-    KEYS, LEAD, MAX_VEL, NUM_CHANNELS, NUM_VOICES, PAD, PERC, REST,
+    Chord, Drum, Echo, Ramp, Scale, Section, Sidechain, SongSpec, Voice, Wave, ARP, BASS, DRUMS,
+    HOLD, KEYS, LEAD, MAX_VEL, NUM_CHANNELS, NUM_VOICES, PAD, PERC, REST,
 };
 
 // --- keys -------------------------------------------------------------------
@@ -573,6 +573,7 @@ pub struct SectionSpec {
     accents: [VelLane; NUM_CHANNELS],
     chords: [ChordLane; NUM_VOICES],
     duck: bool,
+    ramps: Vec<Ramp>,
 }
 
 impl SectionSpec {
@@ -582,6 +583,14 @@ impl SectionSpec {
     /// breathes with the kick" feel.
     pub fn ducked(mut self) -> SectionSpec {
         self.duck = true;
+        self
+    }
+
+    /// Start → end movements of the lanes' LIVE channels across this
+    /// section (`Ramp::cutoff(LEAD, 300.0, 8000.0)`, `Ramp::reverb(..)`,
+    /// `Ramp::level(..)`, …): automation, not baked, any voice.
+    pub fn ramps(mut self, ramps: impl IntoIterator<Item = Ramp>) -> SectionSpec {
+        self.ramps.extend(ramps);
         self
     }
 }
@@ -603,6 +612,7 @@ pub fn section(label: &'static str, parts: impl IntoIterator<Item = Part>) -> Se
         accents: Default::default(),
         chords: Default::default(),
         duck: false,
+        ramps: Vec::new(),
     };
     for part in parts {
         let ch = part.channel;
@@ -929,6 +939,7 @@ impl SongBuilder {
                     keys_chord: voiced(KEYS, kc),
                     level: s.vel,
                     duck: s.duck,
+                    ramps: leak(s.ramps),
                 }
             })
             .collect();
@@ -1100,7 +1111,11 @@ mod tests {
                     perc("h.").accents("4."),
                     drums("k...").accents("9"),
                 ],
-            )])
+            )
+            .ramps([
+                Ramp::cutoff(PAD, 300.0, 6000.0),
+                Ramp::level(LEAD, 0.0, 1.0),
+            ])])
             .build();
         assert_eq!(s.voices[LEAD].pan, 0.4);
         assert_eq!(s.voices[KEYS].wave, Wave::Noise);
@@ -1123,6 +1138,8 @@ mod tests {
         );
         assert_eq!(sec.perc, &[Drum::Hat, Silent]);
         assert!(sec.bass_vel.is_empty() && sec.arp_chord.is_empty());
+        assert_eq!(sec.ramps.len(), 2);
+        assert_eq!((sec.ramps[1].lane, sec.ramps[1].to), (LEAD, 1.0));
         // The default song: what the briefed tracks got before v2.
         let plain = song("P", Key::new(A1, MINOR), 120.0).build();
         assert_eq!(plain.voices[BASS], Voice::mono(Wave::Sawtooth));
@@ -1278,6 +1295,7 @@ mod tests {
         assert_eq!(s.sections[0].pad, &[] as &[i32]);
         assert_eq!(s.sections[0].drums.len(), 16);
         assert!(s.sections[1].duck && !s.sections[0].duck);
+        assert!(s.sections[0].ramps.is_empty());
         // The two refrain() calls produce identical content.
         assert_eq!(s.sections[1].bass, s.sections[2].bass);
         assert_eq!(s.sections[1].drums, s.sections[2].drums);

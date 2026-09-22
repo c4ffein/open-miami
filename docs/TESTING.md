@@ -73,7 +73,15 @@ at its pitch (autocorrelation, ±1.5 %), decays but still rings at half a
 second, ends silent, stays finite; the violin swells and holds; a glide
 arrives at its target; a strum staggers; the filter envelope darkens; the
 sub adds weight; the same note bakes the same samples; a big note renders
-under 150 ms even in debug (~20 ms release).
+under 150 ms even in debug (~20 ms release); the Reese and FM voices ring
+at pitch, a bend starts an octave down and arrives, the wobble swings the
+treble energy once per period. On the engine side: a section's ramps are
+scheduled from `from` at the section's start to `to` at its end on the
+right lane node (cutoff exponential, the rest linear), a section without
+one restores the rest values, the scheduler does it exactly at every
+section's first step; a node-built voice's bend is its oscillator's start
+pitch + ramp and its wobble a lowpass with an LFO on its frequency at the
+tempo.
 
 **Refactoring the AI?** `tests/ai_fingerprint.rs` is an `#[ignore]`d tool, not
 a check: it hashes every enemy's state on every tick of every floor. Run it

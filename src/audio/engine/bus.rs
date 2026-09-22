@@ -68,6 +68,41 @@ impl AudioEngine {
         shapers
     }
 
+    /// The TAIL of every lane's chain after its drive: a live lowpass (open
+    /// until a section ramps it) into a live level gain into `into`. The
+    /// drives are re-pointed from `into` to their lane's lowpass. All or
+    /// none (both vectors empty: the drives stay on `into`).
+    pub(super) fn make_lane_tails(
+        ctx: &AudioContext,
+        into: &GainNode,
+        drives: &[WaveShaperNode],
+    ) -> (Vec<BiquadFilterNode>, Vec<GainNode>) {
+        if drives.len() != NUM_VOICES {
+            return (Vec::new(), Vec::new());
+        }
+        let mut lps = Vec::with_capacity(NUM_VOICES);
+        let mut levels = Vec::with_capacity(NUM_VOICES);
+        for drive in drives {
+            let (Ok(lp), Ok(level)) = (ctx.create_biquad_filter(), ctx.create_gain()) else {
+                return (Vec::new(), Vec::new());
+            };
+            lp.set_type(BiquadFilterType::Lowpass);
+            let _ = lp.frequency().set_value_at_time(LANE_LP_OPEN_HZ, 0.0);
+            let _ = lp.q().set_value_at_time(0.7, 0.0);
+            let _ = level.gain().set_value_at_time(1.0, 0.0);
+            if drive.disconnect().is_err()
+                || drive.connect_with_audio_node(&lp).is_err()
+                || lp.connect_with_audio_node(&level).is_err()
+                || level.connect_with_audio_node(into).is_err()
+            {
+                return (Vec::new(), Vec::new());
+            }
+            lps.push(lp);
+            levels.push(level);
+        }
+        (lps, levels)
+    }
+
     /// One `StereoPannerNode` per melodic lane, each into its lane's drive
     /// shaper (or straight into `into` — the ducker, or the music bus
     /// itself — when the shapers couldn't be built). All or none: a
@@ -95,21 +130,14 @@ impl AudioEngine {
         panners
     }
 
-    /// The echo line and the hall, with a send gain per lane tapped after
-    /// its drive shaper (or its panner when there are none), both returning
-    /// into `into` (the ducker / bus). `None` if any node fails: dry.
+    /// The echo line and the hall, with a send gain per lane tapped at
+    /// `taps[lane]` (the end of the lane's chain), both returning into
+    /// `into` (the ducker / bus). `None` if any node fails: dry.
     pub(super) fn make_music_fx(
         ctx: &AudioContext,
         into: &GainNode,
-        panners: &[StereoPannerNode],
-        drives: &[WaveShaperNode],
+        taps: &[webaudio::AudioNode],
     ) -> Option<MusicFx> {
-        let taps: Vec<webaudio::AudioNode> = (0..panners.len())
-            .map(|lane| match drives.get(lane) {
-                Some(d) => AsRef::<webaudio::AudioNode>::as_ref(d).clone(),
-                None => AsRef::<webaudio::AudioNode>::as_ref(&panners[lane]).clone(),
-            })
-            .collect();
         // Echo: sends → delay → tone → (return, feedback → delay).
         let delay = ctx
             .create_delay_with_max_delay_time(ECHO_MAX_SECONDS)
@@ -136,7 +164,7 @@ impl AudioEngine {
         verb_return.connect_with_audio_node(into).ok()?;
         let mut echo_send = Vec::with_capacity(taps.len());
         let mut verb_send = Vec::with_capacity(taps.len());
-        for tap in &taps {
+        for tap in taps {
             let e = ctx.create_gain().ok()?;
             let _ = e.gain().set_value_at_time(0.0, 0.0);
             tap.connect_with_audio_node(&e).ok()?;

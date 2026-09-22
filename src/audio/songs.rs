@@ -72,6 +72,7 @@ pub mod service_corridor;
 pub mod signal_rot;
 pub mod sodium_lights;
 pub mod static_prayer;
+pub mod static_teeth;
 pub mod thermal_mass;
 pub mod walk_dont_run;
 
@@ -217,6 +218,9 @@ pub struct Section {
     /// melodic lanes through the song's [`Sidechain`] (no effect when that
     /// is [`Sidechain::OFF`]; the drums never duck themselves).
     pub duck: bool,
+    /// Start → end movements of the lanes' LIVE channels across this section
+    /// (see [`Ramp`]): a filter opening, a send rising, a fade.
+    pub ramps: &'static [Ramp],
 }
 
 impl Section {
@@ -245,6 +249,7 @@ impl Section {
         keys_chord: &[],
         level: [1.0; NUM_CHANNELS],
         duck: true,
+        ramps: &[],
     };
 
     /// The note lane of melodic channel `lane` ([`BASS`] … [`KEYS`]); empty
@@ -355,7 +360,7 @@ pub struct SongSpec {
 }
 
 /// Number of songs in [`SONGS`].
-pub const SONG_COUNT: usize = 19;
+pub const SONG_COUNT: usize = 20;
 
 /// How many of [`SONGS`] — the first ones — are the BRIEFED soundtrack
 /// (`docs/music/TRACKS.md`): the tracks the game plays by role and the role
@@ -391,6 +396,7 @@ pub static SONGS: LazyLock<[SongSpec; SONG_COUNT]> = LazyLock::new(|| {
         static_prayer::spec(),
         mask_of_dread::spec(),
         salt_road::spec(),
+        static_teeth::spec(),
     ]
 });
 
@@ -878,12 +884,14 @@ mod tests {
 
     /// "Sodium Lights" was written as `const` literals (the v2 format's tour)
     /// and REWRITTEN with the `compose` v2 builders: the rewrite is the same
-    /// song, to the last velocity digit.
+    /// song, to the last velocity digit. (A FORMAT change — a new `Voice`
+    /// or `Section` field — changes the `Debug` form and re-pins this; a
+    /// change to the song's notes must never be what re-pins it.)
     #[test]
     fn the_compose_rewrite_of_sodium_lights_is_the_same_song() {
         let song = SONGS.iter().find(|s| s.name == "Sodium Lights").unwrap();
         println!("Sodium Lights fingerprint: {:#x}", fingerprint(song));
-        assert_eq!(fingerprint(song), 0x3db1_d755_5ea1_0247);
+        assert_eq!(fingerprint(song), 0x0b60_2bd8_2620_17e5);
     }
 
     /// The briefed soundtrack (the tracks the game plays by role).
@@ -1144,6 +1152,18 @@ mod tests {
             );
             for v in song.voices {
                 assert!((-1.0..=1.0).contains(&v.pan), "{name}: pan");
+                if let Some(b) = v.bend {
+                    assert!(
+                        b.semitones.abs() <= 48.0 && b.seconds >= 0.0,
+                        "{name}: bend"
+                    );
+                }
+                if let Some(w) = v.wobble {
+                    assert!(
+                        w.steps > 0.0 && w.cutoff >= 20.0 && w.peak >= w.cutoff && w.q > 0.0,
+                        "{name}: wobble"
+                    );
+                }
                 assert!((0.0..=1.0).contains(&v.width), "{name}: width");
                 assert!(v.detune >= 0.0, "{name}: detune");
                 assert!((1..=7).contains(&v.unison), "{name}: unison");
@@ -1193,6 +1213,26 @@ mod tests {
                         assert!(v <= MAX_VEL, "{name} / {}: velocity {v}", sec.label);
                     }
                     assert!(sec.level_of(ch) >= 0.0 && sec.level_of(ch).is_finite());
+                }
+                for r in sec.ramps {
+                    assert!(
+                        MELODIC.contains(&r.lane),
+                        "{name} / {}: ramp lane",
+                        sec.label
+                    );
+                    let (lo, hi) = match r.param {
+                        RampParam::Cutoff => (20.0, 20_000.0),
+                        RampParam::Pan => (-1.0, 1.0),
+                        _ => (0.0, 1.0),
+                    };
+                    for v in [r.from, r.to] {
+                        assert!(
+                            (lo..=hi).contains(&v),
+                            "{name} / {}: ramp {:?} {v}",
+                            sec.label,
+                            r.param
+                        );
+                    }
                 }
                 let density = section_density(sec);
                 assert!((0.0..=1.0).contains(&density));

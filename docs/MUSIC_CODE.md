@@ -57,7 +57,22 @@ slices.
   (risers, wind: the degree is ignored), the three darksynth PRESETS — a
   preset brings its own graph, so unison / filter / vibrato / glide do
   not apply to it (envelope, ties, chords, sub, pan, drive, sends do) —
-  and the three COMPUTED strings (below).
+  the three COMPUTED strings and the Reese / FM voices (below).
+  `.with_bend(semitones, seconds)` starts EVERY note that far off pitch and
+  arrives over `seconds` (the "yoy" of a lead, a laser dive; a legato glide
+  wins where it applies); `.with_wobble(steps, cutoff, peak, q)` is THE
+  WOBBLE — a resonant lowpass swinging `cutoff` → `peak` once per `steps`
+  steps (`2.0` = an eighth, `1.0` = a sixteenth: the drop's grind), a sine
+  from the midpoint, restarting with every note (it is baked, as a wobble
+  bass is played). Both work on node-built and computed voices alike.
+* **Section RAMPS** (`Section::ramps`, `.ramps([..])` in the builders):
+  start → end movements of a lane's LIVE channel across one section —
+  `Ramp::cutoff(lane, from, to)` (the lane's own lowpass, open at rest),
+  `Ramp::echo` / `Ramp::reverb` (the sends), `Ramp::pan`, `Ramp::level`
+  (a fade). Automation on the persistent nodes: nothing to bake, any
+  voice; a parameter no ramp names is restored to the voice's value at
+  every section start. A filter opening over sixteen bars, a lead sinking
+  into the hall, an outro fading: this is where slow movement lives.
 * **Song-level**: `swing` (0..1: the odd sixteenths late by up to a third
   of a step — `swing_delay`), `humanize` (seconds, ≤ 0.02: every note but
   the kicks, never into the clock's past), `sidechain: Sidechain { depth,
@@ -74,7 +89,10 @@ panel show what a song's instruments are made of.
 ## Computed voices (`audio/dsp.rs`)
 
 `Wave::Guitar` (a picked steel string), `Wave::BassGuitar` (a fingered
-bass) and `Wave::Violin` (a bowed string) are not built from Web Audio
+bass), `Wave::Violin` (a bowed string), `Wave::Reese` (two saws nine cents
+apart folded through a soft clip — the dubstep / DnB growl; put a wobble
+on it) and `Wave::Fm` (a sine carrier phase-modulated at its own pitch by
+an index decaying from a growl to a tone) are not built from Web Audio
 nodes: their samples are computed in Rust and copied into the bake buffer
 (`AudioEngine::computed_bake`, synchronous — no offline context). The
 plucked strings are Karplus–Strong loops — a pick-position-notched noise
@@ -96,8 +114,12 @@ live SKETCH of an unbaked computed note is the usual plain oscillator (a
 triangle for the plucked ones, a saw for the violin). Cost: about 7 ms per
 second of audio per partial in release (a strummed triad held a bar ≈
 20 ms), one note per frame; the `salt_road.rs` bake adds ~70 ms of long
-tasks to a page load (measured, headless). `salt_road.rs` is the showcase:
-bass guitar, picked + strummed guitar, two violins.
+tasks to a page load (measured, headless). `salt_road.rs` is the showcase
+of the strings: bass guitar, picked + strummed guitar, two violins;
+`static_teeth.rs` of the modifiers: two Reeses (an eighth-note and a
+sixteenth-note wobble), FM growls, a bending lead, and section ramps
+opening the pad through the build, drowning the lead in the break and
+fading the outro.
 
 ## The shape of a song file
 
@@ -261,16 +283,18 @@ bus:
 ## The lane channels (what is NOT baked)
 
 ```text
- note ─► lane panner ─► drive ─┬───────────────────────────► ducker ─► bus ─► lowpass ─► soft-clip ─► out
-                               ├─ echo send ─► delay ─► tone ─► return ──┤
-                               │                 ▲           └─ feedback ─┘
-                               └─ verb send ─► convolver (hall) ─► return ─┘
- drum ─────────────────────────────────────────────────────────────────► bus
+ note ─► panner ─► drive ─► lowpass ─► level ─┬──────────────────────► ducker ─► bus ─► lowpass ─► soft-clip ─► out
+                                             ├─ echo send ─► delay ─► tone ─► return ──┤
+                                             │                 ▲           └─ feedback ─┘
+                                             └─ verb send ─► convolver (hall) ─► return ─┘
+ drum ────────────────────────────────────────────────────────────────► bus
 ```
 
-A baked note is DRY: pan, drive, the echo / hall sends, the duck and the
-per-bar sweep are live, per lane, and re-pointed at every song change
-(`AudioEngine::apply_voices`). Two consequences worth knowing:
+A baked note is DRY: pan, drive, the lane's lowpass and level (what the
+section ramps move — open / unity at rest), the echo / hall sends, the
+duck and the per-bar sweep are live, per lane, re-pointed at every song
+change (`AudioEngine::apply_voices`) and at every section start
+(`schedule_section`). Two consequences worth knowing:
 
 * every lane plays through an equal-power `StereoPannerNode`, which puts a
   CENTRED lane 3 dB under the drums (they enter the bus directly).

@@ -1,6 +1,7 @@
 //! COMPUTED voices: notes rendered sample by sample in plain Rust — a
-//! physical plucked string (guitar, bass guitar) and a bowed string (violin)
-//! — straight into the bake buffer. Web Audio nodes cannot build these: a
+//! physical plucked string (guitar, bass guitar), a bowed string (violin),
+//! the Reese bass and a two-operator FM voice — straight into the bake
+//! buffer, with the per-note pitch BEND and the tempo-synced WOBBLE. Web Audio nodes cannot build these: a
 //! feedback loop through nodes has a minimum delay of one render quantum
 //! (128 samples ≈ 2.7 ms), which caps a string model near 370 Hz. Here the
 //! loop is a ring buffer and any pitch works.
@@ -11,7 +12,7 @@
 //! `computed_bake`) copies the result into an `AudioBuffer`; the live
 //! fallback for an unbaked computed note is the usual one-oscillator sketch.
 
-use super::voice::{Filter, Vibrato, Voice, Wave};
+use super::voice::{Filter, Vibrato, Voice, Wave, Wobble};
 
 /// One partial of a computed note: its pitch (and the pitch it glides in
 /// from), its level, and how late it starts (a strum spreads a chord).
@@ -54,7 +55,13 @@ const BLOCK: usize = 32;
 /// [`Wave::is_computed`]): every partial summed, the sub-oscillator, the
 /// voice's filter envelope, the release fade. `None` for a wave that is not
 /// computed. Mono.
-pub fn render_note(voice: &Voice, partials: &[Partial], shape: Shape, sr: f64) -> Option<Vec<f32>> {
+pub fn render_note(
+    voice: &Voice,
+    partials: &[Partial],
+    shape: Shape,
+    step: f64,
+    sr: f64,
+) -> Option<Vec<f32>> {
     if !voice.wave.is_computed() || sr <= 0.0 {
         return None;
     }
@@ -62,16 +69,25 @@ pub fn render_note(voice: &Voice, partials: &[Partial], shape: Shape, sr: f64) -
     let mut out = vec![0f32; frames];
     let mut rng = Rng(0x9E37_79B9 ^ (voice.wave as u32).wrapping_mul(0x85EB_CA6B));
     for p in partials {
+        // A legato glide comes from the previous note; otherwise the
+        // voice's bend, if any, is where the note starts.
+        let (f0, glide) = match (p.from, voice.bend) {
+            (Some(from), _) => (from, voice.glide),
+            (None, Some(b)) => (p.f * 2f64.powf(b.semitones / 12.0), b.seconds),
+            (None, None) => (p.f, 0.0),
+        };
         let pitch = Pitch {
-            f0: p.from.unwrap_or(p.f),
+            f0,
             f1: p.f,
-            glide: voice.glide,
+            glide,
             vibrato: voice.vibrato,
         };
         let one = match voice.wave {
             Wave::Guitar => pluck(&pitch, shape, sr, &GUITAR, &mut rng),
             Wave::BassGuitar => pluck(&pitch, shape, sr, &BASS_GUITAR, &mut rng),
             Wave::Violin => bowed(&pitch, shape, sr, &mut rng),
+            Wave::Reese => reese(&pitch, shape, sr),
+            Wave::Fm => fm(&pitch, shape, sr),
             _ => return None,
         };
         let at = (p.delay.max(0.0) * sr) as usize;
@@ -104,6 +120,9 @@ pub fn render_note(voice: &Voice, partials: &[Partial], shape: Shape, sr: f64) -
     }
     if let Some(flt) = voice.filter {
         filter_envelope(&mut out, &flt, sr);
+    }
+    if let Some(w) = voice.wobble {
+        wobble_filter(&mut out, &w, step, sr);
     }
     // The release: whatever is still ringing fades out over `dur`.
     let release_from = shape.attack.max(0.0) + shape.hold;
@@ -233,6 +252,89 @@ fn filter_envelope(out: &mut [f32], flt: &Filter, sr: f64) {
         }
         *o = svf.tick(f64::from(*o), coef).0 as f32;
     }
+}
+
+/// The WOBBLE ([`Wobble`]): a resonant lowpass whose cutoff swings
+/// between the wobble's `cutoff` and `peak` (geometrically, so the sweep
+/// sounds even) once every `steps` sequencer steps — a sine from the
+/// midpoint, opening first, restarting with the note.
+fn wobble_filter(out: &mut [f32], w: &Wobble, step: f64, sr: f64) {
+    let lo = w.cutoff.clamp(20.0, 18000.0);
+    let hi = w.peak.clamp(20.0, 18000.0).max(lo);
+    let period = (w.steps * step).max(0.01);
+    let mut svf = Svf::default();
+    let mut coef = (0.0, 0.0);
+    for (i, o) in out.iter_mut().enumerate() {
+        if i % BLOCK == 0 {
+            let t = i as f64 / sr;
+            let x = 0.5 + 0.5 * (std::f64::consts::TAU * t / period).sin();
+            coef = svf_coef(lo * (hi / lo).powf(x), w.q, sr);
+        }
+        *o = svf.tick(f64::from(*o), coef).0 as f32;
+    }
+}
+
+/// The REESE bass: two band-limited saws a few cents apart — their beating
+/// is the growl — summed and folded through a soft clip, then a lowpass
+/// that keeps the top from fizzing; the amplitude envelope of a bowed
+/// note (swell, hold, release).
+fn reese(pitch: &Pitch, shape: Shape, sr: f64) -> Vec<f32> {
+    let frames = (shape.total() * sr).ceil() as usize;
+    let mut out = vec![0f32; frames];
+    let total = shape.total();
+    const CENTS: [f64; 2] = [-9.0, 9.0];
+    let mut phase = [0.0f64; 2];
+    let mut lp = Svf::default();
+    let lp_coef = svf_coef(2200.0, 0.9, sr);
+    let mut dt = [0.0; 2];
+    for (i, o) in out.iter_mut().enumerate() {
+        let t = i as f64 / sr;
+        if i % BLOCK == 0 {
+            let f = pitch.at(t, total);
+            for (k, c) in CENTS.iter().enumerate() {
+                dt[k] = f * 2f64.powf(c / 1200.0) / sr;
+            }
+        }
+        let mut sum = 0.0;
+        for k in 0..2 {
+            phase[k] += dt[k];
+            if phase[k] >= 1.0 {
+                phase[k] -= 1.0;
+            }
+            sum += 2.0 * phase[k] - 1.0 - poly_blep(phase[k], dt[k]);
+        }
+        // Hot into the fold: the pair's beating intermodulates.
+        let folded = (sum * 1.6).tanh() * 0.7;
+        let (y, _) = lp.tick(folded, lp_coef);
+        *o = (y * env(t, shape)) as f32;
+    }
+    out
+}
+
+/// Two-operator FM: a sine carrier whose phase is modulated by a sine at
+/// the same pitch (a harmonic spectrum) with an index that decays from a
+/// growl to a warm tone over the first quarter second, under the bowed
+/// note's envelope.
+fn fm(pitch: &Pitch, shape: Shape, sr: f64) -> Vec<f32> {
+    let frames = (shape.total() * sr).ceil() as usize;
+    let mut out = vec![0f32; frames];
+    let total = shape.total();
+    let (mut carrier, mut modulator) = (0.0f64, 0.0f64);
+    let mut dt = 0.0;
+    let mut index = 0.0;
+    for (i, o) in out.iter_mut().enumerate() {
+        let t = i as f64 / sr;
+        if i % BLOCK == 0 {
+            dt = pitch.at(t, total) / sr;
+            index = 0.4 + 2.6 * (-t / 0.25).exp();
+        }
+        modulator = (modulator + dt) % 1.0;
+        carrier = (carrier + dt) % 1.0;
+        let m = (std::f64::consts::TAU * modulator).sin();
+        let y = (std::f64::consts::TAU * carrier + index * m).sin();
+        *o = (y * 0.75 * env(t, shape)) as f32;
+    }
+    out
 }
 
 /// A fractional delay line: the string. The fraction is an ALLPASS
@@ -440,7 +542,7 @@ mod tests {
             peak: 0.5,
             delay: 0.0,
         };
-        render_note(&voice, &[p], shape, SR).unwrap()
+        render_note(&voice, &[p], shape, 0.1, SR).unwrap()
     }
 
     /// The fundamental of `s` between `from` and `to` seconds, by
@@ -555,7 +657,7 @@ mod tests {
             peak: 0.5,
             delay: 0.0,
         };
-        let s = render_note(&v, &[p], shape, SR).unwrap();
+        let s = render_note(&v, &[p], shape, 0.1, SR).unwrap();
         assert!((pitch_of(&s, 0.6, 1.0) / 440.0 - 1.0).abs() < 0.015);
         assert!(pitch_of(&s, 0.02, 0.12) < 400.0, "no glide from below");
         // A strummed chord: the late partial is silent before its delay.
@@ -573,8 +675,8 @@ mod tests {
                 delay: 0.2,
             },
         ];
-        let g = render_note(&Voice::mono(Wave::Guitar), &chord, shape, SR).unwrap();
-        let alone = render_note(&Voice::mono(Wave::Guitar), &chord[..1], shape, SR).unwrap();
+        let g = render_note(&Voice::mono(Wave::Guitar), &chord, shape, 0.1, SR).unwrap();
+        let alone = render_note(&Voice::mono(Wave::Guitar), &chord[..1], shape, 0.1, SR).unwrap();
         let before = (0.19 * SR) as usize;
         assert_eq!(
             &g[..before],
@@ -607,8 +709,8 @@ mod tests {
         let with_sub = one(Voice::mono(Wave::BassGuitar).with_sub(0.8), 82.4, shape);
         let without = one(Voice::mono(Wave::BassGuitar), 82.4, shape);
         assert!(rms(&with_sub, 0.1, 0.4) > rms(&without, 0.1, 0.4));
-        assert!(render_note(&Voice::mono(Wave::Sawtooth), &[], shape, SR).is_none());
-        assert!(render_note(&Voice::mono(Wave::Guitar), &[], shape, 0.0).is_none());
+        assert!(render_note(&Voice::mono(Wave::Sawtooth), &[], shape, 0.1, SR).is_none());
+        assert!(render_note(&Voice::mono(Wave::Guitar), &[], shape, 0.1, 0.0).is_none());
     }
 
     /// A big note (a strummed triad held 1.6 s, ringing 1.2 s more, with a
@@ -634,10 +736,68 @@ mod tests {
             .collect();
         let v = Voice::mono(Wave::Guitar).with_filter(300.0, 3000.0, 0.0, 0.2, 1.0);
         let t = std::time::Instant::now();
-        let s = render_note(&v, &chord, shape, SR).unwrap();
+        let s = render_note(&v, &chord, shape, 0.1, SR).unwrap();
         let ms = t.elapsed().as_secs_f64() * 1e3;
         println!("{} samples in {ms:.1} ms", s.len());
         assert!(ms < 150.0, "{ms:.1} ms for one note");
+    }
+
+    /// The Reese and the FM voice ring at pitch and hold; a bend starts
+    /// away from the pitch and arrives; the wobble MOVES the spectrum —
+    /// the note's brightness (the energy above the wobble's floor) swings
+    /// once per period.
+    #[test]
+    fn reese_fm_bend_and_wobble() {
+        let shape = Shape {
+            attack: 0.01,
+            hold: 1.2,
+            dur: 0.2,
+        };
+        for wave in [Wave::Reese, Wave::Fm] {
+            let s = one(Voice::mono(wave), 55.0, shape);
+            assert!(
+                s.iter().all(|v| v.is_finite() && v.abs() <= 1.0),
+                "{wave:?}"
+            );
+            let measured = pitch_of(&s, 0.4, 1.0);
+            assert!(
+                (measured / 55.0 - 1.0).abs() < 0.02,
+                "{wave:?} rings at {measured:.1} Hz"
+            );
+            assert!(rms(&s, 0.4, 1.0) > 0.08, "{wave:?} too quiet");
+            assert!(rms(&s, shape.total() - 0.02, shape.total()) < 1e-3);
+        }
+        // A bend of −12 st over 0.3 s: an octave below at first, on pitch after.
+        let bent = one(Voice::mono(Wave::Fm).with_bend(-12.0, 0.3), 220.0, shape);
+        assert!(pitch_of(&bent, 0.01, 0.08) < 140.0, "no bend from below");
+        assert!((pitch_of(&bent, 0.6, 1.1) / 220.0 - 1.0).abs() < 0.02);
+        // A wobble of one period per 0.4 s (4 steps of 0.1 s): the treble
+        // energy at the sine's top differs from the bottom, and the two
+        // quarter-period windows a half period apart are the mirror pair.
+        let w = Voice::mono(Wave::Reese).with_wobble(4.0, 100.0, 4000.0, 3.0);
+        let p = Partial {
+            f: 55.0,
+            from: None,
+            peak: 0.5,
+            delay: 0.0,
+        };
+        let s = render_note(&w, &[p], shape, 0.1, SR).unwrap();
+        let treble = |from: f64, to: f64| {
+            // Energy of the first difference = the top end.
+            let (a, b) = ((from * SR) as usize, (to * SR) as usize);
+            (a..b)
+                .map(|i| f64::from(s[i] - s[i - 1]).powi(2))
+                .sum::<f64>()
+                / (b - a) as f64
+        };
+        // Opening first: the sine peaks a quarter period in (0.1 s), troughs
+        // at three quarters (0.3 s); one full period later, the same.
+        let (open, closed) = (treble(0.45, 0.55), treble(0.65, 0.75));
+        assert!(open > closed * 3.0, "no wobble: {open:.2e} vs {closed:.2e}");
+        assert!(
+            (treble(0.85, 0.95) / open - 1.0).abs() < 0.3,
+            "not periodic"
+        );
     }
 
     #[test]

@@ -202,13 +202,14 @@ OPEN — the music engine v2 (in: the format, the engine, the eleven v2 songs
 — tracker-only —, the `compose` builders for the whole format with
 `sodium_lights.rs` as the tour; record: HISTORY.md):
 
-1. MORE INSTRUMENT (the computed strings are in — `audio/dsp.rs`,
-   `Wave::{Guitar, BassGuitar, Violin}`, `salt_road.rs`): per-note start →
-   end modifiers (pitch bend, cutoff sweep), a tempo-synced filter LFO
-   (the wobble), a Reese / FM bass, per-section ramps on the live lane
-   channels (a filter opening over 16 bars, a rising send) — and one track
-   each to show them (a wobble one; a slow-burn one). The computed path
-   could take a unison stack and a stereo bake like the node voices have.
+1. A SLOW-BURN track (the Hydrogen / Moon kind): long sections, section
+   ramps doing the movement (`Ramp::cutoff` / `reverb` / `level`), the
+   strings and the pads, almost no drums — the instrument has everything
+   it needs now (`static_teeth.rs` shows the ramps; the strings are in
+   `salt_road.rs`). Then: the computed path could take a unison stack and
+   a stereo bake like the node voices have; a wobble whose rate CHANGES
+   inside a section (today a wobble is per voice — Static Teeth uses a
+   second Reese on the KEYS lane for its sixteenth-note drop).
 2. A PRODUCT DECISION, not code: which songs the game PLAYS. The roles
    still name the seven briefed tracks; the v2 songs are 27–80 s loops with
    no role. Options: give v2 songs roles, extend them to briefed lengths,

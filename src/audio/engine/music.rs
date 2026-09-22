@@ -75,6 +75,12 @@ impl AudioEngine {
                 .frequency()
                 .set_value_at_time(e.tone.clamp(200.0, 18000.0) as f32, 0.0);
         }
+        for lp in &self.music_lp {
+            let _ = lp.frequency().set_value_at_time(LANE_LP_OPEN_HZ, 0.0);
+        }
+        for g in &self.music_level_node {
+            let _ = g.gain().set_value_at_time(1.0, 0.0);
+        }
         for (lane, shaper) in self.music_drive.iter().enumerate() {
             let drive = voice(lane).map_or(0.0, |v| v.drive);
             if drive > 0.0 {
@@ -320,11 +326,75 @@ impl AudioEngine {
                 self.schedule_filter_sweep(t, step_dur * bar_steps as f64);
             }
             let step = self.playhead.step;
+            if step == 0 {
+                self.schedule_section(t, step_dur);
+            }
             self.schedule_step(step, t + swing_delay(self.song.swing, step, step_dur));
             self.next_note_time += step_dur;
             // The section advances when its LONGEST lane ends (whole bars —
             // asserted by the songs tests).
             self.playhead.advance(&self.song);
+        }
+    }
+
+    /// At a section's start (`t`): every lane's live channel is set to its
+    /// voice's static values — pan, sends, level 1, lowpass open — and the
+    /// section's [`Ramp`]s move them from `from` to `to` across its length
+    /// (linear; the cutoff exponential). Automation on the persistent nodes:
+    /// nothing baked, any voice.
+    pub(super) fn schedule_section(&self, t: f64, step_dur: f64) {
+        let Some(sec) = self.section_ref() else {
+            return;
+        };
+        let secs = section_len(sec) as f64 * step_dur;
+        let end = t + secs.max(0.001);
+        let voice = |lane: usize| self.song.voices.get(lane);
+        let ramp = |lane: usize, param: RampParam| {
+            sec.ramps
+                .iter()
+                .rev()
+                .find(|r| r.lane == lane && r.param == param)
+        };
+        let drive = |p: &webaudio::AudioParam, rest: f64, r: Option<&Ramp>, exp: bool| {
+            let _ = p.cancel_scheduled_values(t);
+            match r {
+                Some(r) => {
+                    let _ = p.set_value_at_time(r.from as f32, t);
+                    let _ = if exp {
+                        p.exponential_ramp_to_value_at_time(r.to.max(1e-3) as f32, end)
+                    } else {
+                        p.linear_ramp_to_value_at_time(r.to as f32, end)
+                    };
+                }
+                None => {
+                    let _ = p.set_value_at_time(rest as f32, t);
+                }
+            }
+        };
+        for (lane, p) in self.music_pan.iter().enumerate() {
+            let rest = voice(lane).map_or(0.0, |v| v.pan).clamp(-1.0, 1.0);
+            drive(&p.pan(), rest, ramp(lane, RampParam::Pan), false);
+        }
+        for (lane, lp) in self.music_lp.iter().enumerate() {
+            drive(
+                &lp.frequency(),
+                f64::from(LANE_LP_OPEN_HZ),
+                ramp(lane, RampParam::Cutoff),
+                true,
+            );
+        }
+        for (lane, g) in self.music_level_node.iter().enumerate() {
+            drive(&g.gain(), 1.0, ramp(lane, RampParam::Level), false);
+        }
+        if let Some(fx) = &self.music_fx {
+            for (lane, send) in fx.echo_send.iter().enumerate() {
+                let rest = voice(lane).map_or(0.0, |v| v.echo).clamp(0.0, 1.0);
+                drive(&send.gain(), rest, ramp(lane, RampParam::Echo), false);
+            }
+            for (lane, send) in fx.verb_send.iter().enumerate() {
+                let rest = voice(lane).map_or(0.0, |v| v.reverb).clamp(0.0, 1.0);
+                drive(&send.gain(), rest, ramp(lane, RampParam::Reverb), false);
+            }
         }
     }
 
@@ -572,15 +642,17 @@ impl AudioEngine {
     }
 
     /// The cheap live stand-in for `voice` (see [`Self::synth_music_note`]):
-    /// one raw oscillator (a preset or a computed string plays as its
-    /// nearest shape, [`osc`]), no filter envelope, no vibrato, no sub; pan,
-    /// envelope override, glide and the lane's drive / sends are kept (they
-    /// live on the channel).
+    /// one raw oscillator (a preset or a computed voice plays as its
+    /// nearest shape, [`osc`]), no filter envelope, no wobble, no vibrato,
+    /// no sub; pan, envelope override, glide, bend and the lane's drive /
+    /// sends are kept (they live on the channel or cost nothing).
     pub(super) fn sketch(voice: &Voice) -> Voice {
         Voice {
             wave: match voice.wave {
-                Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad | Wave::Violin => Wave::Sawtooth,
-                Wave::Guitar | Wave::BassGuitar => Wave::Triangle,
+                Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad | Wave::Violin | Wave::Reese => {
+                    Wave::Sawtooth
+                }
+                Wave::Guitar | Wave::BassGuitar | Wave::Fm => Wave::Triangle,
                 w => w,
             },
             detune: 0.0,
@@ -588,6 +660,7 @@ impl AudioEngine {
             unison: 1,
             filter: None,
             vibrato: None,
+            wobble: None,
             sub: 0.0,
             ..*voice
         }
@@ -664,16 +737,27 @@ impl AudioEngine {
                 None
             };
             let dst = target.as_ref().unwrap_or(&out);
+            let wobbled = voice
+                .wobble
+                .and_then(|w| self.wobble_filter(dst, start, end, &w, self.step_dur()));
+            let dst = wobbled.as_ref().unwrap_or(dst);
             let filtered = voice
                 .filter
                 .and_then(|flt| self.note_filter(dst, start, end, &flt));
             let dst = filtered.as_ref().unwrap_or(dst);
+            // A legato glide comes from the previous note; otherwise the
+            // voice's bend, if any, is where the note starts.
+            let (f0, glide) = match (from, voice.bend) {
+                (Some(ff), _) => (ff * spread, voice.glide),
+                (None, Some(b)) => (f_i * 2f64.powf(b.semitones / 12.0), b.seconds),
+                (None, None) => (f_i, 0.0),
+            };
             self.tone_env(
                 dst,
                 &Tone {
-                    f0: from.map_or(f_i, |ff| ff * spread),
+                    f0,
                     f1: f_i,
-                    glide: voice.glide,
+                    glide,
                     start,
                     attack,
                     hold,
@@ -920,7 +1004,7 @@ impl AudioEngine {
             })
             .collect();
         let sr = ctx.sample_rate();
-        let samples = dsp::render_note(&voice, &partials, shape, f64::from(sr))?;
+        let samples = dsp::render_note(&voice, &partials, shape, step_dur, f64::from(sr))?;
         let buf = ctx.create_buffer(1, samples.len() as u32, sr).ok()?;
         buf.copy_to_channel(&samples, 0).ok()?;
         Some(buf)
