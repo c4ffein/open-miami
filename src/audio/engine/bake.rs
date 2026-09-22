@@ -226,6 +226,14 @@ impl AudioEngine {
             Some(slot) => slot.key,
             None => return false,
         };
+        // A computed voice renders in Rust, synchronously: no offline
+        // context, nothing in flight — the buffer lands right now.
+        if let Some(buf) = self.computed_bake(key) {
+            if let Some(slot) = self.baked_music.slots.borrow_mut().get_mut(i) {
+                slot.buf = Some(buf);
+            }
+            return true;
+        }
         let sr = live.sample_rate();
         let frames = ((sr as f64) * self.music_key_len(key)).ceil().max(1.0) as u32;
         let off = match OfflineAudioContext::new_with_number_of_channels_and_length_and_sample_rate(

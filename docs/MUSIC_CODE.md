@@ -54,9 +54,10 @@ slices.
   `.with_echo(send)`, `.with_reverb(send)`, `.with_sub(level)`,
   `.with_glide(seconds)` (portamento into a LEGATO note — one that starts
   where the previous one ends). `Wave` = the four raw shapes, `Noise`
-  (risers, wind: the degree is ignored) and the three darksynth PRESETS;
-  a preset brings its own graph, so unison / filter / vibrato / glide do
-  not apply to it (envelope, ties, chords, sub, pan, drive, sends do).
+  (risers, wind: the degree is ignored), the three darksynth PRESETS — a
+  preset brings its own graph, so unison / filter / vibrato / glide do
+  not apply to it (envelope, ties, chords, sub, pan, drive, sends do) —
+  and the three COMPUTED strings (below).
 * **Song-level**: `swing` (0..1: the odd sixteenths late by up to a third
   of a step — `swing_delay`), `humanize` (seconds, ≤ 0.02: every note but
   the kicks, never into the clock's past), `sidechain: Sidechain { depth,
@@ -69,6 +70,34 @@ slices.
 
 `docs/music/` has the genre guides; `voice_summary` / the tracker's VOICES
 panel show what a song's instruments are made of.
+
+## Computed voices (`audio/dsp.rs`)
+
+`Wave::Guitar` (a picked steel string), `Wave::BassGuitar` (a fingered
+bass) and `Wave::Violin` (a bowed string) are not built from Web Audio
+nodes: their samples are computed in Rust and copied into the bake buffer
+(`AudioEngine::computed_bake`, synchronous — no offline context). The
+plucked strings are Karplus–Strong loops — a pick-position-notched noise
+burst circulating through a fractional (allpass) delay line and a one-pole
+loss filter, decaying to −60 dB over the model's `t60` at any pitch, plus
+a body resonance; a node graph cannot do this because a feedback loop
+through nodes has a minimum delay of one render quantum (≈ 2.7 ms), which
+caps a string near 370 Hz. The violin is a band-limited (polyBLEP) saw
+with bow noise through three body resonances, under a swell that is never
+shorter than 60 ms.
+
+What the `Voice` builders do to a computed wave: `with_env` (attack /
+gate — a guitar note needs a gate of ~5–6 steps to ring), `with_filter`
+(a state-variable lowpass with the same envelope), `with_vibrato` and
+`with_glide` (the pitch curve is per block), `with_sub`, pan / drive /
+sends; chords play every partial (a plucked chord STRUMS, low string
+first, 14 ms apart — `dsp::STRUM_SECONDS`); no unison stack (mono). The
+live SKETCH of an unbaked computed note is the usual plain oscillator (a
+triangle for the plucked ones, a saw for the violin). Cost: about 7 ms per
+second of audio per partial in release (a strummed triad held a bar ≈
+20 ms), one note per frame; the `salt_road.rs` bake adds ~70 ms of long
+tasks to a page load (measured, headless). `salt_road.rs` is the showcase:
+bass guitar, picked + strummed guitar, two violins.
 
 ## The shape of a song file
 

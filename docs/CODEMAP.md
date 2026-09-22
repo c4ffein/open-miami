@@ -55,7 +55,12 @@ Moved verbatim out of `CLAUDE.md`; keep it current when files move.
   the pure `Playhead` sequencer + `music_keys`, tracker cells, the role
   pickers; host-tested), `audio/voice.rs` (the INSTRUMENT types: `Wave`,
   `Chord`, `Voice`, `Sidechain`, `Echo`, the pure duck / swing curves;
-  re-exported by songs.rs), `audio/compose.rs`, `audio/songs/*.rs`,
+  re-exported by songs.rs), `audio/dsp.rs` (the COMPUTED voices —
+  `Wave::{Guitar, BassGuitar, Violin}`: Karplus–Strong strings and a
+  polyBLEP bowed string rendered sample by sample, `render_note(voice,
+  partials, shape, sr) -> Vec<f32>`; pure, host-tested for pitch / decay /
+  level / speed; `salt_road.rs` is the showcase), `audio/compose.rs`,
+  `audio/songs/*.rs`,
   `audio/sfx.rs` (SFX catalogue +
   bake specs, host-tested), `audio/engine.rs` (the WebAudio
   `AudioEngine`, wasm-only: the struct, consts, lifecycle + small helpers)

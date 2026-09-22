@@ -34,6 +34,15 @@ pub enum Wave {
     /// ignored, its envelope and the voice's [`Filter`] shape the sound —
     /// a riser (long tie, slow filter attack), a snare-ish hit, wind.
     Noise,
+    /// COMPUTED (`audio/dsp.rs`, rendered sample by sample into the bake):
+    /// a plucked steel string — a picked guitar. Chords strum, low string
+    /// first.
+    Guitar,
+    /// COMPUTED: a plucked bass string — a fingered bass guitar.
+    BassGuitar,
+    /// COMPUTED: a bowed string — a violin / viola line. Onsets swell (60 ms
+    /// at least); give it `with_vibrato` and `with_glide`.
+    Violin,
 }
 
 impl Wave {
@@ -42,6 +51,13 @@ impl Wave {
     /// its envelope, ties, chords, sub, pan, lane drive and sends do.
     pub const fn is_preset(self) -> bool {
         matches!(self, Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad)
+    }
+
+    /// A COMPUTED voice is rendered in Rust (`audio/dsp.rs`), not from Web
+    /// Audio nodes: no unison stack (mono), but the [`Voice`]'s filter
+    /// envelope, vibrato, glide, sub and chords all apply.
+    pub const fn is_computed(self) -> bool {
+        matches!(self, Wave::Guitar | Wave::BassGuitar | Wave::Violin)
     }
 }
 
@@ -300,7 +316,11 @@ impl Voice {
     /// only exists with a detune to spread it over, and only on a raw shape
     /// (noise has no pitch, a preset brings its own stack).
     pub fn oscillators(&self) -> usize {
-        if self.detune > 0.0 && self.wave != Wave::Noise && !self.wave.is_preset() {
+        if self.detune > 0.0
+            && self.wave != Wave::Noise
+            && !self.wave.is_preset()
+            && !self.wave.is_computed()
+        {
             (self.unison.clamp(1, 7)) as usize
         } else {
             1
@@ -421,6 +441,9 @@ pub fn voice_summary(v: &Voice) -> String {
         Wave::DrivenBass => "DRIVEN BASS",
         Wave::DarkPad => "DARK PAD",
         Wave::Noise => "NOISE",
+        Wave::Guitar => "GUITAR",
+        Wave::BassGuitar => "BASS GTR",
+        Wave::Violin => "VIOLIN",
     };
     let mut parts = Vec::new();
     let n = v.oscillators();

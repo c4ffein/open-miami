@@ -7,6 +7,7 @@
 //! mock under `cargo test` — so its voice builders run natively too and the
 //! node graphs they build are host-tested (`engine/tests.rs`).
 pub mod compose;
+pub mod dsp;
 pub mod sfx;
 pub mod songs;
 pub mod voice;

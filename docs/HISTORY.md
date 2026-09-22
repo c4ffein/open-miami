@@ -353,4 +353,23 @@ fingerprint (`tests/ai_fingerprint.rs`).
   chord roots, an octave up; the fingerprint caught it). Mutation-tested
   6 / 6. The seven briefed tracks build unchanged (the default song is what
   they got before).
+- **Computed voices (2026-09): strings rendered in Rust.** `Wave::Guitar` /
+  `BassGuitar` / `Violin` skip the offline context: `audio/dsp.rs` computes
+  the samples (Karplus–Strong with an allpass fractional delay; a polyBLEP
+  saw through body resonances) and `computed_bake` copies them into an
+  `AudioBuffer` at once. Found on the way: (1) a LINEAR-interpolated
+  fractional delay is a lowpass — with it the string died in a few hundred
+  ms whatever the loss coefficient; allpass interpolation fixed the decay;
+  (2) the loss must be per TRIP round the loop (per period), not per sample
+  — the first version decayed 200× too fast at 220 Hz; (3) per-sample
+  `sin` / `powf` / `exp` for pitch, loss and filter coefficients cost more
+  than the string itself: 46 ms for a strummed triad held a bar; computed
+  per 32-sample block instead — 21 ms (release), no audible difference (the
+  tests' pitch / decay assertions hold). A plucked string's RMS is ~3× under
+  a saw's at the same peak: the burst is levelled so the RINGING string
+  sits near a saw, its crest allowed past 1 (the bus soft-clip has the
+  headroom). Salt Road measured 2–3× under Sodium Lights at
+  `melodic_gain` 1.0 (brushed kit, spiky plucks): lifted to 1.3 and
+  intensity 0.9. Long tasks on a page load that bakes it: 5 / 533 ms
+  against 4 / 462 ms for a node-baked song (headless Chromium).
 

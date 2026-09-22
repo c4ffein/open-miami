@@ -44,7 +44,10 @@
 //! current song's voices, then the rare SFX; a song switch re-enumerates
 //! and bakes in the background while unbaked notes fall back to a LIGHT
 //! live sketch (one plain oscillator per partial — bounded cost, see
-//! `AudioEngine::sketch`).
+//! `AudioEngine::sketch`). The COMPUTED voices (`Wave::is_computed`: the
+//! plucked / bowed strings of `audio/dsp.rs`) skip the offline context:
+//! their samples are rendered in Rust and copied into the buffer at once
+//! (`AudioEngine::computed_bake`).
 //!
 //! Robustness first: if the `AudioContext` (or any node) fails to build we
 //! silently degrade to silence. Nothing in here ever panics or unwraps a
@@ -649,10 +652,13 @@ fn osc(wave: Wave) -> OscillatorType {
     match wave {
         Wave::Sine => OscillatorType::Sine,
         Wave::Square => OscillatorType::Square,
-        Wave::Sawtooth | Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad | Wave::Noise => {
-            OscillatorType::Sawtooth
-        }
-        Wave::Triangle => OscillatorType::Triangle,
+        Wave::Sawtooth
+        | Wave::Supersaw
+        | Wave::DrivenBass
+        | Wave::DarkPad
+        | Wave::Noise
+        | Wave::Violin => OscillatorType::Sawtooth,
+        Wave::Triangle | Wave::Guitar | Wave::BassGuitar => OscillatorType::Triangle,
     }
 }
 

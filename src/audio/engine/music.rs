@@ -4,6 +4,7 @@
 //! driven / darkpad presets, the live sketch) and the drum kit.
 
 use super::*;
+use crate::audio::dsp;
 
 impl AudioEngine {
     // --- music -------------------------------------------------------------
@@ -571,13 +572,15 @@ impl AudioEngine {
     }
 
     /// The cheap live stand-in for `voice` (see [`Self::synth_music_note`]):
-    /// one raw oscillator (a preset plays as its nearest shape, [`osc`]), no
-    /// filter envelope, no vibrato, no sub; pan, envelope override, glide
-    /// and the lane's drive / sends are kept (they live on the channel).
+    /// one raw oscillator (a preset or a computed string plays as its
+    /// nearest shape, [`osc`]), no filter envelope, no vibrato, no sub; pan,
+    /// envelope override, glide and the lane's drive / sends are kept (they
+    /// live on the channel).
     pub(super) fn sketch(voice: &Voice) -> Voice {
         Voice {
             wave: match voice.wave {
-                Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad => Wave::Sawtooth,
+                Wave::Supersaw | Wave::DrivenBass | Wave::DarkPad | Wave::Violin => Wave::Sawtooth,
+                Wave::Guitar | Wave::BassGuitar => Wave::Triangle,
                 w => w,
             },
             detune: 0.0,
@@ -864,6 +867,63 @@ impl AudioEngine {
             let _ = sched.start_with_when(t);
             let _ = sched.stop_with_when(end + 0.02);
         }
+    }
+
+    /// The bake of a COMPUTED voice's note (`Wave::is_computed`): the same
+    /// pitches, voicing, level and envelope times [`Self::synth_music_note`]
+    /// would build nodes for, rendered by `audio/dsp.rs` into a mono buffer
+    /// of the live context. `None` for a drum or a node-built voice (the
+    /// caller then runs the offline render).
+    pub(super) fn computed_bake(&self, key: MusicKey) -> Option<AudioBuffer> {
+        let ctx = self.ctx.as_ref()?;
+        let MusicKey::Note {
+            lane,
+            degree,
+            len,
+            chord,
+            from,
+        } = key
+        else {
+            return None;
+        };
+        let s = &self.song;
+        let voice = *s.voices.get(lane)?;
+        if !voice.wave.is_computed() {
+            return None;
+        }
+        let step_dur = self.step_dur();
+        let (gate, level, attack) = voice_shape(s, lane);
+        let gain = MUSIC_GAIN * s.intensity * s.melodic_gain;
+        let shape = dsp::Shape {
+            attack,
+            hold: step_dur * f64::from(len.max(1) - 1),
+            dur: step_dur * gate,
+        };
+        let degrees = chord.degrees();
+        let split = level / (degrees.len().max(1) as f64).sqrt();
+        // A plucked chord strums, low string first; a bowed one speaks at once.
+        let strum = if voice.wave == Wave::Violin {
+            0.0
+        } else {
+            dsp::STRUM_SECONDS
+        };
+        let partials: Vec<dsp::Partial> = degrees
+            .iter()
+            .enumerate()
+            .map(|(i, &interval)| dsp::Partial {
+                f: degree_freq(s.root, s.scale, degree + interval),
+                from: from
+                    .filter(|_| voice.glides())
+                    .map(|d| degree_freq(s.root, s.scale, d + interval)),
+                peak: gain * split,
+                delay: i as f64 * strum,
+            })
+            .collect();
+        let sr = ctx.sample_rate();
+        let samples = dsp::render_note(&voice, &partials, shape, f64::from(sr))?;
+        let buf = ctx.create_buffer(1, samples.len() as u32, sr).ok()?;
+        buf.copy_to_channel(&samples, 0).ok()?;
+        Some(buf)
     }
 
     /// Seconds of dry signal one music voice needs when baked

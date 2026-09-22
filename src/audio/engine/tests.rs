@@ -12,7 +12,7 @@
 //! - a sound longer than its bake length is TRUNCATED once pre-rendered —
 //!   the baked and the live version of the same sound then differ.
 
-use super::webaudio::{graphs, reset_graphs, EventKind, Graph, NodeKind};
+use super::webaudio::{graphs, reset_graphs, EventKind, Graph, NodeKind, MOCK_SAMPLE_RATE};
 use super::*;
 
 /// The graph the offline bake of `build` assembled (the last offline context
@@ -175,6 +175,17 @@ fn every_song_bakes_every_note_voice_and_each_fits_its_length() {
         let keys = music_keys(song);
         assert!(!keys.is_empty(), "song {si} schedules no voice");
         for (i, key) in keys.iter().enumerate() {
+            let computed =
+                matches!(key, MusicKey::Note { lane, .. } if song.voices[*lane].wave.is_computed());
+            if computed {
+                // Rendered in Rust, no graph: the buffer lands at once.
+                assert!(engine.render_music_slot(i), "song {si} {key:?}");
+                let slots = engine.baked_music.slots.borrow();
+                let frames = slots[i].buf.as_ref().map(|b| b.frames);
+                let expect = (key_seconds(song, *key) * f64::from(MOCK_SAMPLE_RATE)).ceil() as u32;
+                assert_eq!(frames, Some(expect), "song {si} {key:?}");
+                continue;
+            }
             let g = offline_graph(|| {
                 engine.render_music_slot(i);
             });
@@ -206,6 +217,58 @@ fn the_music_level_is_the_bus_gain() {
     assert!(g
         .iter()
         .all(|e| e.node == bus.as_ref().id && e.param == "gain"));
+}
+
+/// A COMPUTED voice (the strings of `audio/dsp.rs`) bakes synchronously —
+/// no offline context, nothing in flight — and its live sketch is one
+/// plain oscillator per partial like any other voice's.
+#[test]
+fn computed_voices_bake_at_once_and_sketch_like_the_rest() {
+    reset_graphs();
+    let mut engine = AudioEngine::new();
+    let song = song_named("Salt Road");
+    engine.set_song(song);
+    let contexts = graphs().len();
+    let keys = music_keys(&song);
+    let computed: Vec<usize> = (0..keys.len())
+        .filter(|&i| matches!(keys[i], MusicKey::Note { lane, .. } if song.voices[lane].wave.is_computed()))
+        .collect();
+    assert!(computed.len() > 20, "{} computed keys", computed.len());
+    for &i in &computed {
+        assert!(engine.render_music_slot(i));
+    }
+    assert_eq!(graphs().len(), contexts, "a computed bake opened a context");
+    assert_eq!(engine.renders_in_flight.get(), 0);
+    assert!(computed
+        .iter()
+        .all(|&i| engine.baked_music.slots.borrow()[i].buf.is_some()));
+    // A drum of the same song still goes through the offline render.
+    let drum = keys
+        .iter()
+        .position(|k| matches!(k, MusicKey::Drum(_)))
+        .unwrap();
+    assert!(engine.computed_bake(keys[drum]).is_none());
+    // The sketch of a guitar note: one triangle; of a violin: one saw.
+    let live = std::rc::Rc::clone(&graphs()[0]);
+    let mut osc_types = Vec::new();
+    for lane in [ARP, LEAD] {
+        let key = keys
+            .iter()
+            .find(
+                |k| matches!(k, MusicKey::Note { lane: l, chord: Chord::Single, .. } if *l == lane),
+            )
+            .unwrap();
+        let before = live.borrow().nodes.len();
+        engine.synth_music_note(*key, 1.0, 1.0, false);
+        let g = live.borrow();
+        let oscs: Vec<String> = g.nodes[before..]
+            .iter()
+            .filter(|n| n.kind == NodeKind::Oscillator)
+            .map(|n| n.type_name.clone().unwrap())
+            .collect();
+        osc_types.push(oscs);
+    }
+    assert_eq!(osc_types, [vec!["Triangle"], vec!["Sawtooth"]]);
 }
 
 /// The song named `name` (the tracker's list).

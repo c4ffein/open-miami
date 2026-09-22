@@ -67,6 +67,7 @@ pub mod last_exit;
 pub mod mask_of_dread;
 pub mod neon_checksum;
 pub mod neon_lounge;
+pub mod salt_road;
 pub mod service_corridor;
 pub mod signal_rot;
 pub mod sodium_lights;
@@ -354,7 +355,7 @@ pub struct SongSpec {
 }
 
 /// Number of songs in [`SONGS`].
-pub const SONG_COUNT: usize = 18;
+pub const SONG_COUNT: usize = 19;
 
 /// How many of [`SONGS`] — the first ones — are the BRIEFED soundtrack
 /// (`docs/music/TRACKS.md`): the tracks the game plays by role and the role
@@ -389,6 +390,7 @@ pub static SONGS: LazyLock<[SongSpec; SONG_COUNT]> = LazyLock::new(|| {
         blood_engine::spec(),
         static_prayer::spec(),
         mask_of_dread::spec(),
+        salt_road::spec(),
     ]
 });
 

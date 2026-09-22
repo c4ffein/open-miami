@@ -65,7 +65,15 @@ peak, `compose`-built songs make the centre-pan law up, the live SKETCH of an
 unbaked note is bounded (one oscillator per partial), and the scheduler —
 driven a frame at a time against the mock clock through a whole play-through
 of every song — is never in the clock's past (humanize included) and ducks
-exactly on the kicks of ducked sections.
+exactly on the kicks of ducked sections; a COMPUTED voice's note bakes at
+once (no offline context, nothing in flight, the buffer the length
+`key_seconds` says) and sketches like any other. The computed voices
+themselves (`src/audio/dsp.rs`) are tested as signals: every string rings
+at its pitch (autocorrelation, ±1.5 %), decays but still rings at half a
+second, ends silent, stays finite; the violin swells and holds; a glide
+arrives at its target; a strum staggers; the filter envelope darkens; the
+sub adds weight; the same note bakes the same samples; a big note renders
+under 150 ms even in debug (~20 ms release).
 
 **Refactoring the AI?** `tests/ai_fingerprint.rs` is an `#[ignore]`d tool, not
 a check: it hashes every enemy's state on every tick of every floor. Run it
