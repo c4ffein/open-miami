@@ -63,7 +63,8 @@ Moved verbatim out of `CLAUDE.md`; keep it current when files move.
   host-tested for pitch / decay / level / speed; `salt_road.rs` is the
   strings' showcase, `static_teeth.rs` the modifiers' — `with_bend`,
   `with_wobble`, section `Ramp`s on the live lane channels: the lane's
-  lowpass + level nodes, `schedule_section`), `audio/compose.rs`,
+  lowpass + level nodes, `schedule_section` — and `low_tide.rs` the
+  slow-burn one, all movement by ramps), `audio/compose.rs`,
   `audio/songs/*.rs`,
   `audio/sfx.rs` (SFX catalogue +
   bake specs, host-tested), `audio/engine.rs` (the WebAudio

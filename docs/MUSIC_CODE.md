@@ -72,7 +72,11 @@ slices.
   (a fade). Automation on the persistent nodes: nothing to bake, any
   voice; a parameter no ramp names is restored to the voice's value at
   every section start. A filter opening over sixteen bars, a lead sinking
-  into the hall, an outro fading: this is where slow movement lives.
+  into the hall, an outro fading: this is where slow movement lives —
+  `low_tide.rs` (eight sections of eight bars, 2:34) is built on nothing
+  else: the pad's and the arpeggio's lowpasses open across whole
+  sections, the arpeggio fades in over the first twenty seconds, the lead
+  sinks into the hall as the drums leave, the pad fades out at the end.
 * **Song-level**: `swing` (0..1: the odd sixteenths late by up to a third
   of a step — `swing_delay`), `humanize` (seconds, ≤ 0.02: every note but
   the kicks, never into the clock's past), `sidechain: Sidechain { depth,

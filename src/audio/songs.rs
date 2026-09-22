@@ -64,6 +64,7 @@ pub mod deep_static;
 pub mod descent;
 pub mod insert_coin;
 pub mod last_exit;
+pub mod low_tide;
 pub mod mask_of_dread;
 pub mod neon_checksum;
 pub mod neon_lounge;
@@ -360,7 +361,7 @@ pub struct SongSpec {
 }
 
 /// Number of songs in [`SONGS`].
-pub const SONG_COUNT: usize = 20;
+pub const SONG_COUNT: usize = 21;
 
 /// How many of [`SONGS`] — the first ones — are the BRIEFED soundtrack
 /// (`docs/music/TRACKS.md`): the tracks the game plays by role and the role
@@ -397,6 +398,7 @@ pub static SONGS: LazyLock<[SongSpec; SONG_COUNT]> = LazyLock::new(|| {
         mask_of_dread::spec(),
         salt_road::spec(),
         static_teeth::spec(),
+        low_tide::spec(),
     ]
 });
 

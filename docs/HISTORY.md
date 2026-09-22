@@ -390,4 +390,9 @@ fingerprint (`tests/ai_fingerprint.rs`).
   looked at the LFO's depth (a wobble of depth 0 passed). The format
   change (three new fields) re-pinned the Sodium Lights fingerprint — same
   notes.
+- **"Low Tide" (2026-09): the slow-burn track.** Eight sections of eight
+  bars at 100 bpm (2:34), built on the section ramps — every change is a
+  ramp, none a jump. 53 bake keys (the tied sine lead is 22 of them: pitch
+  × length × legato origin). Written blind, like the two showcase tracks
+  before it: the engine's structure is tested, the taste is the listener's.
 
