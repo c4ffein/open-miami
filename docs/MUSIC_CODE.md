@@ -6,17 +6,17 @@ native unit tests as everything else (`cargo test audio`). There are TWO
 ways to write one, and both produce the same `SongSpec`:
 
 * with the builder layer in `src/audio/compose.rs` — composable functions
-  (riffs, sections, an arrangement). The seven BRIEFED tracks of the
-  soundtrack are written this way (`docs/music/TRACKS.md`; the genre guides
-  next to it say what each style must convey and how). The builders cover
-  the CLASSIC part of the format: four melodic lanes, one kick / hat /
-  snare lane, a `Wave` per voice, per-channel levels, `.ducked()`;
-* as `const` section literals against the FULL v2 format (below): the
-  eleven songs listed after the briefed ones (`insert_coin.rs` …
-  `blood_engine.rs`; `sodium_lights.rs` is the tour — ties, velocity and
-  chord lanes, KEYS + PERC, stereo voices, echo + hall sends). They are
-  tracker-listed (`?viz` → MUSICS) and have NO ROLE in the game yet; they
-  are 27–80 s loops where the briefed tracks are 2–4.5 min arrangements.
+  (riffs, sections, an arrangement), which covers the WHOLE format. The
+  seven BRIEFED tracks of the soundtrack are written this way
+  (`docs/music/TRACKS.md`; the genre guides next to it say what each style
+  must convey and how) — with the classic instrument so far —, and so is
+  `sodium_lights.rs`, THE TOUR of the v2 side (ties, velocity and chord
+  lanes, KEYS + PERC, the big kit, stereo voices, echo + hall sends);
+* as `const` section literals against the raw format (below): the ten
+  other songs listed after the briefed ones (`insert_coin.rs` …
+  `blood_engine.rs`). Both kinds are tracker-listed (`?viz` → MUSICS);
+  the eleven v2 songs have NO ROLE in the game yet and are 27–80 s loops
+  where the briefed tracks are 2–4.5 min arrangements.
 
 The playback side is plain data: a finished song is a `SongSpec` — key,
 tempo, a `Voice` per melodic lane, the song-level bus settings, an ordered
@@ -147,23 +147,37 @@ fails `soundtrack_roles_follow_the_briefs`), add its target length to
   `PHRYGIAN_DOMINANT`, `LOCRIAN`) live in `songs.rs`/`compose.rs`.
   Degrees are SCALE degrees: on a 7-note scale 7 is the octave, and
   `transpose(riff, 4)` in Locrian is a tritone shift (`signal_rot.rs`).
-* **`Lane`** (melodic) — from `steps("0 . 3 . | 5 . 3 .")` (whitespace and
-  `|` cosmetic; multi-line raw strings read one bar per line) or
+* **`Lane`** (melodic) — from `steps("0 _ _ . | 5 . 3 .")` (`.` rest, `_`
+  a TIE: the previous note holds through the step; whitespace and `|`
+  cosmetic; multi-line raw strings read one bar per line) or
   `Lane::from(vec![...])`. `&str` converts implicitly wherever a lane is
   expected: `bass("0 . 3 .")` just works.
 * **`DrumLane`** — from `hits("k.h.k.h.")`: `.` silent, `k` kick, `h` hat,
-  `s` snare. One drum per step: a snare on 2 and 4 REPLACES the kick there
-  (`k.h.k.s.` is the four-on-the-floor idiom).
-* **Combinators** — `transpose(riff, +3)` (scale degrees; rests stay),
-  `repeat(riff, 4)`, `cat([a, b, c])` / `a.then(b)` (`cat_hits` for
+  `s` snare, `c` clap, `o` open hat, `t` tom, `r` rim, `x` crash. One drum
+  per step per lane: a snare on 2 and 4 REPLACES the kick there
+  (`k.h.k.s.` is the four-on-the-floor idiom) — what has to hit TOGETHER
+  goes on the second lane, `perc(..)`.
+* **Combinators** — `transpose(riff, +3)` (scale degrees; rests and ties
+  stay), `repeat(riff, 4)`, `cat([a, b, c])` / `a.then(b)` (`cat_hits` for
   drums), `every_other_bar(a, b)` (rest-padded to align), `stretch(riff,
-  2)` (every step becomes two — a motif at half speed), `sparsify(riff,
-  seed, 0.3)` (seeded xorshift; same seed = same holes).
+  2)` (every step becomes two — a motif at half speed, plucked) /
+  `held(riff, 2)` (the same, SUSTAINED: the note then ties), `sustain(riff)`
+  (every rest after a note becomes a tie: legato), `sparsify(riff, seed,
+  0.3)` (seeded xorshift; same seed = same holes; a dropped note takes its
+  ties with it).
+* **Velocity + chord lanes** — `accents("9.6.")` (one char a step: a digit
+  `0`–`9`, `.` = full, `0` skips the note) and `chords("7 t 9 t")` (`.`
+  the lane's default, `s o p t 2 4 7 9 i j w` = `Chord::{Single, Octave,
+  Power, Triad, Sus2, Sus4, Seventh, Add9, Inv1, Inv2, Open}`;
+  `.each(16)` = one token per BAR). Both loop under the part's lane.
 * **Parts** — `bass(..)`, `lead(..)`, `pad(..)` (notes bloom into triads at
-  playback), `arp(..)`, `drums(..)`; `with_velocity(part, 0.8)` /
-  `part.vel(0.8)` scales its CHANNEL for the section (applied at schedule
-  time — costs nothing in the bake budget). Two parts on one channel
-  overlay; their velocities MULTIPLY, so scale one of them.
+  playback), `arp(..)`, `keys(..)`, `drums(..)`, `perc(..)`;
+  `with_velocity(part, 0.8)` / `part.vel(0.8)` scales its CHANNEL for the
+  section, `.accents(..)` sets its per-step velocity, `.voiced(..)` its
+  per-step voicing (all applied at schedule time / in the bake key — the
+  accents cost nothing in the bake budget). Two parts on one channel
+  overlay; their levels MULTIPLY, so scale one of them; each part's
+  accents / voicing follow ITS notes through the overlay.
 * **`section(label, [parts])`** — same-channel parts overlay (shorter
   loops under longer, later non-rest steps win); `.ducked()` arms the
   sidechain. Lanes inside a section may differ in length — a section plays
@@ -171,39 +185,46 @@ fails `soundtrack_roles_follow_the_briefs`), add its target length to
   lane phases 3-against-4 over 16-step bars) — but the longest lane must
   be whole bars (enforced by `sections_are_bar_aligned`).
 * **`song(name, key, bpm)`** — `.steps_per_beat(4)` (default), `.waves(..)`
-  per voice, `.intensity(0.5 lounge .. 1.2 boss)`, `.arrange([...])`,
+  (plain centred shapes, bass / lead / pad / arp) or `.voices(..)` (the
+  full `Voice` per lane, incl. keys), `.intensity(0.5 lounge .. 1.2
+  boss)`, `.swing(0..1)`, `.sidechain(Sidechain::new(depth, beats))`,
+  `.echo(Echo::new(steps, feedback, tone))`, `.humanize(s)`, `.sweep(0..1)`,
+  `.melodic_gain(..)` (see "the lane channels"), `.arrange([...])`,
   `.build()`.
 
 ## What the engine can and cannot do
 
 Compose against the instrument you have. `audio/engine` plays a song as
 baked one-shots per `MusicKey` through the lane channels and the music
-bus. What the `compose` BUILDERS can express (the v2 format above goes
-further — until the builders learn it, a song that needs ties, velocity
-lanes, the big kit or stereo voices is written as `const` literals):
+bus:
 
 * **Note lengths per channel**, in steps: bass ≈ 1.9, lead ≈ 0.9, arp ≈
   0.7, keys ≈ 1.2, pad = 4 (one beat; the dark pad's attack takes the
-  first step). Built songs have no ties: a long note is a RETRIGGER — a
-  pad "held" for a bar is `0 . . . 0 . . . 0 . . . 0 . . .`, a droning
-  lead is the same degree on every step at a low velocity
-  (`thermal_mass.rs`'s `drone`).
-* **The pad blooms a triad** (root + third + fifth of the scale) per note:
-  chord = one degree. Extensions (9ths, 11ths) come from the arp or lead
-  sitting on top (`coast_home.rs`'s raindrops over the Am bed).
-* **Three drums** in `hits()`: kick, hat, snare — "metallic ticks" are
-  sparse hats, a stutter is `ssss`, a burst is `hhhh`.
-* **The grid is straight 16ths** (built songs: `swing` 0, `humanize` 0); a
-  12-step lane against 16-step bars makes the grid breathe.
-* **Plain centred voices** (`Voice::mono(wave)`): no pan, drive or sends;
-  the `Supersaw` / `DarkPad` presets carry their own spread.
+  first step) — the PLUCK after a note's last step. A tie (`_`) holds the
+  note at its peak through the tied steps first; without ties a long note
+  is a RETRIGGER (a pad "held" for a bar is `0 . . . 0 . . . 0 . . . 0 . .
+  .`), which the briefed tracks still use (`thermal_mass.rs`'s `drone`).
+* **The pad blooms a triad** (root + third + fifth of the scale) per note
+  by default; `.voiced(..)` changes the voicing per step on any melodic
+  lane. Every partial plays at 1/√n of the lane's level.
+* **The kit**: kick, hat, snare, clap, open hat, tom, rim, crash — one
+  piece per step per lane, two lanes.
+* **The grid is straight 16ths** unless the song says `.swing(..)` /
+  `.humanize(..)`; a 12-step lane against 16-step bars makes the grid
+  breathe either way.
+* **Voices**: raw shapes take the whole `Voice` (unison stack, filter
+  envelope, vibrato, glide, sub, noise); the `Supersaw` / `DarkPad` /
+  `DrivenBass` presets carry their own graph (envelope, ties, chords,
+  sub, pan, drive and sends still apply).
 * **The bus, per song**: `intensity` sets the level and the per-bar
-  lowpass sweep's peak (higher = darker, tighter); a section's
-  `.ducked()` pumps the melodic lanes on every kick through the song's
-  `Sidechain` — the builder writes depth `DUCK_DEPTH` (0.65: a dip to
-  0.35) and a release of `DUCK_RECOVERY` (0.3 s) at the song's tempo.
-* **Dynamics** are per channel per section (`.vel` → `Section::level`).
-  A fade is a sequence of thinner sections.
+  lowpass sweep's peak (higher = darker, tighter; `.sweep(..)` its
+  depth); a section's `.ducked()` pumps the melodic lanes on every kick
+  through the song's `Sidechain` — by default depth `DUCK_DEPTH` (0.65: a
+  dip to 0.35) and a release of `DUCK_RECOVERY` (0.3 s) at the song's
+  tempo.
+* **Dynamics**: per channel per section (`.vel` → `Section::level`) times
+  the per-step `.accents(..)`; no automation yet — a fade is a sequence of
+  thinner sections or an accent ramp.
 * **Bake budget**: each song's voice set (`music_keys`) must stay ≤ 96
   keys — distinct (degree, tied length, voicing) per melodic lane + the
   kit pieces used. The briefed tracks use 15–34, the v2 songs up to 53.

@@ -198,19 +198,26 @@ how each move was proven bit-exact: [HISTORY.md](HISTORY.md)):
 
 ## What's next
 
-OPEN — the music engine v2 port (step 1 is in: the format, the engine, the
-eleven v2 songs as tracker-only `const` literals; record: HISTORY.md):
+OPEN — the music engine v2 (in: the format, the engine, the eleven v2 songs
+— tracker-only —, the `compose` builders for the whole format with
+`sodium_lights.rs` as the tour; record: HISTORY.md):
 
-1. `compose` v2 AUTHORING: ties (`_` in `steps`), per-step velocity and
-   chord lanes, `keys(..)` / `perc(..)` parts, the big kit in `hits`,
-   `.voices(..)` / `.swing(..)` / `.sidechain(..)` / `.echo(..)` on the
-   song builder — so a v2 song can be written as composable functions, and
-   the briefed tracks can use the instrument (`docs/MUSIC_CODE.md` lists
-   what the builders cannot express yet).
+1. MORE INSTRUMENT: computed voices (a plucked string / bass, a bowed
+   string — sample-by-sample Rust into the bake buffer, which Web Audio
+   nodes cannot do: a feedback loop's minimum delay caps Karplus-Strong
+   near 340 Hz), per-note start → end modifiers (pitch bend, cutoff
+   sweep), a tempo-synced filter LFO (the wobble), per-section ramps on
+   the live lane channels (a filter opening over 16 bars, a rising send)
+   — and one track each to show them (guitar / bass / violin; a wobble
+   one; a slow-burn one).
 2. A PRODUCT DECISION, not code: which songs the game PLAYS. The roles
    still name the seven briefed tracks; the v2 songs are 27–80 s loops with
    no role. Options: give v2 songs roles, extend them to briefed lengths,
-   or re-voice the briefed tracks with v2 instruments.
+   or re-voice the briefed tracks with v2 instruments (the builders can
+   now: `.voices(..)`, ties, accents).
+3. The ten remaining `const`-literal songs could be rewritten with the
+   builders like Sodium Lights was (pin the fingerprint first, as
+   `the_compose_rewrite_of_sodium_lights_is_the_same_song` does).
 
 Done before that (HISTORY.md): the
 renderer-only pixel tests, the DRIVE mirror pin, the renderer's subsystems as

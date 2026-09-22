@@ -30,15 +30,17 @@ Moved verbatim out of `CLAUDE.md`; keep it current when files move.
   material — the ending quotes `neon_checksum::motif()`); `build()`
   produces the `SongSpec` structures the sequencer plays (`SONGS` is a
   LazyLock in songs.rs). AFTER the 7 briefed tracks `SONGS` lists 11
-  TRACKER-ONLY songs (no role yet; 27–80 s loops) written as `const`
-  section literals against the full FORMAT v2 — 7 channels (`BASS LEAD PAD
-  ARP KEYS` + `DRUMS PERC`, an 8-piece kit), `HOLD` ties, per-step
-  velocity + chord lanes, a `Voice` per lane (pan, unison stack + width,
-  filter envelope, vibrato, env, drive, echo / hall sends, sub, glide,
-  `Wave::Noise`), song-level `swing` / `humanize` / `Sidechain` / `Echo` /
-  `sweep` — which the `compose` builders only cover the classic part of
-  so far. No JSON, no generator — `docs/MUSIC_CODE.md` documents the
-  format, the API AND what the builders can / cannot express; genre
+  TRACKER-ONLY songs (no role yet; 27–80 s loops) written against the
+  full FORMAT v2 — 7 channels (`BASS LEAD PAD ARP KEYS` + `DRUMS PERC`, an
+  8-piece kit), `HOLD` ties, per-step velocity + chord lanes, a `Voice`
+  per lane (pan, unison stack + width, filter envelope, vibrato, env,
+  drive, echo / hall sends, sub, glide, `Wave::Noise`), song-level `swing`
+  / `humanize` / `Sidechain` / `Echo` / `sweep` — `sodium_lights.rs` with
+  the builders (which cover the whole format: `_` ties, `held` /
+  `sustain`, `.accents` / `.voiced`, `keys` / `perc`, `.voices` + the song
+  settings; the tour), the other ten as `const` section literals. No
+  JSON, no generator — `docs/MUSIC_CODE.md` documents the format and the
+  API; genre
   guides (each with an "Engine reality" section) + track briefs in
   `docs/music/`. Voice presets incl. darksynth's `Wave::{Supersaw,
   DrivenBass, DarkPad}` and a host-tested SIDECHAIN DUCK (`Section::duck`

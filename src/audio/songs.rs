@@ -862,6 +862,28 @@ mod tests {
     use super::Drum::{Clap, Crash, Hat, OpenHat, Rim, Snare, Tom};
     use super::*;
 
+    /// FNV-1a of a song's full `Debug` form: every lane, velocity, chord,
+    /// level, voice and setting. Two songs with the same fingerprint are the
+    /// same data — what pins a song REWRITTEN from `const` literals to the
+    /// `compose` builders to exactly the notes it had.
+    fn fingerprint(song: &SongSpec) -> u64 {
+        format!("{song:?}")
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            })
+    }
+
+    /// "Sodium Lights" was written as `const` literals (the v2 format's tour)
+    /// and REWRITTEN with the `compose` v2 builders: the rewrite is the same
+    /// song, to the last velocity digit.
+    #[test]
+    fn the_compose_rewrite_of_sodium_lights_is_the_same_song() {
+        let song = SONGS.iter().find(|s| s.name == "Sodium Lights").unwrap();
+        println!("Sodium Lights fingerprint: {:#x}", fingerprint(song));
+        assert_eq!(fingerprint(song), 0x3db1_d755_5ea1_0247);
+    }
+
     /// The briefed soundtrack (the tracks the game plays by role).
     fn briefed() -> &'static [SongSpec] {
         &SONGS[..BRIEFED_SONGS]

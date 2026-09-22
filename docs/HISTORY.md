@@ -342,4 +342,15 @@ fingerprint (`tests/ai_fingerprint.rs`).
   near the end of the run, and the new tests filled them. The pages render in
   software, so the box is CPU-bound: the 22-test run takes ~125 s at 2, 3 AND
   4 workers, while that test takes 34 / 53 / 57 s. Local workers are now 2.
+- **`compose` learned the whole v2 format (2026-09).** Ties (`_`), `held` /
+  `sustain`, `accents` / `chords` lanes that follow their part through a
+  section's overlay, `keys` / `perc` parts, the eight-piece kit in `hits`,
+  `.voices` and the song-level settings. Proven by REWRITING Sodium Lights
+  (the v2 tour, 259 lines of `const` literals) as 180 lines of composable
+  functions and pinning the rewrite to the FNV fingerprint of the literal
+  song's full `Debug` form, taken before the rewrite: same song to the last
+  velocity digit (the first attempt was not — the bass reused the pad's
+  chord roots, an octave up; the fingerprint caught it). Mutation-tested
+  6 / 6. The seven briefed tracks build unchanged (the default song is what
+  they got before).
 

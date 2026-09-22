@@ -193,10 +193,11 @@
   game_events,world_render,menus,viz,viz/*,url,perf}.rs` (`update_game` =
   a spine of named phases: their ORDER is the behaviour), `editor_ui.rs`,
   `input.rs`. AUDIO: `audio/` (music is CODE: one song = one Rust file in
-  `audio/songs/` — built with the authoring API `audio/compose.rs`, or
-  `const` literals of the full format: `audio/songs.rs` + the instrument
-  types in `audio/voice.rs`; docs/MUSIC_CODE.md. A baked note is DRY: pan,
-  drive, echo / hall sends, duck and sweep are live per-lane channels.
+  `audio/songs/` — built with the authoring API `audio/compose.rs` (it
+  covers the whole format), or `const` literals of it: `audio/songs.rs` +
+  the instrument types in `audio/voice.rs`; docs/MUSIC_CODE.md. A baked
+  note is DRY: pan, drive, echo / hall sends, duck and sweep are live
+  per-lane channels.
   The music level is ONE constant, `MUSIC_GAIN` — never put a
   `DynamicsCompressorNode` on the music path, its automatic make-up gain
   doubled the level. The WebAudio engine = `audio/engine.rs` +
