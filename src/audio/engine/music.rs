@@ -304,6 +304,10 @@ impl AudioEngine {
         }
         for _ in 0..self.pump_budget.get().max(1) {
             self.pump_prerender();
+            // A computed bake just cost this frame its share: one per frame.
+            if self.baked_sync.replace(false) {
+                break;
+            }
         }
         if !self.enabled.get() {
             return; // sound off: the scheduler idles entirely
@@ -340,14 +344,15 @@ impl AudioEngine {
     /// At a section's start (`t`): every lane's live channel is set to its
     /// voice's static values — pan, sends, level 1, lowpass open — and the
     /// section's [`Ramp`]s move them from `from` to `to` across its length
-    /// (linear; the cutoff exponential). Automation on the persistent nodes:
-    /// nothing baked, any voice.
+    /// (linear; the cutoff exponential) — or across `Ramp::span` sections,
+    /// the later ones then leaving that parameter alone. Automation on the
+    /// persistent nodes: nothing baked, any voice.
     pub(super) fn schedule_section(&self, t: f64, step_dur: f64) {
         let Some(sec) = self.section_ref() else {
             return;
         };
-        let secs = section_len(sec) as f64 * step_dur;
-        let end = t + secs.max(0.001);
+        let sections = self.song.sections;
+        let here = self.playhead.section;
         let voice = |lane: usize| self.song.voices.get(lane);
         let ramp = |lane: usize, param: RampParam| {
             sec.ramps
@@ -355,10 +360,29 @@ impl AudioEngine {
                 .rev()
                 .find(|r| r.lane == lane && r.param == param)
         };
+        // A ramp listed in an earlier section whose span reaches this one is
+        // still running: leave its parameter alone.
+        let covered = |lane: usize, param: RampParam| {
+            (1..=here).any(|back| {
+                sections[here - back]
+                    .ramps
+                    .iter()
+                    .any(|r| r.lane == lane && r.param == param && r.span as usize > back)
+            })
+        };
+        // A ramp ends after its span of sections (clamped to the arrangement).
+        let end_of = |r: &Ramp| {
+            let secs: f64 = sections[here..(here + r.span as usize).min(sections.len())]
+                .iter()
+                .map(|s| section_len(s) as f64 * step_dur)
+                .sum();
+            t + secs.max(0.001)
+        };
         let drive = |p: &webaudio::AudioParam, rest: f64, r: Option<&Ramp>, exp: bool| {
             let _ = p.cancel_scheduled_values(t);
             match r {
                 Some(r) => {
+                    let end = end_of(r);
                     let _ = p.set_value_at_time(r.from as f32, t);
                     let _ = if exp {
                         p.exponential_ramp_to_value_at_time(r.to.max(1e-3) as f32, end)
@@ -372,10 +396,16 @@ impl AudioEngine {
             }
         };
         for (lane, p) in self.music_pan.iter().enumerate() {
+            if covered(lane, RampParam::Pan) {
+                continue;
+            }
             let rest = voice(lane).map_or(0.0, |v| v.pan).clamp(-1.0, 1.0);
             drive(&p.pan(), rest, ramp(lane, RampParam::Pan), false);
         }
         for (lane, lp) in self.music_lp.iter().enumerate() {
+            if covered(lane, RampParam::Cutoff) {
+                continue;
+            }
             drive(
                 &lp.frequency(),
                 f64::from(LANE_LP_OPEN_HZ),
@@ -384,14 +414,23 @@ impl AudioEngine {
             );
         }
         for (lane, g) in self.music_level_node.iter().enumerate() {
+            if covered(lane, RampParam::Level) {
+                continue;
+            }
             drive(&g.gain(), 1.0, ramp(lane, RampParam::Level), false);
         }
         if let Some(fx) = &self.music_fx {
             for (lane, send) in fx.echo_send.iter().enumerate() {
+                if covered(lane, RampParam::Echo) {
+                    continue;
+                }
                 let rest = voice(lane).map_or(0.0, |v| v.echo).clamp(0.0, 1.0);
                 drive(&send.gain(), rest, ramp(lane, RampParam::Echo), false);
             }
             for (lane, send) in fx.verb_send.iter().enumerate() {
+                if covered(lane, RampParam::Reverb) {
+                    continue;
+                }
                 let rest = voice(lane).map_or(0.0, |v| v.reverb).clamp(0.0, 1.0);
                 drive(&send.gain(), rest, ramp(lane, RampParam::Reverb), false);
             }
@@ -600,6 +639,7 @@ impl AudioEngine {
                 len,
                 chord,
                 from,
+                wob,
             } => {
                 let (gate, level, attack) = voice_shape(s, lane);
                 let voice = s
@@ -607,6 +647,7 @@ impl AudioEngine {
                     .get(lane)
                     .copied()
                     .unwrap_or(Voice::mono(Wave::Sine));
+                let voice = Self::wobbling_at(voice, wob);
                 let voice = if full { voice } else { Self::sketch(&voice) };
                 let hold = step_dur * f64::from(len.max(1) - 1);
                 let dur = step_dur * gate;
@@ -966,12 +1007,13 @@ impl AudioEngine {
             len,
             chord,
             from,
+            wob,
         } = key
         else {
             return None;
         };
         let s = &self.song;
-        let voice = *s.voices.get(lane)?;
+        let voice = Self::wobbling_at(*s.voices.get(lane)?, wob);
         if !voice.wave.is_computed() {
             return None;
         }
@@ -1004,10 +1046,29 @@ impl AudioEngine {
             })
             .collect();
         let sr = ctx.sample_rate();
-        let samples = dsp::render_note(&voice, &partials, shape, step_dur, f64::from(sr))?;
-        let buf = ctx.create_buffer(1, samples.len() as u32, sr).ok()?;
-        buf.copy_to_channel(&samples, 0).ok()?;
+        self.baked_sync.set(true);
+        let channels = dsp::render_note(&voice, &partials, shape, step_dur, f64::from(sr))?;
+        let frames = channels.first()?.len() as u32;
+        let buf = ctx.create_buffer(channels.len() as u32, frames, sr).ok()?;
+        for (c, data) in channels.iter().enumerate() {
+            buf.copy_to_channel(data, c as i32).ok()?;
+        }
         Some(buf)
+    }
+
+    /// `voice` with its wobble at `wob` steps a period when the note's
+    /// wobble-rate lane says so (`0` = the voice's own rate).
+    pub(super) fn wobbling_at(voice: Voice, wob: u8) -> Voice {
+        match voice.wobble {
+            Some(w) if wob > 0 => Voice {
+                wobble: Some(Wobble {
+                    steps: f64::from(wob),
+                    ..w
+                }),
+                ..voice
+            },
+            _ => voice,
+        }
     }
 
     /// Seconds of dry signal one music voice needs when baked

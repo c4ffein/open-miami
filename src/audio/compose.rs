@@ -394,6 +394,37 @@ pub fn accents(s: &str) -> VelLane {
     )
 }
 
+/// A wobble-rate lane under construction: the voice's wobble period in
+/// steps per step, `0` = the voice's own; looping like the notes.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct WobLane(pub Vec<u8>);
+
+impl From<&str> for WobLane {
+    fn from(s: &str) -> WobLane {
+        wobbles(s)
+    }
+}
+
+/// Parse a wobble-rate lane, whitespace-separated: an integer = that many
+/// steps per wobble (`4` a beat, `2` an eighth, `1` a sixteenth), `.` the
+/// voice's own rate; `|` cosmetic. `wobbles("2 2 2 2 1 1 1 1")` halves the
+/// period mid-bar.
+pub fn wobbles(s: &str) -> WobLane {
+    WobLane(
+        s.split_whitespace()
+            .filter(|t| *t != "|")
+            .map(|t| match t {
+                "." => 0,
+                d => d
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|&n| (1..=64).contains(&n))
+                    .unwrap_or_else(|| panic!("bad wobble token {d:?} in lane {s:?}")),
+            })
+            .collect(),
+    )
+}
+
 /// A chord (voicing) lane under construction: one voicing per step —
 /// `None` = the lane's default — looping like the notes and read where a
 /// note starts.
@@ -470,6 +501,7 @@ pub struct Part {
     vel: f32,
     accents: VelLane,
     chords: ChordLane,
+    wobs: WobLane,
 }
 
 impl Part {
@@ -481,6 +513,7 @@ impl Part {
             vel: 1.0,
             accents: VelLane::default(),
             chords: ChordLane::default(),
+            wobs: WobLane::default(),
         }
     }
 
@@ -492,7 +525,16 @@ impl Part {
             vel: 1.0,
             accents: VelLane::default(),
             chords: ChordLane::default(),
+            wobs: WobLane::default(),
         }
+    }
+
+    /// Per-step WOBBLE RATE ([`wobbles`]): the voice's wobble period in
+    /// steps, read where a note starts; `.` = the voice's own. Only a lane
+    /// whose voice has a wobble hears it. Melodic parts only.
+    pub fn wobbling(mut self, wobs: impl Into<WobLane>) -> Part {
+        self.wobs = wobs.into();
+        self
     }
 
     /// Method form of [`with_velocity`].
@@ -572,6 +614,7 @@ pub struct SectionSpec {
     vel: [f32; NUM_CHANNELS],
     accents: [VelLane; NUM_CHANNELS],
     chords: [ChordLane; NUM_VOICES],
+    wobs: [WobLane; NUM_VOICES],
     duck: bool,
     ramps: Vec<Ramp>,
 }
@@ -611,6 +654,7 @@ pub fn section(label: &'static str, parts: impl IntoIterator<Item = Part>) -> Se
         vel: [1.0; NUM_CHANNELS],
         accents: Default::default(),
         chords: Default::default(),
+        wobs: Default::default(),
         duck: false,
         ramps: Vec::new(),
     };
@@ -635,6 +679,8 @@ pub fn section(label: &'static str, parts: impl IntoIterator<Item = Part>) -> Se
             *acc = overlay_vel(std::mem::take(acc), part.accents, &wins, base_len);
             let chd = &mut spec.chords[ch];
             *chd = overlay_chords(std::mem::take(chd), part.chords, &wins, base_len);
+            let wob = &mut spec.wobs[ch];
+            *wob = overlay_wobs(std::mem::take(wob), part.wobs, &wins, base_len);
         }
     }
     spec
@@ -712,6 +758,29 @@ fn overlay_vel(base: VelLane, over: VelLane, wins: &[bool], base_len: usize) -> 
         }
     };
     VelLane(
+        wins.iter()
+            .enumerate()
+            .map(|(i, &w)| if w { at(&over, i) } else { at(&base, i) })
+            .collect(),
+    )
+}
+
+/// [`overlay_vel`] for wobble-rate lanes (`0` = the voice's own rate).
+fn overlay_wobs(base: WobLane, over: WobLane, wins: &[bool], base_len: usize) -> WobLane {
+    if base.0.is_empty() && over.0.is_empty() {
+        return WobLane::default();
+    }
+    if base_len == 0 {
+        return over;
+    }
+    let at = |l: &WobLane, i: usize| {
+        if l.0.is_empty() {
+            0
+        } else {
+            l.0[i % l.0.len()]
+        }
+    };
+    WobLane(
         wins.iter()
             .enumerate()
             .map(|(i, &w)| if w { at(&over, i) } else { at(&base, i) })
@@ -916,6 +985,7 @@ impl SongBuilder {
                     )
                 };
                 let [bc, lc, pc, ac, kc] = s.chords;
+                let [bw, lw, pw, aw, kw] = s.wobs;
                 Section {
                     label: s.label,
                     bass: leak(b.0),
@@ -937,6 +1007,11 @@ impl SongBuilder {
                     pad_chord: voiced(PAD, pc),
                     arp_chord: voiced(ARP, ac),
                     keys_chord: voiced(KEYS, kc),
+                    bass_wob: leak(bw.0),
+                    lead_wob: leak(lw.0),
+                    pad_wob: leak(pw.0),
+                    arp_wob: leak(aw.0),
+                    keys_wob: leak(kw.0),
                     level: s.vel,
                     duck: s.duck,
                     ramps: leak(s.ramps),
@@ -1025,6 +1100,13 @@ mod tests {
         );
         assert_eq!(chords("s o").each(2).0.len(), 4);
         assert_eq!(chords("s 2 4 9 i j w").0.len(), 7);
+        assert_eq!(wobbles("2 2 . 1 | 16").0, vec![2, 2, 0, 1, 16]);
+    }
+
+    #[test]
+    #[should_panic(expected = "bad wobble token")]
+    fn wobbles_reject_garbage() {
+        wobbles("2 0");
     }
 
     #[test]
@@ -1082,6 +1164,16 @@ mod tests {
         assert_eq!(s.accents[PERC].0, vec![4, 0, 6, 0]);
         assert!(s.accents[DRUMS].0.is_empty());
         assert_eq!(section("k", [keys("0 _")]).lanes[KEYS].0, vec![0, HOLD]);
+        // A wobble-rate lane follows its part like the accents do.
+        let s = section(
+            "w",
+            [
+                bass("0 . 0 .").wobbling("2 . 2 ."),
+                bass(". 3 . .").wobbling(". 1 . ."),
+            ],
+        );
+        assert_eq!(s.wobs[BASS].0, vec![2, 1, 2, 0]);
+        assert!(section("p", [bass("0"), bass("3")]).wobs[BASS].0.is_empty());
     }
 
     /// The v2 song settings reach the `SongSpec`; a chord lane's `.` is
@@ -1108,6 +1200,7 @@ mod tests {
                     pad("0 . 3 .").voiced(". p . ."),
                     lead("7").voiced(". ."),
                     keys("0 _ _ _").accents("7"),
+                    bass("0 0 0 0").wobbling("2 2 1 1"),
                     perc("h.").accents("4."),
                     drums("k...").accents("9"),
                 ],
@@ -1138,6 +1231,8 @@ mod tests {
         );
         assert_eq!(sec.perc, &[Drum::Hat, Silent]);
         assert!(sec.bass_vel.is_empty() && sec.arp_chord.is_empty());
+        assert_eq!(sec.bass_wob, &[2, 2, 1, 1]);
+        assert!(sec.lead_wob.is_empty());
         assert_eq!(sec.ramps.len(), 2);
         assert_eq!((sec.ramps[1].lane, sec.ramps[1].to), (LEAD, 1.0));
         // The default song: what the briefed tracks got before v2.

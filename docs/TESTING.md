@@ -81,7 +81,12 @@ right lane node (cutoff exponential, the rest linear), a section without
 one restores the rest values, the scheduler does it exactly at every
 section's first step; a node-built voice's bend is its oscillator's start
 pitch + ramp and its wobble a lowpass with an LFO on its frequency at the
-tempo.
+tempo; a wide computed voice bakes two channels; a wobble-rate lane makes
+another key whose LFO runs at the lane's rate; a ramp `.over(2)` ends at
+the second section's end and that section's start leaves the parameter
+alone. In `dsp.rs`, a wide computed stack bakes two channels that differ
+and beat, a centred one a single channel, both at a single voice's level
+and pitch.
 
 **Refactoring the AI?** `tests/ai_fingerprint.rs` is an `#[ignore]`d tool, not
 a check: it hashes every enemy's state on every tick of every floor. Run it

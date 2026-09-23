@@ -62,8 +62,9 @@ impl Wave {
     }
 
     /// A COMPUTED voice is rendered in Rust (`audio/dsp.rs`), not from Web
-    /// Audio nodes: no unison stack (mono), but the [`Voice`]'s filter
-    /// envelope, vibrato, glide, sub and chords all apply.
+    /// Audio nodes; the [`Voice`]'s unison stack (a stereo bake when wide),
+    /// filter envelope, vibrato, glide, bend, wobble, sub and chords all
+    /// apply.
     pub const fn is_computed(self) -> bool {
         matches!(
             self,
@@ -216,6 +217,10 @@ pub struct Ramp {
     pub param: RampParam,
     pub from: f64,
     pub to: f64,
+    /// How many sections the ramp runs across, from the start of the one
+    /// it is listed in (`1` = that section). The sections it runs through
+    /// leave the parameter alone at their starts.
+    pub span: u32,
 }
 
 impl Ramp {
@@ -225,6 +230,16 @@ impl Ramp {
             param,
             from,
             to,
+            span: 1,
+        }
+    }
+
+    /// The ramp stretched over `sections` sections (a sixty-second swell
+    /// is one ramp, not three chained ones).
+    pub const fn over(self, sections: u32) -> Ramp {
+        Ramp {
+            span: if sections == 0 { 1 } else { sections },
+            ..self
         }
     }
     /// The lane's live lowpass, `from` → `to` Hz (exponential).
@@ -439,13 +454,10 @@ impl Voice {
 
     /// How many oscillators a note of this voice actually runs: the stack
     /// only exists with a detune to spread it over, and only on a raw shape
-    /// (noise has no pitch, a preset brings its own stack).
+    /// or a computed voice (noise has no pitch, a preset brings its own
+    /// stack).
     pub fn oscillators(&self) -> usize {
-        if self.detune > 0.0
-            && self.wave != Wave::Noise
-            && !self.wave.is_preset()
-            && !self.wave.is_computed()
-        {
+        if self.detune > 0.0 && self.wave != Wave::Noise && !self.wave.is_preset() {
             (self.unison.clamp(1, 7)) as usize
         } else {
             1
@@ -708,5 +720,10 @@ mod tests {
             (1, RampParam::Cutoff, 200.0, 8000.0)
         );
         assert_eq!(Ramp::level(0, 1.0, 0.0).param, RampParam::Level);
+        assert_eq!((r.span, r.over(3).span, r.over(0).span), (1, 3, 1));
+        // A computed voice stacks and goes wide like a raw one.
+        let v = Voice::wide(Wave::Violin, 0.0, 8.0, 0.6);
+        assert_eq!(v.oscillators(), 2);
+        assert!(v.is_wide());
     }
 }

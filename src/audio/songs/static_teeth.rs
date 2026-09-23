@@ -1,6 +1,6 @@
 //! "Static Teeth" (AGGRESSIVE / dubstep): the half-time drop. F minor, 140
-//! bpm, i–i–VI–iv. A REESE bass under an eighth-note WOBBLE, a second Reese
-//! wobbling in sixteenths for the second drop, FM growl stabs, a square
+//! bpm, i–i–VI–iv. A REESE bass under an eighth-note WOBBLE that switches
+//! to sixteenths mid-drop (a wobble-rate lane), FM growl stabs, a square
 //! lead that "yoys" into every note (a −7 st bend), a dark saw stack in
 //! power chords, and a build whose pad filter opens across the whole
 //! section into a snare roll.
@@ -35,27 +35,19 @@ fn wobble_bass() -> Part {
     bass(cat(LOW_ROOTS.map(wobble_bar)))
 }
 
-/// The second drop's fast wobble, on the KEYS lane's Reese, in
-/// alternation with the bass: bars one and two the bass, three and four
-/// the fast one.
-fn fast_wobble() -> Part {
-    let rest_bar = repeat(steps("."), 16);
-    keys(cat([
-        rest_bar.clone(),
-        rest_bar,
-        wobble_bar(-2),
-        wobble_bar(-4),
-    ]))
+/// The second drop: the same bass, its wobble at eighths for two bars,
+/// then SIXTEENTHS for two — the rate is a lane (`wobbling`), read where
+/// each note starts.
+fn fast_wobble_bass() -> Part {
+    wobble_bass().wobbling("2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 | 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 | 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 | 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1")
 }
 
-fn bass_first_half() -> Part {
+/// A brighter FM growl an octave up on the KEYS lane, answering in the
+/// second drop's fast bars.
+fn high_growls() -> Part {
     let rest_bar = repeat(steps("."), 16);
-    bass(cat([
-        wobble_bar(0),
-        wobble_bar(0),
-        rest_bar.clone(),
-        rest_bar,
-    ]))
+    let bar = |root| transpose(steps(". . . . 7 . . . . . 10 _ . . . ."), root);
+    keys(cat([rest_bar.clone(), rest_bar, bar(5), bar(3)])).accents("....7.....6.....")
 }
 
 /// FM growl stabs: a stab on the one, two answers.
@@ -140,8 +132,8 @@ fn drop_fast() -> SectionSpec {
     section(
         "drop 2",
         [
-            bass_first_half(),
-            fast_wobble(),
+            fast_wobble_bass(),
+            high_growls(),
             growls(),
             pad_bed().vel(0.7),
             halftime(),
@@ -194,11 +186,11 @@ fn build() -> SongSpec {
             Voice::panned(Wave::Fm, -0.15)
                 .with_env(0.005, 1.5)
                 .with_drive(0.5),
-            // keys: the second Reese, wobbling in sixteenths
-            Voice::mono(Wave::Reese)
-                .with_wobble(1.0, 90.0, 3200.0, 6.0)
-                .with_env(0.01, 1.0)
-                .with_sub(0.4),
+            // keys: a second, brighter FM growl for the high answers
+            Voice::panned(Wave::Fm, 0.2)
+                .with_env(0.005, 1.5)
+                .with_drive(0.4)
+                .with_echo(0.2),
         )
         .intensity(1.0)
         .sidechain(super::Sidechain::new(0.7, 0.6))

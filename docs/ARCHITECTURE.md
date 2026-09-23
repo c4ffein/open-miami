@@ -202,14 +202,12 @@ OPEN — the music engine v2 (in: the format, the engine, the eleven v2 songs
 — tracker-only —, the `compose` builders for the whole format with
 `sodium_lights.rs` as the tour; record: HISTORY.md):
 
-1. INSTRUMENT, remaining: the computed path could take a unison stack and
-   a stereo bake like the node voices have; a wobble whose rate CHANGES
-   inside a section (today a wobble is per voice — Static Teeth uses a
-   second Reese on the KEYS lane for its sixteenth-note drop); a ramp that
-   spans SEVERAL sections (today one section: a 60-second swell is three
-   chained ramps). The showcase tracks (`salt_road.rs`, `static_teeth.rs`,
-   `low_tide.rs`) are first drafts by ear-less authoring: tuning them is
-   listening work.
+1. The showcase tracks (`salt_road.rs`, `static_teeth.rs`, `low_tide.rs`)
+   are first drafts by ear-less authoring: tuning them is listening work.
+   The instrument's known limits are now small: a wobble's depth / shape
+   is per voice (its rate is a lane), the computed voices have no drive of
+   their own (the lane's drive shaper is after the bake), a section ramp
+   is linear or exponential only.
 2. A PRODUCT DECISION, not code: which songs the game PLAYS. The roles
    still name the seven briefed tracks; the v2 songs are 27–80 s loops with
    no role. Options: give v2 songs roles, extend them to briefed lengths,

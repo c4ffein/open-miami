@@ -242,12 +242,71 @@ fn computed_voices_bake_at_once_and_sketch_like_the_rest() {
     assert!(computed
         .iter()
         .all(|&i| engine.baked_music.slots.borrow()[i].buf.is_some()));
+    // A WIDE computed voice (the violin pairs) bakes stereo, the rest mono.
+    let slots = engine.baked_music.slots.borrow();
+    let mut wide = 0;
+    for &i in &computed {
+        let MusicKey::Note { lane, .. } = keys[i] else {
+            unreachable!()
+        };
+        let channels = slots[i].buf.as_ref().unwrap().channels;
+        let expect = if song.voices[lane].is_wide() { 2 } else { 1 };
+        assert_eq!(channels, expect, "{:?}", keys[i]);
+        wide += usize::from(expect == 2);
+    }
+    assert!(
+        wide > 0 && wide < computed.len(),
+        "{wide} wide of {}",
+        computed.len()
+    );
+    drop(slots);
     // A drum of the same song still goes through the offline render.
     let drum = keys
         .iter()
         .position(|k| matches!(k, MusicKey::Drum(_)))
         .unwrap();
     assert!(engine.computed_bake(keys[drum]).is_none());
+    // ONE computed bake per frame, whatever the pump budget: a fresh engine
+    // with a budget of 8 lands at most one computed buffer per `update`
+    // (offline renders never land in the mock, so any landed buffer is a
+    // computed one).
+    {
+        // (No `reset_graphs` here: the sketch check below reads the first
+        // engine's live graph, still `graphs()[0]`.)
+        let mut fresh = AudioEngine::new();
+        fresh.set_song(song);
+        fresh.set_pump_budget(8);
+        // Past the combat SFX and the drums (offline renders, which the mock
+        // cannot complete): straight to the computed keys — every melodic
+        // voice of this song is one.
+        fresh.baked.next.set(SFX_COMBAT_KINDS * SFX_VARIANTS);
+        let first = keys
+            .iter()
+            .position(|k| matches!(k, MusicKey::Note { .. }))
+            .unwrap();
+        fresh.baked_music.next.set(first);
+        let landed = |e: &AudioEngine| {
+            e.baked_music
+                .slots
+                .borrow()
+                .iter()
+                .filter(|s| s.buf.is_some())
+                .count()
+        };
+        let mut total = 0;
+        for _ in 0..40 {
+            let before = landed(&fresh);
+            fresh.update(0.0);
+            let now = landed(&fresh);
+            assert!(
+                now - before <= 1,
+                "{} computed bakes in one frame",
+                now - before
+            );
+            total += now - before;
+        }
+        assert!(total >= 10, "only {total} bakes in 40 frames");
+    }
     // The sketch of a guitar note: one triangle; of a violin: one saw.
     let live = std::rc::Rc::clone(&graphs()[0]);
     let mut osc_types = Vec::new();
@@ -502,6 +561,56 @@ fn section_ramps_drive_the_live_lane_channels() {
             }
         }
     }
+    // A ramp OVER two sections: scheduled once, to the end of the second
+    // section, and the second section's start leaves that parameter alone
+    // (no cancel, no reset) while resetting the others.
+    let long = song_named("Low Tide");
+    let (first, r) = long
+        .sections
+        .iter()
+        .enumerate()
+        .find_map(|(i, s)| s.ramps.iter().find(|r| r.span > 1).map(|r| (i, *r)))
+        .expect("a spanning ramp");
+    assert_eq!(r.span, 2);
+    reset_graphs();
+    let mut long_engine = AudioEngine::new();
+    long_engine.set_song(long);
+    let long_live = std::rc::Rc::clone(&graphs()[0]);
+    let long_step = step_dur(&long);
+    let node = match r.param {
+        RampParam::Cutoff => id(&long_engine.music_lp[r.lane]),
+        _ => panic!("the test expects a cutoff ramp"),
+    };
+    long_engine.jump_to_section(first);
+    let events = long_live.borrow().events.len();
+    long_engine.schedule_section(5.0, long_step);
+    let both = (section_len(&long.sections[first]) + section_len(&long.sections[first + 1])) as f64
+        * long_step;
+    {
+        let g = long_live.borrow();
+        let end = g.events[events..]
+            .iter()
+            .find(|e| e.node == node && e.kind == EventKind::ExpRamp)
+            .expect("the ramp");
+        assert!(
+            (end.time - (5.0 + both)).abs() < 1e-9,
+            "ends at {} not {}",
+            end.time,
+            5.0 + both
+        );
+    }
+    long_engine.jump_to_section(first + 1);
+    let events = long_live.borrow().events.len();
+    long_engine.schedule_section(9.0, long_step);
+    let g = long_live.borrow();
+    assert!(
+        g.events[events..].iter().all(|e| e.node != node),
+        "the covered section touched the ramping parameter"
+    );
+    let other = id(&long_engine.music_lp[(r.lane + 1) % NUM_VOICES]);
+    assert!(g.events[events..].iter().any(|e| e.node == other));
+    drop(g);
+
     // The scheduler calls it at every section start (a `Cancel` per lane
     // parameter each time), and the song's cutoff ramps land on the lane.
     reset_graphs();
@@ -635,6 +744,61 @@ fn bend_and_wobble_reach_the_node_voices() {
         .any(|e| e.node == *depth && e.param == "gain" && e.value == 900.0));
     let len = g.offline_frames.unwrap() as f64 / g.sample_rate as f64;
     check_voice("bent + wobbled square", &g, 0.0, Some(len));
+    drop(g);
+    // A wobble-rate LANE: the same note with `wob: 1` is another key whose
+    // LFO runs at a sixteenth, whatever the voice's own rate says.
+    let MusicKey::Note {
+        lane,
+        degree,
+        len,
+        chord,
+        from,
+        ..
+    } = keys[i]
+    else {
+        unreachable!()
+    };
+    let fast = MusicKey::Note {
+        lane,
+        degree,
+        len,
+        chord,
+        from,
+        wob: 1,
+    };
+    assert_ne!(fast, keys[i]);
+    let g = offline_graph(|| {
+        // Not in the slot list: bake it by hand, as the slot would.
+        let off = OfflineAudioContext::new_with_number_of_channels_and_length_and_sample_rate(
+            1,
+            (key_seconds(&song, fast) * f64::from(MOCK_SAMPLE_RATE)) as u32,
+            MOCK_SAMPLE_RATE,
+        )
+        .unwrap();
+        let sink = AsRef::<webaudio::AudioNode>::as_ref(&off.destination()).clone();
+        *engine.render.borrow_mut() = Some(OfflineRender {
+            ctx: AsRef::<BaseAudioContext>::as_ref(&off).clone(),
+            sink,
+        });
+        engine.synth_music_note(fast, 0.0, 1.0, true);
+        *engine.render.borrow_mut() = None;
+    });
+    let g = g.borrow();
+    let sixteenth = (1.0 / step_dur(&song)) as f32;
+    let lfo_rates: Vec<f32> = g
+        .events
+        .iter()
+        .filter(|e| e.param == "frequency" && g.nodes[e.node].kind == NodeKind::Oscillator)
+        .map(|e| e.value)
+        .collect();
+    assert!(
+        lfo_rates.iter().any(|&v| (v - sixteenth).abs() < 1e-4),
+        "{lfo_rates:?}"
+    );
+    assert!(
+        !lfo_rates.iter().any(|&v| (v - rate).abs() < 1e-4),
+        "the voice's own rate still ran"
+    );
 }
 
 /// A WIDE unison voice bakes to a stereo buffer (its stack is spread inside

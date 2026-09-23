@@ -395,4 +395,20 @@ fingerprint (`tests/ai_fingerprint.rs`).
   ramp, none a jump. 53 bake keys (the tied sine lead is 22 of them: pitch
   × length × legato origin). Written blind, like the two showcase tracks
   before it: the engine's structure is tested, the taste is the listener's.
+- **The instrument's last three gaps (2026-09), one diff:** computed voices
+  take a unison stack and bake STEREO when wide (`render_note` returns one
+  or two channels; Salt Road's violins are pairs now), the wobble's rate is
+  a per-step lane (`*_wob`, `.wobbling("2 2 1 1")`; it enters the bake key
+  on a wobbling voice only — Static Teeth's second drop switches its ONE
+  Reese to sixteenths instead of carrying a second one), and a ramp spans
+  sections (`Ramp::over(n)`: the covered sections leave the parameter
+  alone — Low Tide's pad opens over its first two). The format change
+  re-pinned the Sodium Lights fingerprint again (same notes). One test
+  bug on the way: a block added in the middle of the ramp test shadowed
+  `engine` and `step` for the play-through after it — it failed on the
+  wrong song's timing, not on the code.  Also found: with the violins WIDE, a Salt Road page load went from 5
+  long tasks / 533 ms to 14 / 1096 ms — a 3.5 s wide violin note is ~20 ms
+  to render (release, native) and the pump baked several per frame on the
+  toolbox / loading screens. `update` now stops pumping for the frame after
+  a synchronous bake (`baked_sync`), whatever the budget: back to 5 / 535.
 

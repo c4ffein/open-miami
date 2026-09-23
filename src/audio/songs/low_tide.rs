@@ -77,9 +77,11 @@ fn clap() -> Part {
     drums("....c.......c...").accents("....5.......5...")
 }
 
+/// The pad's filter opens from 250 Hz to 5 kHz across dawn AND pulse: one
+/// ramp over two sections, forty seconds long.
 fn dawn() -> SectionSpec {
     section("dawn", [pad_bed(), pulse().vel(0.5)]).ramps([
-        Ramp::cutoff(PAD, 250.0, 1800.0),
+        Ramp::cutoff(PAD, 250.0, 5000.0).over(2),
         Ramp::level(ARP, 0.0, 1.0),
         Ramp::cutoff(ARP, 300.0, 900.0),
     ])
@@ -89,7 +91,6 @@ fn dawn() -> SectionSpec {
 /// a jump of 3.5× the section before).
 fn pulse_in() -> SectionSpec {
     section("pulse", [pad_bed(), pulse().vel(0.7), sub_bass()]).ramps([
-        Ramp::cutoff(PAD, 1800.0, 5000.0),
         Ramp::cutoff(ARP, 900.0, 2600.0),
         Ramp::level(BASS, 0.0, 1.0),
     ])

@@ -52,48 +52,75 @@ pub const STRUM_SECONDS: f64 = 0.014;
 const BLOCK: usize = 32;
 
 /// Render one note of a computed [`Voice`] (`wave` must satisfy
-/// [`Wave::is_computed`]): every partial summed, the sub-oscillator, the
-/// voice's filter envelope, the release fade. `None` for a wave that is not
-/// computed. Mono.
+/// [`Wave::is_computed`]): every partial — as a unison STACK when the
+/// voice has one, spread over `±detune` cents and, when wide, across the
+/// stereo image — summed, the sub-oscillator, the voice's filter envelope,
+/// its wobble, the release fade. `None` for a wave that is not computed.
+/// One channel, or two for a wide voice ([`Voice::is_wide`]).
 pub fn render_note(
     voice: &Voice,
     partials: &[Partial],
     shape: Shape,
     step: f64,
     sr: f64,
-) -> Option<Vec<f32>> {
+) -> Option<Vec<Vec<f32>>> {
     if !voice.wave.is_computed() || sr <= 0.0 {
         return None;
     }
     let frames = (shape.total() * sr).ceil().max(1.0) as usize;
-    let mut out = vec![0f32; frames];
+    let wide = voice.is_wide();
+    let mut out = vec![vec![0f32; frames]; if wide { 2 } else { 1 }];
     let mut rng = Rng(0x9E37_79B9 ^ (voice.wave as u32).wrapping_mul(0x85EB_CA6B));
+    let n = voice.oscillators();
+    // A stack sums to about one note's loudness (0.78/√n per oscillator).
+    let level = if n > 1 { 0.78 / (n as f64).sqrt() } else { 1.0 };
     for p in partials {
-        // A legato glide comes from the previous note; otherwise the
-        // voice's bend, if any, is where the note starts.
-        let (f0, glide) = match (p.from, voice.bend) {
-            (Some(from), _) => (from, voice.glide),
-            (None, Some(b)) => (p.f * 2f64.powf(b.semitones / 12.0), b.seconds),
-            (None, None) => (p.f, 0.0),
-        };
-        let pitch = Pitch {
-            f0,
-            f1: p.f,
-            glide,
-            vibrato: voice.vibrato,
-        };
-        let one = match voice.wave {
-            Wave::Guitar => pluck(&pitch, shape, sr, &GUITAR, &mut rng),
-            Wave::BassGuitar => pluck(&pitch, shape, sr, &BASS_GUITAR, &mut rng),
-            Wave::Violin => bowed(&pitch, shape, sr, &mut rng),
-            Wave::Reese => reese(&pitch, shape, sr),
-            Wave::Fm => fm(&pitch, shape, sr),
-            _ => return None,
-        };
-        let at = (p.delay.max(0.0) * sr) as usize;
-        for (j, s) in one.iter().enumerate() {
-            if let Some(o) = out.get_mut(at + j) {
-                *o += s * p.peak as f32;
+        for i in 0..n {
+            // Spread position −1 … +1 across the stack (0 for a single).
+            let frac = if n > 1 {
+                -1.0 + 2.0 * i as f64 / (n - 1) as f64
+            } else {
+                0.0
+            };
+            let spread = 2f64.powf(frac * voice.detune / 1200.0);
+            let f = p.f * spread;
+            // A legato glide comes from the previous note; otherwise the
+            // voice's bend, if any, is where the note starts.
+            let (f0, glide) = match (p.from, voice.bend) {
+                (Some(from), _) => (from * spread, voice.glide),
+                (None, Some(b)) => (f * 2f64.powf(b.semitones / 12.0), b.seconds),
+                (None, None) => (f, 0.0),
+            };
+            let pitch = Pitch {
+                f0,
+                f1: f,
+                glide,
+                vibrato: voice.vibrato,
+            };
+            let one = match voice.wave {
+                Wave::Guitar => pluck(&pitch, shape, sr, &GUITAR, &mut rng),
+                Wave::BassGuitar => pluck(&pitch, shape, sr, &BASS_GUITAR, &mut rng),
+                Wave::Violin => bowed(&pitch, shape, sr, &mut rng),
+                Wave::Reese => reese(&pitch, shape, sr),
+                Wave::Fm => fm(&pitch, shape, sr),
+                _ => return None,
+            };
+            // Equal-power placement across the image (`∓width` around the
+            // centre; the lane's own panner places the whole image).
+            let gains = if wide {
+                let angle = (frac * voice.width + 1.0) * std::f64::consts::FRAC_PI_4;
+                vec![angle.cos() as f32, angle.sin() as f32]
+            } else {
+                vec![1.0]
+            };
+            let at = (p.delay.max(0.0) * sr) as usize;
+            let amp = (p.peak * level) as f32;
+            for (ch, g) in gains.iter().enumerate() {
+                for (j, s) in one.iter().enumerate() {
+                    if let Some(o) = out[ch].get_mut(at + j) {
+                        *o += s * amp * g;
+                    }
+                }
             }
         }
     }
@@ -105,35 +132,41 @@ pub fn render_note(
                 glide: voice.glide,
                 vibrato: None,
             };
-            let level = (p.peak * voice.sub.clamp(0.0, 1.0)) as f32;
+            // Centred: split evenly across the channels.
+            let level = (p.peak * voice.sub.clamp(0.0, 1.0)) as f32 / (out.len() as f32).sqrt();
             let mut phase = 0.0f64;
             let mut dphase = 0.0;
-            for (i, o) in out.iter_mut().enumerate() {
+            for i in 0..frames {
                 let t = i as f64 / sr;
                 if i % BLOCK == 0 {
                     dphase = pitch.at(t, shape.total()) / sr;
                 }
                 phase += dphase;
-                *o += (phase * std::f64::consts::TAU).sin() as f32 * level * env(t, shape) as f32;
+                let v = (phase * std::f64::consts::TAU).sin() as f32 * level * env(t, shape) as f32;
+                for ch in out.iter_mut() {
+                    ch[i] += v;
+                }
             }
         }
     }
-    if let Some(flt) = voice.filter {
-        filter_envelope(&mut out, &flt, sr);
-    }
-    if let Some(w) = voice.wobble {
-        wobble_filter(&mut out, &w, step, sr);
-    }
-    // The release: whatever is still ringing fades out over `dur`.
-    let release_from = shape.attack.max(0.0) + shape.hold;
-    let first = ((release_from * sr) as usize).min(out.len());
-    let mut fade = 1f32;
-    for (i, o) in out[first..].iter_mut().enumerate() {
-        if i % BLOCK == 0 {
-            let x = (i as f64 / sr / shape.dur.max(1e-3)).min(1.0);
-            fade = ((-6.9 * x).exp() * (1.0 - x)) as f32;
+    for ch in out.iter_mut() {
+        if let Some(flt) = voice.filter {
+            filter_envelope(ch, &flt, sr);
         }
-        *o *= fade;
+        if let Some(w) = voice.wobble {
+            wobble_filter(ch, &w, step, sr);
+        }
+        // The release: whatever is still ringing fades out over `dur`.
+        let release_from = shape.attack.max(0.0) + shape.hold;
+        let first = ((release_from * sr) as usize).min(ch.len());
+        let mut fade = 1f32;
+        for (i, o) in ch[first..].iter_mut().enumerate() {
+            if i % BLOCK == 0 {
+                let x = (i as f64 / sr / shape.dur.max(1e-3)).min(1.0);
+                fade = ((-6.9 * x).exp() * (1.0 - x)) as f32;
+            }
+            *o *= fade;
+        }
     }
     Some(out)
 }
@@ -542,7 +575,7 @@ mod tests {
             peak: 0.5,
             delay: 0.0,
         };
-        render_note(&voice, &[p], shape, 0.1, SR).unwrap()
+        render_note(&voice, &[p], shape, 0.1, SR).unwrap().remove(0)
     }
 
     /// The fundamental of `s` between `from` and `to` seconds, by
@@ -657,7 +690,7 @@ mod tests {
             peak: 0.5,
             delay: 0.0,
         };
-        let s = render_note(&v, &[p], shape, 0.1, SR).unwrap();
+        let s = render_note(&v, &[p], shape, 0.1, SR).unwrap().remove(0);
         assert!((pitch_of(&s, 0.6, 1.0) / 440.0 - 1.0).abs() < 0.015);
         assert!(pitch_of(&s, 0.02, 0.12) < 400.0, "no glide from below");
         // A strummed chord: the late partial is silent before its delay.
@@ -675,8 +708,12 @@ mod tests {
                 delay: 0.2,
             },
         ];
-        let g = render_note(&Voice::mono(Wave::Guitar), &chord, shape, 0.1, SR).unwrap();
-        let alone = render_note(&Voice::mono(Wave::Guitar), &chord[..1], shape, 0.1, SR).unwrap();
+        let g = render_note(&Voice::mono(Wave::Guitar), &chord, shape, 0.1, SR)
+            .unwrap()
+            .remove(0);
+        let alone = render_note(&Voice::mono(Wave::Guitar), &chord[..1], shape, 0.1, SR)
+            .unwrap()
+            .remove(0);
         let before = (0.19 * SR) as usize;
         assert_eq!(
             &g[..before],
@@ -736,7 +773,7 @@ mod tests {
             .collect();
         let v = Voice::mono(Wave::Guitar).with_filter(300.0, 3000.0, 0.0, 0.2, 1.0);
         let t = std::time::Instant::now();
-        let s = render_note(&v, &chord, shape, 0.1, SR).unwrap();
+        let s = render_note(&v, &chord, shape, 0.1, SR).unwrap().remove(0);
         let ms = t.elapsed().as_secs_f64() * 1e3;
         println!("{} samples in {ms:.1} ms", s.len());
         assert!(ms < 150.0, "{ms:.1} ms for one note");
@@ -781,7 +818,7 @@ mod tests {
             peak: 0.5,
             delay: 0.0,
         };
-        let s = render_note(&w, &[p], shape, 0.1, SR).unwrap();
+        let s = render_note(&w, &[p], shape, 0.1, SR).unwrap().remove(0);
         let treble = |from: f64, to: f64| {
             // Energy of the first difference = the top end.
             let (a, b) = ((from * SR) as usize, (to * SR) as usize);
@@ -798,6 +835,64 @@ mod tests {
             (treble(0.85, 0.95) / open - 1.0).abs() < 0.3,
             "not periodic"
         );
+    }
+
+    /// A unison stack on a computed voice: a WIDE one bakes two channels
+    /// that differ (the pair sits on either side), a centred one bakes a
+    /// single channel; either sums to about a single voice's level and
+    /// still rings at the note's pitch.
+    #[test]
+    fn computed_voices_stack_and_go_wide() {
+        let shape = Shape {
+            attack: 0.1,
+            hold: 0.8,
+            dur: 0.2,
+        };
+        let p = Partial {
+            f: 330.0,
+            from: None,
+            peak: 0.5,
+            delay: 0.0,
+        };
+        let single = render_note(&Voice::mono(Wave::Violin), &[p], shape, 0.1, SR).unwrap();
+        let wide = render_note(
+            &Voice::wide(Wave::Violin, 0.0, 9.0, 0.7),
+            &[p],
+            shape,
+            0.1,
+            SR,
+        )
+        .unwrap();
+        let centred = render_note(
+            &Voice::stack(Wave::Violin, 0.0, 9.0, 0.0, 3),
+            &[p],
+            shape,
+            0.1,
+            SR,
+        )
+        .unwrap();
+        assert_eq!((single.len(), wide.len(), centred.len()), (1, 2, 1));
+        assert_ne!(wide[0], wide[1], "a wide pair bakes the same on both sides");
+        let mix: Vec<f32> = wide[0].iter().zip(&wide[1]).map(|(l, r)| l + r).collect();
+        for (name, s) in [("wide", &mix), ("centred", &centred[0])] {
+            let (a, b) = (rms(&single[0], 0.3, 0.8), rms(s, 0.3, 0.8));
+            assert!(
+                (0.5..=2.0).contains(&(b / a)),
+                "{name}: level {b} vs single {a}"
+            );
+            let measured = pitch_of(s, 0.3, 0.8);
+            assert!(
+                (measured / 330.0 - 1.0).abs() < 0.02,
+                "{name} rings at {measured:.1} Hz"
+            );
+        }
+        // The two sides beat against each other: they are not just scaled.
+        let ratio: Vec<f32> = wide[0]
+            .iter()
+            .zip(&wide[1])
+            .map(|(l, r)| l / r.abs().max(1e-3))
+            .collect();
+        assert!(ratio[20_000..25_000].iter().any(|x| x.abs() > 2.0));
     }
 
     #[test]

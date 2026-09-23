@@ -210,6 +210,15 @@ pub struct Section {
     pub pad_chord: &'static [Chord],
     pub arp_chord: &'static [Chord],
     pub keys_chord: &'static [Chord],
+    /// WOBBLE-RATE lanes: the voice's [`Wobble`] period in STEPS per step
+    /// (`0` = the voice's own `steps`), looping, read where a note starts —
+    /// how a drop goes from an eighth-note wobble to sixteenths mid-bar.
+    /// Only a lane whose voice wobbles reads it (it enters the bake key).
+    pub bass_wob: &'static [u8],
+    pub lead_wob: &'static [u8],
+    pub pad_wob: &'static [u8],
+    pub arp_wob: &'static [u8],
+    pub keys_wob: &'static [u8],
     /// Per-channel LEVEL (gain multipliers, 1.0 = nominal), indexed like
     /// [`CHANNEL_NAMES`]; multiplies every step velocity of the channel.
     /// Applied at schedule time (a play-time gain, never baked into the
@@ -248,6 +257,11 @@ impl Section {
         pad_chord: &[],
         arp_chord: &[],
         keys_chord: &[],
+        bass_wob: &[],
+        lead_wob: &[],
+        pad_wob: &[],
+        arp_wob: &[],
+        keys_wob: &[],
         level: [1.0; NUM_CHANNELS],
         duck: true,
         ramps: &[],
@@ -274,6 +288,18 @@ impl Section {
             PAD => self.pad_chord,
             ARP => self.arp_chord,
             KEYS => self.keys_chord,
+            _ => &[],
+        }
+    }
+
+    /// The wobble-rate lane of melodic channel `lane`; empty for the drums.
+    pub fn wob_lane(&self, lane: usize) -> &'static [u8] {
+        match lane {
+            BASS => self.bass_wob,
+            LEAD => self.lead_wob,
+            PAD => self.pad_wob,
+            ARP => self.arp_wob,
+            KEYS => self.keys_wob,
             _ => &[],
         }
     }
@@ -548,6 +574,15 @@ pub fn chord_at(lane: usize, chords: &[Chord], step: usize) -> Chord {
     chords[step % chords.len()]
 }
 
+/// Read a wobble-rate lane at `step` (loops): `0` (the voice's own rate)
+/// for an empty lane.
+pub fn wob_at(wobs: &[u8], step: usize) -> u8 {
+    if wobs.is_empty() {
+        return 0;
+    }
+    wobs[step % wobs.len()]
+}
+
 /// Read the drum lane at `step` (loops). Empty lane == `Silent`.
 pub fn drum_at(pattern: &[Drum], step: usize) -> Drum {
     if pattern.is_empty() {
@@ -774,13 +809,16 @@ impl Playhead {
 pub enum MusicKey {
     /// A melodic lane ([`MELODIC`]) note at this scale degree, this many
     /// steps long (1 = untied), voiced as `chord`, gliding in from `from`
-    /// (only ever `Some` on a lane whose voice glides).
+    /// (only ever `Some` on a lane whose voice glides), its wobble at `wob`
+    /// steps a period (`0` = the voice's own; only ever non-zero on a lane
+    /// whose voice wobbles).
     Note {
         lane: usize,
         degree: i32,
         len: u16,
         chord: Chord,
         from: Option<i32>,
+        wob: u8,
     },
     /// One kit piece (never `Silent`) — shared by both percussion lanes.
     Drum(Drum),
@@ -829,15 +867,23 @@ pub fn music_keys(song: &SongSpec) -> Vec<MusicKey> {
 
 /// The bake key of the note `n` starting at `step` of `lane` in `sec`: its
 /// voicing from the chord lane, its glide origin only if the lane's voice
-/// glides (so a non-gliding lane never multiplies its keys by context).
+/// glides, its wobble rate only if the voice wobbles (so a lane never
+/// multiplies its keys by context it cannot hear).
 pub fn note_key(song: &SongSpec, sec: &Section, lane: usize, step: usize, n: &NoteOn) -> MusicKey {
-    let glides = song.voices.get(lane).is_some_and(|v| v.glides());
+    let voice = song.voices.get(lane);
+    let glides = voice.is_some_and(|v| v.glides());
+    let wobbles = voice.is_some_and(|v| v.wobble.is_some());
     MusicKey::Note {
         lane,
         degree: n.degree,
         len: n.len,
         chord: chord_at(lane, sec.chord_lane(lane), step),
         from: if glides { n.from } else { None },
+        wob: if wobbles {
+            wob_at(sec.wob_lane(lane), step)
+        } else {
+            0
+        },
     }
 }
 
@@ -893,7 +939,7 @@ mod tests {
     fn the_compose_rewrite_of_sodium_lights_is_the_same_song() {
         let song = SONGS.iter().find(|s| s.name == "Sodium Lights").unwrap();
         println!("Sodium Lights fingerprint: {:#x}", fingerprint(song));
-        assert_eq!(fingerprint(song), 0x0b60_2bd8_2620_17e5);
+        assert_eq!(fingerprint(song), 0x485f_adbd_4f30_8815);
     }
 
     /// The briefed soundtrack (the tracks the game plays by role).
@@ -1218,6 +1264,10 @@ mod tests {
                 }
                 for r in sec.ramps {
                     assert!(
+                        (1..=song.sections.len() as u32).contains(&r.span),
+                        "{name}: ramp span"
+                    );
+                    assert!(
                         MELODIC.contains(&r.lane),
                         "{name} / {}: ramp lane",
                         sec.label
@@ -1353,6 +1403,36 @@ mod tests {
         assert_eq!(cell_at(&sec, NUM_CHANNELS, 0), GridCell::Off);
     }
 
+    /// A wobble-rate lane changes the bake key only on a lane whose voice
+    /// wobbles; the rate loops like every lane.
+    #[test]
+    fn wobble_rate_lanes_enter_the_key_of_wobbling_voices_only() {
+        const SEC: Section = Section {
+            bass: &[0, 0, 0, 0],
+            bass_wob: &[2, 2, 1, 1],
+            ..Section::EMPTY
+        };
+        let mut voices = [Voice::mono(Wave::Sawtooth); NUM_VOICES];
+        let plain = SongSpec {
+            sections: &[SEC],
+            voices,
+            ..SONGS[0]
+        };
+        assert_eq!(music_keys(&plain).len(), 1);
+        voices[BASS] = Voice::mono(Wave::Reese).with_wobble(4.0, 100.0, 2000.0, 4.0);
+        let wobbling = SongSpec { voices, ..plain };
+        let keys = music_keys(&wobbling);
+        assert_eq!(keys.len(), 2);
+        assert!(keys
+            .iter()
+            .any(|k| matches!(k, MusicKey::Note { wob: 2, .. })));
+        assert!(keys
+            .iter()
+            .any(|k| matches!(k, MusicKey::Note { wob: 1, .. })));
+        assert_eq!(wob_at(&[], 7), 0);
+        assert_eq!(wob_at(&[2, 1], 3), 1);
+    }
+
     #[test]
     fn tracker_cells_reflect_notes_ties_and_velocity() {
         let sec = Section {
@@ -1464,6 +1544,7 @@ mod tests {
             len,
             chord: Chord::Single,
             from: None,
+            wob: 0,
         };
         // A held note bakes its 7 extra steps on top of the untied length.
         let (one, held) = (note(LEAD, 1), note(LEAD, 8));

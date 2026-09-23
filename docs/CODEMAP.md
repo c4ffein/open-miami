@@ -59,11 +59,13 @@ Moved verbatim out of `CLAUDE.md`; keep it current when files move.
   `Wave::{Guitar, BassGuitar, Violin, Reese, Fm}`: Karplus–Strong strings,
   a polyBLEP bowed string, the Reese pair, 2-op FM, rendered sample by
   sample with the per-note `Bend` and the tempo-synced `Wobble`,
-  `render_note(voice, partials, shape, step, sr) -> Vec<f32>`; pure,
+  `render_note(voice, partials, shape, step, sr) -> Vec<Vec<f32>>` (one
+  channel, two for a wide stack); pure,
   host-tested for pitch / decay / level / speed; `salt_road.rs` is the
   strings' showcase, `static_teeth.rs` the modifiers' — `with_bend`,
-  `with_wobble`, section `Ramp`s on the live lane channels: the lane's
-  lowpass + level nodes, `schedule_section` — and `low_tide.rs` the
+  `with_wobble` + the `*_wob` wobble-rate lanes (`.wobbling(..)`), section
+  `Ramp`s on the live lane channels: the lane's lowpass + level nodes,
+  `schedule_section`, `.over(n)` spanning sections — and `low_tide.rs` the
   slow-burn one, all movement by ramps), `audio/compose.rs`,
   `audio/songs/*.rs`,
   `audio/sfx.rs` (SFX catalogue +

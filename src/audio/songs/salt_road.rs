@@ -6,7 +6,8 @@
 //!
 //! The showcase of the COMPUTED voices (`audio/dsp.rs`): `Wave::Guitar`,
 //! `Wave::BassGuitar`, `Wave::Violin` — plucked and bowed strings rendered
-//! sample by sample into the bake. Written with the `compose` builders.
+//! sample by sample into the bake; the violins are WIDE detuned pairs (a
+//! stereo bake). Written with the `compose` builders.
 
 use super::super::compose::*;
 use super::{Echo, Sidechain, SongSpec, Voice, Wave, MINOR};
@@ -145,9 +146,10 @@ fn build() -> SongSpec {
             Voice::mono(Wave::BassGuitar)
                 .with_env(0.005, 5.0)
                 .with_sub(0.25),
-            // lead: the violin, a touch right, late vibrato, a short slide
-            // into legato notes, echoing into the hall
-            Voice::panned(Wave::Violin, 0.15)
+            // lead: the violins — a detuned pair spread across the image,
+            // a touch right —, late vibrato, a short slide into legato
+            // notes, echoing into the hall
+            Voice::wide(Wave::Violin, 0.15, 7.0, 0.6)
                 .with_vibrato(5.2, 10.0, 0.35)
                 .with_glide(0.08)
                 .with_env(0.12, 2.0)
@@ -162,8 +164,8 @@ fn build() -> SongSpec {
                 .with_env(0.005, 6.0)
                 .with_echo(0.2)
                 .with_reverb(0.25),
-            // keys: the second violin, left, slower vibrato, deeper in the hall
-            Voice::panned(Wave::Violin, -0.3)
+            // keys: the second violins, left, slower vibrato, deeper in the hall
+            Voice::wide(Wave::Violin, -0.3, 6.0, 0.5)
                 .with_vibrato(5.0, 9.0, 0.4)
                 .with_glide(0.08)
                 .with_env(0.14, 2.0)

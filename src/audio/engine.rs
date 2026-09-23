@@ -389,6 +389,11 @@ pub struct AudioEngine {
     /// Set when `OfflineAudioContext` turns out to be unavailable: the whole
     /// bake queue (SFX and music) is abandoned, everything stays live.
     render_dead: Cell<bool>,
+    /// Set by a COMPUTED bake (synchronous, on this thread — 5–20 ms for a
+    /// long note): `update` then stops pumping for the frame, whatever the
+    /// budget, so bakes never stack into one frame. Offline renders are
+    /// asynchronous and keep the budget.
+    baked_sync: Cell<bool>,
     /// `Some` only while an offline pre-render is being built: the voice
     /// builders then target this context/sink instead of the live bus.
     render: RefCell<Option<OfflineRender>>,
@@ -475,6 +480,7 @@ impl AudioEngine {
             renders_in_flight: Rc::new(Cell::new(0)),
             pump_budget: Cell::new(1),
             render_dead: Cell::new(false),
+            baked_sync: Cell::new(false),
             render: RefCell::new(None),
             engine_idle: RefCell::new(None),
         };

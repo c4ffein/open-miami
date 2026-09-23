@@ -64,14 +64,20 @@ slices.
   WOBBLE — a resonant lowpass swinging `cutoff` → `peak` once per `steps`
   steps (`2.0` = an eighth, `1.0` = a sixteenth: the drop's grind), a sine
   from the midpoint, restarting with every note (it is baked, as a wobble
-  bass is played). Both work on node-built and computed voices alike.
+  bass is played). Both work on node-built and computed voices alike. The
+  wobble's RATE can change per step: a `*_wob` lane (`.wobbling("2 2 1
+  1")` on the part — steps per wobble, `.` = the voice's own) is read where
+  a note starts and enters the bake key on a wobbling voice.
 * **Section RAMPS** (`Section::ramps`, `.ramps([..])` in the builders):
   start → end movements of a lane's LIVE channel across one section —
   `Ramp::cutoff(lane, from, to)` (the lane's own lowpass, open at rest),
   `Ramp::echo` / `Ramp::reverb` (the sends), `Ramp::pan`, `Ramp::level`
   (a fade). Automation on the persistent nodes: nothing to bake, any
   voice; a parameter no ramp names is restored to the voice's value at
-  every section start. A filter opening over sixteen bars, a lead sinking
+  every section start. `Ramp::cutoff(..).over(3)` runs the ramp across
+  three sections from the one it is listed in — the sections it runs
+  through leave that parameter alone — so a sixty-second swell is ONE
+  ramp. A filter opening over sixteen bars, a lead sinking
   into the hall, an outro fading: this is where slow movement lives —
   `low_tide.rs` (eight sections of eight bars, 2:34) is built on nothing
   else: the pad's and the arpeggio's lowpasses open across whole
@@ -113,11 +119,14 @@ gate — a guitar note needs a gate of ~5–6 steps to ring), `with_filter`
 (a state-variable lowpass with the same envelope), `with_vibrato` and
 `with_glide` (the pitch curve is per block), `with_sub`, pan / drive /
 sends; chords play every partial (a plucked chord STRUMS, low string
-first, 14 ms apart — `dsp::STRUM_SECONDS`); no unison stack (mono). The
+first, 14 ms apart — `dsp::STRUM_SECONDS`); a unison stack (`Voice::wide`
+/ `stack`), which bakes STEREO when wide, each oscillator placed
+equal-power across the image (Salt Road's violins are wide pairs: a string
+section). The
 live SKETCH of an unbaked computed note is the usual plain oscillator (a
 triangle for the plucked ones, a saw for the violin). Cost: about 7 ms per
 second of audio per partial in release (a strummed triad held a bar ≈
-20 ms), one note per frame; the `salt_road.rs` bake adds ~70 ms of long
+20 ms; a wide violin pair held a bar ≈ 20 ms), ONE computed note per frame whatever the pump budget (`baked_sync`); the `salt_road.rs` bake adds ~70 ms of long
 tasks to a page load (measured, headless). `salt_road.rs` is the showcase
 of the strings: bass guitar, picked + strummed guitar, two violins;
 `static_teeth.rs` of the modifiers: two Reeses (an eighth-note and a
